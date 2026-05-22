@@ -21,6 +21,7 @@ package api
 
 import (
 	"crypto/rand"
+	_ "embed"
 	"encoding/base64"
 	"net/http"
 	"strings"
@@ -29,6 +30,9 @@ import (
 	"github.com/brendanbenshoof/sneakernet/blockstore"
 	"github.com/brendanbenshoof/sneakernet/client"
 )
+
+//go:embed ui/index.html
+var indexHTML []byte
 
 // Server is an HTTP API server wrapping the sneakernet client stack.
 // It implements http.Handler and can be passed directly to http.ListenAndServe.
@@ -74,6 +78,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) routes() {
+	s.mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write(indexHTML)
+	})
 	s.mux.HandleFunc("POST /api/keystore/create", s.handleCreate)
 	s.mux.HandleFunc("POST /api/keystore/change-password", s.auth(s.handleChangePassword))
 	s.mux.HandleFunc("POST /api/unlock", s.handleUnlock)

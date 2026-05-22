@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/brendanbenshoof/sneakernet/blockstore"
@@ -243,6 +244,22 @@ func TestLockClearsSession(t *testing.T) {
 	w := get(t, srv, "/api/identities", tok)
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401 after lock, got %d", w.Code)
+	}
+}
+
+func TestUIServed(t *testing.T) {
+	srv, _ := testServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /: got %d, want 200", w.Code)
+	}
+	if ct := w.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+		t.Fatalf("GET /: content-type %q, want text/html", ct)
+	}
+	if !strings.Contains(w.Body.String(), "Sneakernet") {
+		t.Fatal("GET /: response body does not look like the UI")
 	}
 }
 
