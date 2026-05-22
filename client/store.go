@@ -94,8 +94,15 @@ func (s *MessageStore) SaveMessage(blockID blockstore.ID, content []byte) (bool,
 
 // ListMessages returns all stored messages ordered by receipt time.
 func (s *MessageStore) ListMessages() ([]Message, error) {
+	return s.ListMessagesAfter(0)
+}
+
+// ListMessagesAfter returns messages with id > afterID, ordered by receipt time.
+// Pass 0 to retrieve all messages. Suitable for simple poll-based pagination.
+func (s *MessageStore) ListMessagesAfter(afterID int64) ([]Message, error) {
 	rows, err := s.db.Query(
-		`SELECT id, block_id, content, received_at FROM messages ORDER BY received_at ASC`,
+		`SELECT id, block_id, content, received_at FROM messages WHERE id > ? ORDER BY received_at ASC`,
+		afterID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("client: list messages: %w", err)

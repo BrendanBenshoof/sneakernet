@@ -73,6 +73,16 @@ func LoadKeystore(path string, password []byte) (*Keystore, error) {
 
 	masterKey := deriveKey(password, f.Salt, f.KDFTime, f.KDFMemory, f.KDFThreads)
 
+	// Verify password before touching any identities.
+	nonceLen := chacha20poly1305.NonceSizeX
+	if len(f.Verify) <= nonceLen {
+		return nil, fmt.Errorf("client: load keystore: missing or truncated verify field")
+	}
+	canary, err := ksDecrypt(masterKey, f.Verify[:nonceLen], f.Verify[nonceLen:])
+	if err != nil || string(canary) != keystoreCanary {
+		return nil, fmt.Errorf("client: load keystore: wrong password or corrupted data")
+	}
+
 	k := &Keystore{
 		masterKey:  masterKey,
 		salt:       f.Salt,
@@ -100,12 +110,17 @@ func LoadKeystore(path string, password []byte) (*Keystore, error) {
 // The file is written atomically via a temp file so a crash mid-write
 // never leaves a truncated keystore.
 func (k *Keystore) Save(path string) error {
+	vNonce, vCT, err := ksEncrypt(k.masterKey, []byte(keystoreCanary))
+	if err != nil {
+		return fmt.Errorf("client: save keystore: write verify canary: %w", err)
+	}
 	f := keystoreFile{
 		Version:    keystoreVersion,
 		Salt:       k.salt,
 		KDFTime:    k.kdfTime,
 		KDFMemory:  k.kdfMemory,
 		KDFThreads: k.kdfThreads,
+		Verify:     append(vNonce, vCT...),
 	}
 
 	for _, id := range k.identities {
@@ -213,12 +228,18 @@ func (k *Keystore) get(name string) *Identity {
 
 // --- on-disk format ---
 
+// keystoreCanary is the plaintext encrypted as a password-verification sentinel.
+const keystoreCanary = "sneakernet-keystore-v1"
+
 type keystoreFile struct {
 	Version    int              `json:"version"`
 	Salt       []byte           `json:"salt"`
 	KDFTime    uint32           `json:"kdf_time"`
 	KDFMemory  uint32           `json:"kdf_memory"`
 	KDFThreads uint8            `json:"kdf_threads"`
+	// Verify holds nonce || ciphertext of keystoreCanary under the master key.
+	// Decryption failure on load means wrong password.
+	Verify     []byte           `json:"verify"`
 	Identities []identityRecord `json:"identities"`
 }
 
