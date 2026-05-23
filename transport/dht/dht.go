@@ -23,7 +23,7 @@ import (
 
 // sneakernetInfoHash is the fixed DHT rendezvous point for all sneakernet nodes.
 // Using a sha1 of a versioned string lets us change it in future protocol versions.
-var sneakernetInfoHash = sha1.Sum([]byte("sneakernet-relay-v1"))
+var sneakernetInfoHash = sha1.Sum([]byte("test-sneakernet-relay-v1"))
 
 var bootstrapAddrs = []string{
 	"router.bittorrent.com:6881",
