@@ -3,6 +3,7 @@ package client
 import (
 	"crypto/ecdh"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,7 +29,14 @@ type Identity struct {
 	Key  *ecdh.PrivateKey
 }
 
-// Keystore is a password-protected collection of named X25519 identities.
+// Channel is a named symmetric channel key. Anyone who knows the passphrase
+// (from which Key is derived) can decrypt and post to the channel anonymously.
+type Channel struct {
+	Name string
+	Key  [32]byte
+}
+
+// Keystore is a password-protected collection of named X25519 identities and channel keys.
 // Load it once at startup; all keys are decrypted into memory.
 type Keystore struct {
 	masterKey  [kdfKeyLen]byte
@@ -37,6 +45,7 @@ type Keystore struct {
 	kdfMemory  uint32
 	kdfThreads uint8
 	identities []*Identity
+	channels   []*Channel
 }
 
 // NewKeystore creates an empty Keystore protected by password.
@@ -103,6 +112,19 @@ func LoadKeystore(path string, password []byte) (*Keystore, error) {
 		k.identities = append(k.identities, &Identity{Name: rec.Name, Key: privKey})
 	}
 
+	for _, rec := range f.Channels {
+		keyBytes, err := ksDecrypt(masterKey, rec.Nonce, rec.Ciphertext)
+		if err != nil {
+			return nil, fmt.Errorf("client: load keystore: wrong password or corrupted channel %q", rec.Name)
+		}
+		if len(keyBytes) != 32 {
+			return nil, fmt.Errorf("client: load keystore: invalid channel key length for %q", rec.Name)
+		}
+		ch := &Channel{Name: rec.Name}
+		copy(ch.Key[:], keyBytes)
+		k.channels = append(k.channels, ch)
+	}
+
 	return k, nil
 }
 
@@ -130,6 +152,18 @@ func (k *Keystore) Save(path string) error {
 		}
 		f.Identities = append(f.Identities, identityRecord{
 			Name:       id.Name,
+			Nonce:      nonce,
+			Ciphertext: ct,
+		})
+	}
+
+	for _, ch := range k.channels {
+		nonce, ct, err := ksEncrypt(k.masterKey, ch.Key[:])
+		if err != nil {
+			return fmt.Errorf("client: save keystore: encrypt channel %q: %w", ch.Name, err)
+		}
+		f.Channels = append(f.Channels, channelRecord{
+			Name:       ch.Name,
 			Nonce:      nonce,
 			Ciphertext: ct,
 		})
@@ -205,6 +239,57 @@ func (k *Keystore) Keys() []*ecdh.PrivateKey {
 	return keys
 }
 
+// AddChannel derives a 32-byte channel key from passphrase and stores it under name.
+// Returns an error if name is already taken.
+func (k *Keystore) AddChannel(name, passphrase string) (*Channel, error) {
+	if k.getChannel(name) != nil {
+		return nil, fmt.Errorf("client: channel %q already exists", name)
+	}
+	ch := &Channel{
+		Name: name,
+		Key:  sha256.Sum256([]byte(passphrase)),
+	}
+	k.channels = append(k.channels, ch)
+	return ch, nil
+}
+
+// RemoveChannel removes the channel with the given name.
+// Returns false if not found.
+func (k *Keystore) RemoveChannel(name string) bool {
+	for i, ch := range k.channels {
+		if ch.Name == name {
+			k.channels = append(k.channels[:i], k.channels[i+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
+// ListChannels returns all stored channels (names only; keys are in-memory secrets).
+func (k *Keystore) ListChannels() []*Channel {
+	out := make([]*Channel, len(k.channels))
+	copy(out, k.channels)
+	return out
+}
+
+// Channels returns a copy of all channel keys suitable for passing to client.New.
+func (k *Keystore) Channels() []Channel {
+	out := make([]Channel, len(k.channels))
+	for i, ch := range k.channels {
+		out[i] = *ch
+	}
+	return out
+}
+
+func (k *Keystore) getChannel(name string) *Channel {
+	for _, ch := range k.channels {
+		if ch.Name == name {
+			return ch
+		}
+	}
+	return nil
+}
+
 // ChangePassword re-keys the master key with newPassword and a fresh salt.
 // Call Save afterwards to persist the change.
 func (k *Keystore) ChangePassword(newPassword []byte) error {
@@ -241,9 +326,16 @@ type keystoreFile struct {
 	// Decryption failure on load means wrong password.
 	Verify     []byte           `json:"verify"`
 	Identities []identityRecord `json:"identities"`
+	Channels   []channelRecord  `json:"channels,omitempty"`
 }
 
 type identityRecord struct {
+	Name       string `json:"name"`
+	Nonce      []byte `json:"nonce"`
+	Ciphertext []byte `json:"ciphertext"`
+}
+
+type channelRecord struct {
 	Name       string `json:"name"`
 	Nonce      []byte `json:"nonce"`
 	Ciphertext []byte `json:"ciphertext"`

@@ -15,6 +15,7 @@ type Message struct {
 	ID         int64
 	BlockID    blockstore.ID
 	Content    []byte
+	Channel    string // empty for direct messages; channel name for channel messages
 	ReceivedAt time.Time
 }
 
@@ -38,7 +39,7 @@ func OpenMessageStore(path string) (*MessageStore, error) {
 }
 
 func (s *MessageStore) migrate() error {
-	_, err := s.db.Exec(`
+	if _, err := s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS messages (
 			id          INTEGER PRIMARY KEY AUTOINCREMENT,
 			block_id    BLOB    NOT NULL UNIQUE,
@@ -50,8 +51,12 @@ func (s *MessageStore) migrate() error {
 			since_unix INTEGER NOT NULL DEFAULT 0
 		);
 		INSERT OR IGNORE INTO checkpoint (id, since_unix) VALUES (1, 0);
-	`)
-	return err
+	`); err != nil {
+		return err
+	}
+	// Add channel column to existing databases; ignore "duplicate column" error.
+	s.db.Exec(`ALTER TABLE messages ADD COLUMN channel TEXT NOT NULL DEFAULT ''`)
+	return nil
 }
 
 // GetCheckpoint returns the timestamp from which the next scrape should start.
@@ -80,10 +85,11 @@ func (s *MessageStore) SetCheckpoint(t time.Time) error {
 // SaveMessage persists a decoded message. Returns true if the message was newly
 // inserted, false if it was already stored. INSERT OR IGNORE makes it idempotent
 // so re-scanning a block (e.g. due to checkpoint granularity) never produces duplicates.
-func (s *MessageStore) SaveMessage(blockID blockstore.ID, content []byte) (bool, error) {
+// channel is empty for direct messages, or the channel name for channel messages.
+func (s *MessageStore) SaveMessage(blockID blockstore.ID, content []byte, channel string) (bool, error) {
 	result, err := s.db.Exec(
-		`INSERT OR IGNORE INTO messages (block_id, content, received_at) VALUES (?, ?, ?)`,
-		blockID[:], content, time.Now().Unix(),
+		`INSERT OR IGNORE INTO messages (block_id, content, channel, received_at) VALUES (?, ?, ?, ?)`,
+		blockID[:], content, channel, time.Now().Unix(),
 	)
 	if err != nil {
 		return false, fmt.Errorf("client: save message: %w", err)
@@ -101,7 +107,7 @@ func (s *MessageStore) ListMessages() ([]Message, error) {
 // Pass 0 to retrieve all messages. Suitable for simple poll-based pagination.
 func (s *MessageStore) ListMessagesAfter(afterID int64) ([]Message, error) {
 	rows, err := s.db.Query(
-		`SELECT id, block_id, content, received_at FROM messages WHERE id > ? ORDER BY received_at ASC`,
+		`SELECT id, block_id, content, channel, received_at FROM messages WHERE id > ? ORDER BY received_at ASC`,
 		afterID,
 	)
 	if err != nil {
@@ -114,7 +120,7 @@ func (s *MessageStore) ListMessagesAfter(afterID int64) ([]Message, error) {
 		var m Message
 		var blockBytes []byte
 		var unix int64
-		if err := rows.Scan(&m.ID, &blockBytes, &m.Content, &unix); err != nil {
+		if err := rows.Scan(&m.ID, &blockBytes, &m.Content, &m.Channel, &unix); err != nil {
 			return nil, fmt.Errorf("client: list messages: %w", err)
 		}
 		copy(m.BlockID[:], blockBytes)

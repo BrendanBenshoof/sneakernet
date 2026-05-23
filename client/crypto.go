@@ -27,6 +27,12 @@ const (
 
 var magic = [magicSize]byte{'S', 'N', 'K', 0x01}
 
+var magicChannel = [magicSize]byte{'S', 'N', 'K', 0x02}
+
+// channelSaltSize is the per-block random salt prepended to channel payloads.
+// It occupies the same first 32 bytes as the ephemeral pubkey in direct messages.
+const channelSaltSize = pubKeySize // 32
+
 // ErrNotOurMessage is returned by tryDecrypt when a block is not addressed to us.
 var ErrNotOurMessage = errors.New("client: not our message")
 
@@ -77,6 +83,73 @@ func Encrypt(recipientPub *ecdh.PublicKey, msg []byte) (blockstore.Payload, erro
 	copy(payload[pubKeySize:ciphertextOffset], nonce[:])
 	copy(payload[ciphertextOffset:], ct)
 	return payload, nil
+}
+
+// EncryptChannel encrypts msg into a fixed-size Payload using a symmetric channelKey.
+// Anyone who knows the passphrase (and thus the channelKey) can decrypt it.
+// The sender is anonymous — no identity information is embedded.
+func EncryptChannel(channelKey [32]byte, msg []byte) (blockstore.Payload, error) {
+	if len(msg) > maxMessageSize {
+		return blockstore.Payload{}, errors.New("client: message too large")
+	}
+
+	var salt [channelSaltSize]byte
+	if _, err := rand.Read(salt[:]); err != nil {
+		return blockstore.Payload{}, err
+	}
+
+	blockKey := sha256.Sum256(append(channelKey[:], salt[:]...))
+
+	aead, err := chacha20poly1305.NewX(blockKey[:])
+	if err != nil {
+		return blockstore.Payload{}, err
+	}
+
+	var plain [plaintextSize]byte
+	copy(plain[:magicSize], magicChannel[:])
+	binary.LittleEndian.PutUint16(plain[magicSize:], uint16(len(msg)))
+	copy(plain[headerSize:], msg)
+
+	var nonce [nonceSize]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return blockstore.Payload{}, err
+	}
+
+	ct := aead.Seal(nil, nonce[:], plain[:], nil)
+
+	var payload blockstore.Payload
+	copy(payload[:channelSaltSize], salt[:])
+	copy(payload[channelSaltSize:ciphertextOffset], nonce[:])
+	copy(payload[ciphertextOffset:], ct)
+	return payload, nil
+}
+
+// tryDecryptChannel attempts to decrypt payload as a channel message using channelKey.
+func tryDecryptChannel(channelKey [32]byte, payload blockstore.Payload) ([]byte, error) {
+	blockKey := sha256.Sum256(append(channelKey[:], payload[:channelSaltSize]...))
+
+	aead, err := chacha20poly1305.NewX(blockKey[:])
+	if err != nil {
+		return nil, ErrNotOurMessage
+	}
+
+	plain, err := aead.Open(nil, payload[channelSaltSize:ciphertextOffset], payload[ciphertextOffset:], nil)
+	if err != nil {
+		return nil, ErrNotOurMessage
+	}
+
+	if len(plain) < headerSize || [magicSize]byte(plain[:magicSize]) != magicChannel {
+		return nil, ErrNotOurMessage
+	}
+
+	msgLen := int(binary.LittleEndian.Uint16(plain[magicSize:headerSize]))
+	if msgLen > maxMessageSize {
+		return nil, ErrNotOurMessage
+	}
+
+	out := make([]byte, msgLen)
+	copy(out, plain[headerSize:headerSize+msgLen])
+	return out, nil
 }
 
 // tryDecrypt attempts to decrypt payload using privKey.

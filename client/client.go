@@ -15,11 +15,12 @@ type Client struct {
 	blocks   blockstore.Store
 	messages *MessageStore
 	privKeys []*ecdh.PrivateKey
+	channels []Channel
 }
 
-// New creates a Client. Pass one key per identity; all are tried on every block.
-func New(blocks blockstore.Store, messages *MessageStore, privKeys ...*ecdh.PrivateKey) *Client {
-	return &Client{blocks: blocks, messages: messages, privKeys: privKeys}
+// New creates a Client. All identity and channel keys are tried on every block.
+func New(blocks blockstore.Store, messages *MessageStore, privKeys []*ecdh.PrivateKey, channels []Channel) *Client {
+	return &Client{blocks: blocks, messages: messages, privKeys: privKeys, channels: channels}
 }
 
 // Scrape pages through all blocks added since the last checkpoint, attempts
@@ -52,11 +53,11 @@ func (c *Client) Scrape(ctx context.Context) (int, error) {
 			if err != nil {
 				continue // block expired between list and get
 			}
-			content, ok := c.tryAllKeys(payload)
+			content, channel, ok := c.tryAllKeys(payload)
 			if !ok {
 				continue
 			}
-			inserted, err := c.messages.SaveMessage(ref.ID, content)
+			inserted, err := c.messages.SaveMessage(ref.ID, content, channel)
 			if err != nil {
 				return found, err
 			}
@@ -74,13 +75,18 @@ func (c *Client) Scrape(ctx context.Context) (int, error) {
 	return found, c.messages.SetCheckpoint(scanStart)
 }
 
-// tryAllKeys attempts decryption with each held private key.
-// Returns the plaintext and true on the first success.
-func (c *Client) tryAllKeys(payload blockstore.Payload) ([]byte, bool) {
+// tryAllKeys attempts decryption with each held private key and channel key.
+// Returns the plaintext, the channel name (empty for direct messages), and true on success.
+func (c *Client) tryAllKeys(payload blockstore.Payload) ([]byte, string, bool) {
 	for _, key := range c.privKeys {
 		if content, err := tryDecrypt(key, payload); err == nil {
-			return content, true
+			return content, "", true
 		}
 	}
-	return nil, false
+	for _, ch := range c.channels {
+		if content, err := tryDecryptChannel(ch.Key, payload); err == nil {
+			return content, ch.Name, true
+		}
+	}
+	return nil, "", false
 }
