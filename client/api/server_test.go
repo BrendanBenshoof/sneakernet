@@ -263,6 +263,91 @@ func TestUIServed(t *testing.T) {
 	}
 }
 
+func TestPublicBlockEndpoints(t *testing.T) {
+	srv, _ := testServer(t)
+	tok := unlock(t, srv)
+
+	// Store a block via the authenticated send endpoint so we have something to list.
+	w := post(t, srv, "/api/identities", map[string]string{"name": "eve"}, tok)
+	var addResp map[string]string
+	mustJSON(t, w, &addResp)
+	pubKey := addResp["public_key"]
+	post(t, srv, "/api/send", map[string]string{
+		"recipient_public_key": pubKey,
+		"message":             "test",
+	}, tok)
+
+	// GET /api/blocks lists blocks without auth.
+	w = get(t, srv, "/api/blocks", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /api/blocks: got %d, want 200", w.Code)
+	}
+	var listResp struct {
+		Blocks []struct {
+			ID         string `json:"id"`
+			WorkFactor int    `json:"work_factor"`
+			Stamp      string `json:"stamp"`
+			Payload    string `json:"payload"`
+		} `json:"blocks"`
+	}
+	mustJSON(t, w, &listResp)
+	if len(listResp.Blocks) != 1 {
+		t.Fatalf("expected 1 block, got %d", len(listResp.Blocks))
+	}
+	blkID := listResp.Blocks[0].ID
+
+	// GET /api/blocks/{id} fetches it without auth.
+	w = get(t, srv, "/api/blocks/"+blkID, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /api/blocks/%s: got %d, want 200", blkID, w.Code)
+	}
+	var getResp map[string]any
+	mustJSON(t, w, &getResp)
+	if getResp["payload"] == "" {
+		t.Fatal("expected non-empty payload in block response")
+	}
+
+	// GET /api/blocks/{id} returns 404 for unknown ID.
+	w = get(t, srv, "/api/blocks/"+strings.Repeat("0", 64), "")
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("unknown block: got %d, want 404", w.Code)
+	}
+
+	// POST /api/blocks submits a block without auth.
+	payload := listResp.Blocks[0].Payload
+	w = post(t, srv, "/api/blocks", map[string]string{
+		"stamp":   listResp.Blocks[0].Stamp,
+		"payload": payload,
+	}, "")
+	// 201 Created (or 200 if already exists — blockstore does INSERT OR REPLACE).
+	if w.Code != http.StatusCreated {
+		t.Fatalf("POST /api/blocks: got %d, want 201 (body: %s)", w.Code, w.Body.String())
+	}
+
+	// CORS: /api/blocks allows any origin.
+	req := httptest.NewRequest(http.MethodOptions, "/api/blocks", nil)
+	req.Header.Set("Origin", "https://example.com")
+	rr := httptest.NewRecorder()
+	srv.ServeHTTP(rr, req)
+	if rr.Header().Get("Access-Control-Allow-Origin") != "*" {
+		t.Fatal("/api/blocks CORS: expected Access-Control-Allow-Origin: *")
+	}
+}
+
+// TestAppServed checks that the public webapp is served at /app.
+func TestAppServed(t *testing.T) {
+	srv, _ := testServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/app", nil)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /app: got %d, want 200", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "Sneakernet") {
+		t.Fatal("GET /app: response body does not look like the webapp")
+	}
+}
+
 func TestCORSLocalhost(t *testing.T) {
 	srv, _ := testServer(t)
 

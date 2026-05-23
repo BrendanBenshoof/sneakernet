@@ -34,6 +34,9 @@ import (
 //go:embed ui/index.html
 var indexHTML []byte
 
+//go:embed ui/app.html
+var appHTML []byte
+
 // Server is an HTTP API server wrapping the sneakernet client stack.
 // It implements http.Handler and can be passed directly to http.ListenAndServe.
 type Server struct {
@@ -65,7 +68,12 @@ func New(blocks blockstore.Store, msgs *client.MessageStore, keystorePath string
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if origin := r.Header.Get("Origin"); isLocalOrigin(origin) {
+	// /api/blocks is public data — allow any origin so third-party UIs can read.
+	if strings.HasPrefix(r.URL.Path, "/api/blocks") {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	} else if origin := r.Header.Get("Origin"); isLocalOrigin(origin) {
 		w.Header().Set("Access-Control-Allow-Origin", origin)
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
@@ -82,6 +90,12 @@ func (s *Server) routes() {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Write(indexHTML)
 	})
+	s.mux.HandleFunc("GET /app", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write(appHTML)
+	})
+
+	// Authenticated local-client endpoints.
 	s.mux.HandleFunc("POST /api/keystore/create", s.handleCreate)
 	s.mux.HandleFunc("POST /api/keystore/change-password", s.auth(s.handleChangePassword))
 	s.mux.HandleFunc("POST /api/unlock", s.handleUnlock)
@@ -92,6 +106,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/messages", s.auth(s.handleListMessages))
 	s.mux.HandleFunc("POST /api/scrape", s.auth(s.handleScrape))
 	s.mux.HandleFunc("POST /api/send", s.auth(s.handleSend))
+
+	// Public block endpoints — no auth, any origin.
+	s.mux.HandleFunc("GET /api/blocks", s.handleListBlocks)
+	s.mux.HandleFunc("GET /api/blocks/{id}", s.handleGetBlock)
+	s.mux.HandleFunc("POST /api/blocks", s.handleSubmitBlock)
 }
 
 // auth wraps a handler requiring a valid Bearer token.
