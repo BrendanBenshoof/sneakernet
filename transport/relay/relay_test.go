@@ -1,8 +1,13 @@
 package relay_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -241,5 +246,136 @@ func TestBloomFromBytes(t *testing.T) {
 	_, err = relay.BloomFromBytes([]byte{0, 1, 2})
 	if err == nil {
 		t.Error("expected error for wrong-size bytes")
+	}
+}
+
+// ── webapp endpoint tests ─────────────────────────────────────────────────────
+
+func newRelayServer(t *testing.T, powFloor int) (*httptest.Server, blockstore.Store) {
+	t.Helper()
+	store := newStore(t)
+	srv := relay.NewServer(store, powFloor)
+	ts := httptest.NewServer(srv)
+	t.Cleanup(ts.Close)
+	return ts, store
+}
+
+func relayGet(t *testing.T, ts *httptest.Server, path string) *http.Response {
+	t.Helper()
+	resp, err := http.Get(ts.URL + path)
+	if err != nil {
+		t.Fatalf("GET %s: %v", path, err)
+	}
+	return resp
+}
+
+func relayPost(t *testing.T, ts *httptest.Server, path string, body any) *http.Response {
+	t.Helper()
+	b, _ := json.Marshal(body)
+	resp, err := http.Post(ts.URL+path, "application/json", bytes.NewReader(b))
+	if err != nil {
+		t.Fatalf("POST %s: %v", path, err)
+	}
+	return resp
+}
+
+func TestWebAppServed(t *testing.T) {
+	ts, _ := newRelayServer(t, 0)
+	resp := relayGet(t, ts, "/app")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /app: got %d, want 200", resp.StatusCode)
+	}
+	if !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/html") {
+		t.Fatalf("content-type %q, want text/html", resp.Header.Get("Content-Type"))
+	}
+}
+
+func TestWebCORS(t *testing.T) {
+	ts, _ := newRelayServer(t, 0)
+	req, _ := http.NewRequest(http.MethodOptions, ts.URL+"/api/blocks", nil)
+	req.Header.Set("Origin", "https://example.com")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("preflight: got %d, want 204", resp.StatusCode)
+	}
+	if resp.Header.Get("Access-Control-Allow-Origin") != "*" {
+		t.Fatal("expected Access-Control-Allow-Origin: *")
+	}
+}
+
+func TestWebBlockEndpoints(t *testing.T) {
+	ts, store := newRelayServer(t, 0)
+
+	// Seed a block directly into the store.
+	stamp, payload := makeBlock(0x42)
+	id, err := store.Put(stamp, payload)
+	if err != nil {
+		t.Fatalf("seed block: %v", err)
+	}
+	idHex := fmt.Sprintf("%x", id)
+
+	// GET /api/blocks lists it.
+	resp := relayGet(t, ts, "/api/blocks")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/blocks: got %d", resp.StatusCode)
+	}
+	var listResp struct {
+		Blocks []struct {
+			ID      string `json:"id"`
+			Payload string `json:"payload"`
+			Stamp   string `json:"stamp"`
+		} `json:"blocks"`
+	}
+	json.NewDecoder(resp.Body).Decode(&listResp)
+	if len(listResp.Blocks) != 1 || listResp.Blocks[0].ID != idHex {
+		t.Fatalf("unexpected blocks: %+v", listResp.Blocks)
+	}
+
+	// GET /api/blocks/{id} fetches the payload.
+	resp2 := relayGet(t, ts, "/api/blocks/"+idHex)
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/blocks/%s: got %d", idHex, resp2.StatusCode)
+	}
+
+	// GET /api/blocks/{id} returns 404 for an unknown ID.
+	resp3 := relayGet(t, ts, "/api/blocks/"+strings.Repeat("0", 64))
+	resp3.Body.Close()
+	if resp3.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown block: got %d, want 404", resp3.StatusCode)
+	}
+
+	// POST /api/blocks submits the same block again (INSERT OR REPLACE).
+	resp4 := relayPost(t, ts, "/api/blocks", map[string]string{
+		"stamp":   listResp.Blocks[0].Stamp,
+		"payload": listResp.Blocks[0].Payload,
+	})
+	resp4.Body.Close()
+	if resp4.StatusCode != http.StatusCreated {
+		t.Fatalf("POST /api/blocks: got %d, want 201", resp4.StatusCode)
+	}
+}
+
+func TestWebSubmitBlockPowFloor(t *testing.T) {
+	ts, _ := newRelayServer(t, 99) // unreachably high floor
+
+	// Zero stamp + zero payload has effectively 0 work factor — should be rejected.
+	body, _ := json.Marshal(map[string]string{
+		"stamp":   "AAAAAA==",                // base64(4 zero bytes)
+		"payload": strings.Repeat("A", 2732), // base64(2048 zero bytes) ≈ 2732 chars
+	})
+	resp, err := http.Post(ts.URL+"/api/blocks", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode == http.StatusCreated {
+		t.Fatal("expected rejection with pow_floor=99, got 201")
 	}
 }

@@ -44,6 +44,13 @@ func NewServer(store blockstore.Store, powFloor int) *Server {
 }
 
 func (s *Server) routes() {
+	// Public webapp and JSON block API.
+	s.mux.HandleFunc("GET /app", s.handleWebApp)
+	s.mux.HandleFunc("GET /api/blocks", s.handleListBlocks)
+	s.mux.HandleFunc("GET /api/blocks/{id}", s.handleGetBlock)
+	s.mux.HandleFunc("POST /api/blocks", s.handleSubmitBlock)
+
+	// Node-to-node relay protocol (binary wire format).
 	s.mux.HandleFunc("GET /v1/block/{id}", s.handleGet)
 	s.mux.HandleFunc("POST /v1/block", s.handlePut)
 	s.mux.HandleFunc("POST /v1/delta", s.handleDelta)
@@ -51,6 +58,14 @@ func (s *Server) routes() {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// All relay endpoints are public; allow any browser origin.
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	s.mux.ServeHTTP(w, r)
 }
 
