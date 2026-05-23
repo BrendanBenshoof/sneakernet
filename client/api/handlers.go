@@ -290,6 +290,125 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// GET /api/blocks?since=<unix>&page_token=<str>&pow_floor=<int>&limit=<int>
+// Public — no auth required. Returns paginated list of blocks with full payloads.
+func (s *Server) handleListBlocks(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+
+	sinceUnix, _ := strconv.ParseInt(q.Get("since"), 10, 64)
+	since := time.Unix(sinceUnix, 0)
+
+	powFloor, _ := strconv.Atoi(q.Get("pow_floor"))
+
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	if limit <= 0 {
+		limit = 200
+	}
+	if limit > 500 {
+		limit = 500
+	}
+
+	nextToken, refs, err := s.blocks.ListBlocks(q.Get("page_token"), limit, powFloor, since)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	type blockItem struct {
+		ID         string `json:"id"`
+		WorkFactor int    `json:"work_factor"`
+		Stamp      string `json:"stamp"`
+		Payload    string `json:"payload"`
+	}
+
+	items := make([]blockItem, 0, len(refs))
+	for _, ref := range refs {
+		stamp, payload, err := s.blocks.Get(ref.ID)
+		if err != nil {
+			continue // expired between list and get
+		}
+		items = append(items, blockItem{
+			ID:         hex.EncodeToString(ref.ID[:]),
+			WorkFactor: ref.WorkFactor,
+			Stamp:      base64.StdEncoding.EncodeToString(stamp[:]),
+			Payload:    base64.StdEncoding.EncodeToString(payload[:]),
+		})
+	}
+
+	type listResp struct {
+		Blocks        []blockItem `json:"blocks"`
+		NextPageToken string      `json:"next_page_token,omitempty"`
+	}
+	writeJSON(w, http.StatusOK, listResp{Blocks: items, NextPageToken: nextToken})
+}
+
+// GET /api/blocks/{id}
+// Public — no auth required. Returns a single block by hex-encoded ID.
+func (s *Server) handleGetBlock(w http.ResponseWriter, r *http.Request) {
+	idBytes, err := hex.DecodeString(r.PathValue("id"))
+	if err != nil || len(idBytes) != blockstore.IDSize {
+		writeError(w, http.StatusBadRequest, "invalid block id")
+		return
+	}
+	var id blockstore.ID
+	copy(id[:], idBytes)
+
+	stamp, payload, err := s.blocks.Get(id)
+	if errors.Is(err, blockstore.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "block not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id":      hex.EncodeToString(id[:]),
+		"stamp":   base64.StdEncoding.EncodeToString(stamp[:]),
+		"payload": base64.StdEncoding.EncodeToString(payload[:]),
+	})
+}
+
+// POST /api/blocks  {"stamp":"<base64>","payload":"<base64>"}
+// Public — no auth required. Submits a pre-encrypted block to the blockstore.
+func (s *Server) handleSubmitBlock(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Stamp   string `json:"stamp"`
+		Payload string `json:"payload"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+
+	stampBytes, err := base64.StdEncoding.DecodeString(req.Stamp)
+	if err != nil || len(stampBytes) != blockstore.StampSize {
+		writeError(w, http.StatusBadRequest, "invalid stamp: must be base64-encoded 4 bytes")
+		return
+	}
+	payloadBytes, err := base64.StdEncoding.DecodeString(req.Payload)
+	if err != nil || len(payloadBytes) != blockstore.PayloadSize {
+		writeError(w, http.StatusBadRequest, "invalid payload: must be base64-encoded 2048 bytes")
+		return
+	}
+
+	var stamp blockstore.Stamp
+	var payload blockstore.Payload
+	copy(stamp[:], stampBytes)
+	copy(payload[:], payloadBytes)
+
+	id, err := s.blocks.Put(stamp, payload)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"id":          hex.EncodeToString(id[:]),
+		"work_factor": blockstore.WorkFactor(stamp, payload),
+	})
+}
+
 // --- helpers ---
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
