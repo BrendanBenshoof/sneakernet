@@ -44,13 +44,14 @@ func usage() {
 
 func cmdRelay(args []string) {
 	fs := flag.NewFlagSet("relay", flag.ExitOnError)
-	addr         := fs.String("addr", "127.0.0.1:8080", "user API listen address")
-	relayAddr    := fs.String("relay-addr", "0.0.0.0:8081", "relay listen address (must be reachable by other nodes)")
-	blocksDB     := fs.String("blocks", "blocks.db", "blockstore SQLite path")
-	messagesDB   := fs.String("messages", "messages.db", "message store SQLite path")
-	keystoreFile := fs.String("keystore", "keystore.json", "keystore file path")
-	powFloor     := fs.Int("pow-floor", 0, "minimum proof-of-work for relay block acceptance")
-	syncInterval := fs.Duration("sync-interval", 5*time.Minute, "interval between peer sync rounds")
+	addr          := fs.String("addr", "127.0.0.1:8080", "user API listen address")
+	relayAddr     := fs.String("relay-addr", "0.0.0.0:8081", "relay listen address")
+	advertiseAddr := fs.String("advertise-addr", "", "host:port to advertise to peers via DHT (overrides relay-addr; use when behind a proxy)")
+	blocksDB      := fs.String("blocks", "blocks.db", "blockstore SQLite path")
+	messagesDB    := fs.String("messages", "messages.db", "message store SQLite path")
+	keystoreFile  := fs.String("keystore", "keystore.json", "keystore file path")
+	powFloor      := fs.Int("pow-floor", 0, "minimum proof-of-work for relay block acceptance")
+	syncInterval  := fs.Duration("sync-interval", 5*time.Minute, "interval between peer sync rounds")
 	fs.Parse(args)
 
 	_, portStr, err := net.SplitHostPort(*relayAddr)
@@ -60,6 +61,18 @@ func cmdRelay(args []string) {
 	relayPort, err := strconv.Atoi(portStr)
 	if err != nil {
 		log.Fatalf("invalid relay port %q: %v", portStr, err)
+	}
+
+	dhtPort := relayPort
+	if *advertiseAddr != "" {
+		_, advPortStr, err := net.SplitHostPort(*advertiseAddr)
+		if err != nil {
+			log.Fatalf("invalid advertise-addr %q: %v", *advertiseAddr, err)
+		}
+		dhtPort, err = strconv.Atoi(advPortStr)
+		if err != nil {
+			log.Fatalf("invalid port in advertise-addr %q: %v", *advertiseAddr, err)
+		}
 	}
 
 	bs, err := blockstore.OpenSQLite(*blocksDB)
@@ -80,14 +93,18 @@ func cmdRelay(args []string) {
 	// Relay server: block exchange with other sneakernet nodes.
 	relaySrv := relay.NewServer(bs, *powFloor)
 	go func() {
-		log.Printf("Relay listening at %s", *relayAddr)
 		if err := http.ListenAndServe(*relayAddr, relaySrv); err != nil {
 			log.Printf("relay server stopped: %v", err)
 		}
 	}()
 
 	// DHT: advertise our relay port under the shared sneakernet info-hash.
-	disc, err := dht.New(relayPort)
+	if *advertiseAddr != "" {
+		log.Printf("Relay listening at %s, advertised as %s", *relayAddr, *advertiseAddr)
+	} else {
+		log.Printf("Relay listening at %s", *relayAddr)
+	}
+	disc, err := dht.New(dhtPort)
 	if err != nil {
 		log.Fatalf("dht init: %v", err)
 	}
@@ -113,6 +130,16 @@ func cmdRelay(args []string) {
 	log.Println("shutting down")
 }
 
+// peerURL constructs the base URL for a peer given its "host:port" address.
+// Port 443 is assumed to be TLS-terminated; all others use plain HTTP.
+func peerURL(hostport string) string {
+	_, port, _ := net.SplitHostPort(hostport)
+	if port == "443" {
+		return "https://" + hostport
+	}
+	return "http://" + hostport
+}
+
 // syncPeers collects relay addresses from DHT discovery and periodically
 // pushes and pulls blocks to/from each known peer.
 func syncPeers(ctx context.Context, store blockstore.Store, peers <-chan string, powFloor int, interval time.Duration) {
@@ -131,7 +158,7 @@ func syncPeers(ctx context.Context, store blockstore.Store, peers <-chan string,
 			if ctx.Err() != nil {
 				return
 			}
-			c := relay.NewClient("http://" + addr)
+			c := relay.NewClient(peerURL(addr))
 			if n, err := c.Pull(ctx, store, powFloor, time.Time{}); err != nil {
 				log.Printf("sync pull %s: %v", addr, err)
 			} else if n > 0 {
