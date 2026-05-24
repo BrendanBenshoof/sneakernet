@@ -102,7 +102,21 @@ func EncryptChannel(channelKey [32]byte, mp MessagePayload) (blockstore.Payload,
 	if err != nil {
 		return blockstore.Payload{}, err
 	}
+	return encryptChannelPlain(channelKey, plain)
+}
 
+// EncryptChannelSigned encodes mp, signs the plaintext with sigKey, then encrypts with channelKey.
+// mp.SenderPub must already be set to the Ed25519 public key corresponding to sigKey.
+func EncryptChannelSigned(channelKey [32]byte, mp MessagePayload, sigKey ed25519.PrivateKey) (blockstore.Payload, error) {
+	plain, err := EncodePayload(mp)
+	if err != nil {
+		return blockstore.Payload{}, err
+	}
+	SignPayload(&plain, sigKey)
+	return encryptChannelPlain(channelKey, plain)
+}
+
+func encryptChannelPlain(channelKey [32]byte, plain [plaintextSize]byte) (blockstore.Payload, error) {
 	var salt [channelSaltSize]byte
 	if _, err := rand.Read(salt[:]); err != nil {
 		return blockstore.Payload{}, err
@@ -146,8 +160,12 @@ func tryDecryptChannel(channelKey [32]byte, payload blockstore.Payload) (Message
 		return MessagePayload{}, ErrNotOurMessage
 	}
 
-	mp, err := DecodePayload([plaintextSize]byte(plainSlice))
+	buf := [plaintextSize]byte(plainSlice)
+	mp, err := DecodePayload(buf)
 	if err != nil {
+		return MessagePayload{}, ErrNotOurMessage
+	}
+	if !mp.IsAnonymous() && !VerifySignature(buf) {
 		return MessagePayload{}, ErrNotOurMessage
 	}
 	return mp, nil

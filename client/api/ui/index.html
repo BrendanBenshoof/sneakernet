@@ -15,7 +15,8 @@
       --muted:        #8b8fa8;
       --danger:       #e05a5a;
       --ok:           #4caf7d;
-      --mono: 'SF Mono','Fira Code','Cascadia Code',monospace;
+      --mono:         'SF Mono','Fira Code','Cascadia Code',monospace;
+      --sidebar-w:    240px;
     }
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -27,11 +28,11 @@
       display: flex;
       flex-direction: column;
       font-size: 14px;
+      overflow: hidden;
     }
 
     .hidden { display: none !important; }
 
-    /* ── inputs & buttons ──────────────────────────────── */
     input, textarea, select, button {
       font-family: inherit;
       font-size: 14px;
@@ -47,7 +48,7 @@
     }
     input:focus, textarea:focus, select:focus { outline: none; border-color: var(--accent); }
     select { cursor: pointer; }
-    textarea { resize: vertical; min-height: 90px; line-height: 1.5; }
+    textarea { resize: vertical; min-height: 72px; line-height: 1.5; }
 
     button {
       background: var(--accent);
@@ -68,13 +69,13 @@
       color: var(--text);
     }
     button.ghost:hover { background: var(--surface); }
-
     button.sm { padding: 5px 10px; font-size: 12px; }
-
     button.danger { background: var(--danger); }
     button.danger:hover { background: #c04040; }
+    button.icon { padding: 4px 8px; font-size: 16px; background: transparent; border: none; color: var(--muted); border-radius: 4px; }
+    button.icon:hover { color: var(--text); background: var(--surface); }
 
-    /* ── lock screen ───────────────────────────────────── */
+    /* ── lock screen ─────────────────────────────────────── */
     #lock-screen {
       flex: 1;
       display: flex;
@@ -96,50 +97,284 @@
     .lock-card .sub { color: var(--muted); font-size: 12px; margin-top: -4px; margin-bottom: 6px; }
     #lock-err { color: var(--danger); font-size: 12px; min-height: 16px; }
 
-    /* ── app shell ─────────────────────────────────────── */
-    #app { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
-
-    header {
-      background: var(--surface);
-      border-bottom: 1px solid var(--border);
-      padding: 0 16px;
+    /* ── app shell: two-pane ─────────────────────────────── */
+    #app {
+      flex: 1;
       display: flex;
-      align-items: stretch;
-      gap: 0;
+      overflow: hidden;
     }
-    header h1 { font-size: 15px; padding: 12px 14px 12px 0; white-space: nowrap; }
 
-    /* ── tabs ──────────────────────────────────────────── */
-    nav.tabs { display: flex; align-items: stretch; }
-    .tab-btn {
-      background: transparent;
-      border: none;
-      border-bottom: 2px solid transparent;
-      color: var(--muted);
-      cursor: pointer;
-      font-size: 13px;
-      font-weight: 500;
-      padding: 12px 14px 10px;
-      transition: color .15s, border-color .15s;
-      border-radius: 0;
+    /* ── sidebar ─────────────────────────────────────────── */
+    #sidebar {
+      width: var(--sidebar-w);
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      overflow: hidden;
     }
-    .tab-btn:hover { color: var(--text); background: transparent; }
-    .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
 
-    .header-actions { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+    #sb-header {
+      display: flex;
+      align-items: center;
+      padding: 12px 12px 12px 14px;
+      border-bottom: 1px solid var(--border);
+      gap: 4px;
+    }
+    #sb-header h1 { flex: 1; font-size: 14px; font-weight: 600; }
+    #sb-header .sub { font-size: 10px; color: var(--muted); font-weight: 400; }
 
-    /* ── content area ──────────────────────────────────── */
-    #content {
+    #sb-body {
       flex: 1;
       overflow-y: auto;
-      padding: 20px;
-      max-width: 760px;
-      width: 100%;
-      margin: 0 auto;
     }
 
-    /* ── section cards ─────────────────────────────────── */
-    .section {
+    .sb-section { padding: 8px 0; border-bottom: 1px solid var(--border); }
+    .sb-section:last-of-type { border-bottom: none; }
+
+    .sb-section-title {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      color: var(--muted);
+      padding: 4px 14px 2px;
+    }
+
+    .sb-item {
+      display: flex;
+      align-items: center;
+      padding: 7px 10px 7px 14px;
+      cursor: pointer;
+      border-radius: 0;
+      gap: 6px;
+      color: var(--text);
+      font-size: 13px;
+      transition: background .1s;
+    }
+    .sb-item:hover { background: var(--bg); }
+    .sb-item.active { background: var(--bg); color: var(--accent); }
+    .sb-item .sb-name { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .sb-item .sb-badge {
+      font-size: 10px;
+      background: var(--accent);
+      color: #fff;
+      border-radius: 10px;
+      padding: 1px 6px;
+      flex-shrink: 0;
+    }
+    .sb-hash { color: var(--muted); font-size: 12px; }
+
+    #sb-footer {
+      border-top: 1px solid var(--border);
+      padding: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    #sb-footer button {
+      width: 100%;
+      text-align: left;
+      background: transparent;
+      border: none;
+      color: var(--muted);
+      font-size: 12px;
+      padding: 6px 8px;
+      border-radius: 5px;
+    }
+    #sb-footer button:hover { background: var(--bg); color: var(--text); }
+
+    /* ── main pane ───────────────────────────────────────── */
+    #main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      background: var(--bg);
+    }
+
+    #conv-header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 49px;
+      flex-shrink: 0;
+    }
+    #conv-header h2 { font-size: 14px; font-weight: 600; flex: 1; }
+    #conv-header .sub { font-size: 11px; color: var(--muted); }
+    #mobile-back { display: none; }
+    #identity-picker {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-left: auto;
+      flex-shrink: 0;
+    }
+    #identity-picker select {
+      width: auto;
+      font-size: 12px;
+      padding: 4px 8px;
+    }
+
+    #conv-messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+    }
+
+    .empty-state {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      color: var(--muted);
+      font-size: 13px;
+      text-align: center;
+      padding: 32px;
+    }
+
+    /* ── causal chain visuals ────────────────────────────── */
+    .thread-container { display: flex; flex-direction: column; }
+
+    .msg-row {
+      display: flex;
+      gap: 0;
+      padding: 4px 0;
+    }
+
+    .connector-col {
+      width: 20px;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .conn-top {
+      width: 2px;
+      flex: 1;
+      background: var(--border);
+      min-height: 8px;
+    }
+    .conn-bottom {
+      width: 2px;
+      flex: 1;
+      background: var(--border);
+      min-height: 8px;
+    }
+    .conn-none { flex: 1; }
+
+    .bullet {
+      color: var(--accent);
+      font-size: 10px;
+      line-height: 1;
+      flex-shrink: 0;
+      margin: 3px 0;
+    }
+    .bullet.fork-first { color: var(--ok); }
+    .bullet.fork-mid   { color: var(--muted); }
+    .bullet.fork-last  { color: var(--muted); }
+
+    .msg-body-col {
+      flex: 1;
+      min-width: 0;
+      padding: 4px 0 4px 8px;
+    }
+
+    .msg-meta {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--muted);
+      margin-bottom: 3px;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .msg-sender { color: var(--accent); font-weight: 500; }
+    .msg-sender.anon { color: var(--muted); font-style: italic; }
+    .msg-time { color: var(--muted); }
+    .msg-time.delayed { color: #c09050; }
+    .msg-block-id { color: var(--border); font-size: 9px; }
+
+    .msg-content { line-height: 1.55; word-break: break-word; white-space: pre-wrap; }
+    .msg-content.binary { color: var(--muted); font-style: italic; }
+    .msg-content.system { color: var(--muted); font-style: italic; }
+
+    .gap-node {
+      display: flex;
+      gap: 0;
+      padding: 2px 0;
+    }
+    .gap-connector-col {
+      width: 20px;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .gap-line-top, .gap-line-bottom {
+      width: 2px;
+      flex: 1;
+      background: repeating-linear-gradient(
+        to bottom,
+        var(--border) 0px,
+        var(--border) 4px,
+        transparent 4px,
+        transparent 8px
+      );
+      min-height: 6px;
+    }
+    .gap-label {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--muted);
+      padding: 2px 0 2px 8px;
+      flex: 1;
+      opacity: .7;
+    }
+
+    /* ── compose ─────────────────────────────────────────── */
+    #compose-area {
+      border-top: 1px solid var(--border);
+      padding: 12px 16px;
+      background: var(--surface);
+      flex-shrink: 0;
+    }
+
+    .compose-ctx {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    .compose-ctx .ctx-val { color: var(--accent); }
+
+    .compose-row {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 6px;
+    }
+    .compose-row input, .compose-row select { flex: 1; }
+
+    .compose-bottom {
+      display: flex;
+      gap: 6px;
+      align-items: flex-end;
+    }
+    .compose-bottom textarea { flex: 1; min-height: 60px; }
+
+    /* ── identities / channels panel ─────────────────────── */
+    #panel-view {
+      padding: 20px;
+      overflow-y: auto;
+      flex: 1;
+    }
+
+    .panel-section {
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 10px;
@@ -149,9 +384,38 @@
       flex-direction: column;
       gap: 10px;
     }
-    .section h2 { font-size: 15px; }
+    .panel-section h2 { font-size: 15px; }
+    .panel-section p.hint { font-size: 12px; color: var(--muted); }
 
-    /* ── channel badge ─────────────────────────────────── */
+    .card {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .card-header { display: flex; align-items: center; gap: 8px; }
+    .card-name { font-size: 13px; font-weight: 500; flex: 1; }
+    .card-key-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 6px;
+    }
+    .card-key-info { flex: 1; min-width: 0; }
+    .card-key-label { font-size: 10px; color: var(--muted); margin-bottom: 2px; }
+    .card-key {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--muted);
+      word-break: break-all;
+      line-height: 1.4;
+    }
+
+    .row { display: flex; gap: 6px; }
+    .row input, .row select { flex: 1; }
+
     .ch-badge {
       display: inline-block;
       font-family: var(--mono);
@@ -161,58 +425,13 @@
       border: 1px solid #3a5080;
       border-radius: 4px;
       padding: 1px 6px;
-      margin-right: 6px;
-      vertical-align: middle;
     }
 
-    /* ── identity / channel cards ──────────────────────── */
-    .card {
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 10px 12px;
-      display: flex;
-      align-items: flex-start;
-      gap: 10px;
-    }
-    .card-info { flex: 1; min-width: 0; }
-    .card-name { font-size: 13px; font-weight: 500; margin-bottom: 3px; }
-    .card-key {
-      font-family: var(--mono);
-      font-size: 10px;
-      color: var(--muted);
-      word-break: break-all;
-      cursor: pointer;
-      line-height: 1.4;
-    }
-    .card-key:hover { color: var(--accent); }
-    .card-actions { display: flex; gap: 6px; flex-shrink: 0; align-items: center; }
-
-    /* ── messages ──────────────────────────────────────── */
-    .msg-item { margin-bottom: 10px; }
-    .msg-meta {
-      font-family: var(--mono);
-      font-size: 11px;
-      color: var(--muted);
-      margin-bottom: 5px;
-    }
-    .msg-body { line-height: 1.55; word-break: break-word; white-space: pre-wrap; }
-
-    .empty {
-      padding: 48px 16px;
-      text-align: center;
-      color: var(--muted);
-      font-size: 13px;
-    }
-
-    .row { display: flex; gap: 6px; }
-    .row input, .row select { flex: 1; }
-
-    /* ── status bar ────────────────────────────────────── */
+    /* ── status bar ──────────────────────────────────────── */
     #statusbar {
       font-size: 11px;
       color: var(--muted);
-      padding: 5px 16px;
+      padding: 4px 16px;
       background: var(--surface);
       border-top: 1px solid var(--border);
       flex-shrink: 0;
@@ -220,7 +439,7 @@
     #statusbar.ok  { color: var(--ok); }
     #statusbar.err { color: var(--danger); }
 
-    /* ── toast ─────────────────────────────────────────── */
+    /* ── toast ───────────────────────────────────────────── */
     #toast {
       position: fixed;
       bottom: 20px;
@@ -235,116 +454,115 @@
       opacity: 0;
       transition: opacity .2s;
       white-space: nowrap;
+      z-index: 100;
     }
     #toast.show { opacity: 1; }
 
-    @media (max-width: 500px) {
-      .tab-btn { padding: 10px 10px 8px; font-size: 12px; }
+    /* ── mobile ──────────────────────────────────────────── */
+    @media (max-width: 600px) {
+      #sidebar {
+        position: fixed;
+        left: 0; top: 0; bottom: 0;
+        z-index: 50;
+        transform: translateX(-100%);
+        transition: transform .2s;
+        width: 80vw;
+        max-width: 300px;
+      }
+      #sidebar.open { transform: translateX(0); box-shadow: 4px 0 20px #0008; }
+      #sidebar-overlay {
+        display: none;
+        position: fixed; inset: 0; background: #0006; z-index: 40;
+      }
+      #sidebar-overlay.show { display: block; }
+      #mobile-back { display: flex; }
+      #main { width: 100%; }
     }
   </style>
 </head>
 <body>
 
-<!-- ── lock screen ─────────────────────────────────────────── -->
+<!-- ── lock screen ───────────────────────────────────────────── -->
 <div id="lock-screen">
   <div class="lock-card">
     <h1>Sneakernet</h1>
     <p class="sub">Local Node — server-side crypto, persistent keystore</p>
-    <input type="password" id="pw" placeholder="Password">
+    <input type="password" id="pw" placeholder="Password" autocomplete="current-password">
     <button id="unlock-btn">Unlock</button>
     <button class="ghost" id="create-btn">Create new keystore</button>
     <p id="lock-err"></p>
   </div>
 </div>
 
-<!-- ── main app ────────────────────────────────────────────── -->
+<!-- ── sidebar overlay (mobile) ─────────────────────────────── -->
+<div id="sidebar-overlay"></div>
+
+<!-- ── main app ──────────────────────────────────────────────── -->
 <div id="app" class="hidden">
 
-  <header>
-    <h1>Sneakernet <span style="font-weight:400;color:var(--muted);font-size:12px;padding-left:6px">Local Node</span></h1>
-    <nav class="tabs">
-      <button class="tab-btn active" data-tab="inbox">Inbox</button>
-      <button class="tab-btn" data-tab="compose">Compose</button>
-      <button class="tab-btn" data-tab="identities">Identities</button>
-      <button class="tab-btn" data-tab="channels">Channels</button>
-    </nav>
-    <div class="header-actions">
-      <button class="ghost sm" id="scrape-btn">Refresh</button>
-      <button class="ghost sm" id="lock-btn">Lock</button>
+  <nav id="sidebar">
+    <div id="sb-header">
+      <h1>Sneakernet <span class="sub">Local Node</span></h1>
+      <button class="icon" id="new-msg-btn" title="New message">+</button>
     </div>
-  </header>
-
-  <div id="content">
-
-    <!-- ── Inbox tab ──────────────────────────────────── -->
-    <div id="tab-inbox">
-      <div class="section">
-        <div class="row" style="align-items:center">
-          <h2 style="flex:1;margin:0">Inbox</h2>
-          <span id="msg-count" style="font-size:11px;color:var(--muted)"></span>
-        </div>
-        <p style="font-size:12px;color:var(--muted)">
-          Messages are decrypted server-side using your encrypted keystore. Click Refresh to scan new blocks.
-        </p>
+    <div id="sb-body">
+      <div class="sb-section">
+        <div class="sb-section-title">Channels</div>
+        <div id="sb-channels"></div>
       </div>
-      <div id="msg-list">
-        <div class="empty">No messages yet — click Refresh to scan new blocks.</div>
+      <div class="sb-section">
+        <div class="sb-section-title">Direct</div>
+        <div id="sb-directs"></div>
       </div>
     </div>
+    <div id="sb-footer">
+      <button id="scrape-btn">⟳  Refresh</button>
+      <button id="identities-btn">⊙  Identities &amp; Channels</button>
+      <button id="lock-btn">⏻  Lock</button>
+    </div>
+  </nav>
 
-    <!-- ── Compose tab ────────────────────────────────── -->
-    <div id="tab-compose" class="hidden">
-      <div class="section">
-        <h2>Compose</h2>
-        <div class="row" style="gap:0;border:1px solid var(--border);border-radius:6px;overflow:hidden">
-          <button id="mode-direct" class="ghost sm" style="flex:1;border-radius:0;border:none;border-right:1px solid var(--border)"
-                  data-mode="direct">Direct</button>
-          <button id="mode-channel" class="ghost sm" style="flex:1;border-radius:0;border:none"
-                  data-mode="channel">Channel</button>
-        </div>
-        <div id="compose-direct">
-          <div style="margin-bottom:8px">
-            <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Send as (optional)</label>
-            <select id="sender-identity">
-              <option value="">— anonymous —</option>
-            </select>
-          </div>
-          <input id="recipient" placeholder="Recipient public key (base64)"
-                 style="font-family:var(--mono);font-size:11px">
-        </div>
-        <div id="compose-channel" class="hidden">
-          <select id="channel-select">
-            <option value="">— select channel —</option>
-          </select>
-        </div>
-        <textarea id="msg-body" placeholder="Message…"></textarea>
-        <button id="send-btn">Encrypt &amp; Send</button>
+  <div id="main">
+    <div id="conv-header">
+      <button class="icon hidden" id="mobile-back">←</button>
+      <h2 id="conv-title">Select a conversation</h2>
+      <span id="conv-sub" class="sub"></span>
+      <div id="identity-picker">
+        <span class="sub" style="white-space:nowrap">acting as</span>
+        <select id="active-identity">
+          <option value="">— anonymous —</option>
+        </select>
       </div>
     </div>
 
-    <!-- ── Identities tab ─────────────────────────────── -->
-    <div id="tab-identities" class="hidden">
-      <div class="section">
-        <h2>Your identities</h2>
-        <p style="font-size:12px;color:var(--muted)">
-          Stored in the server-side encrypted keystore, protected by your password.
-          Share a public key so others can send you messages.
-        </p>
+    <!-- conversation messages + compose -->
+    <div id="conv-view">
+      <div class="empty-state" id="conv-empty">Select a conversation from the sidebar, or click + to send a new message.</div>
+      <div id="conv-messages"></div>
+      <div id="compose-area" class="hidden">
+        <div class="compose-ctx" id="compose-ctx"></div>
+        <div id="compose-extra"></div>
+        <div class="compose-bottom">
+          <textarea id="compose-body" placeholder="Message…"></textarea>
+          <button id="send-btn">Send</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- identities + channels panel -->
+    <div id="panel-view" class="hidden">
+      <div class="panel-section">
+        <h2>Identities</h2>
+        <p class="hint">Stored in the server-side encrypted keystore. Share your <strong>encryption key</strong> so others can send you messages, and your <strong>signing key</strong> so others can verify your messages.</p>
         <div id="id-list"></div>
         <div class="row">
           <input id="new-id-name" placeholder="Identity name">
           <button class="sm" id="add-id-btn">Add</button>
         </div>
       </div>
-    </div>
-
-    <!-- ── Channels tab ───────────────────────────────── -->
-    <div id="tab-channels" class="hidden">
-      <div class="section">
+      <div class="panel-section">
         <h2>Channels</h2>
-        <p style="font-size:12px;color:var(--muted)">
-          Channels use a shared symmetric key derived from a passphrase. Anyone with the same passphrase can post and receive anonymously.
-        </p>
+        <p class="hint">Channels use a shared symmetric key derived from a passphrase. Anyone with the same passphrase can post and receive.</p>
         <div id="ch-list"></div>
         <div class="row">
           <input id="new-ch-name" placeholder="Channel name">
@@ -353,23 +571,25 @@
         </div>
       </div>
     </div>
-
   </div>
 
-  <div id="statusbar">Ready</div>
 </div>
 
+<div id="statusbar">Ready</div>
 <div id="toast"></div>
 
 <script>
-// ── state ──────────────────────────────────────────────────────────────
-let token       = sessionStorage.getItem('snk_token');
-let lastID      = 0;
-let msgCount    = 0;
-let composeMode = 'direct';
-let currentIdentities = [];
+// ── state ──────────────────────────────────────────────────────────────────
+let token          = sessionStorage.getItem('snk_token');
+let allMessages    = [];
+let byBlock        = new Map();
+let identities     = [];
+let channels       = [];
+let currentView    = null;
+let conversations  = [];
+let activeIdentity = null; // identity object or null (anonymous)
 
-// ── boot ───────────────────────────────────────────────────────────────
+// ── boot ───────────────────────────────────────────────────────────────────
 (async () => {
   if (token) {
     const r = await fetch('/api/identities', {headers: hdrs()});
@@ -380,13 +600,18 @@ let currentIdentities = [];
   showLock();
 })();
 
-// ── event wiring ───────────────────────────────────────────────────────
+// ── event wiring ───────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   el('unlock-btn').addEventListener('click', unlock);
   el('create-btn').addEventListener('click', createAndUnlock);
   el('pw').addEventListener('keydown', e => { if (e.key === 'Enter') unlock(); });
+
   el('scrape-btn').addEventListener('click', scrape);
   el('lock-btn').addEventListener('click', lock);
+  el('new-msg-btn').addEventListener('click', () => openNewMsg());
+  el('identities-btn').addEventListener('click', () => openPanel());
+  el('mobile-back').addEventListener('click', openSidebar);
+
   el('send-btn').addEventListener('click', send);
   el('add-id-btn').addEventListener('click', addIdentity);
   el('new-id-name').addEventListener('keydown', e => { if (e.key === 'Enter') addIdentity(); });
@@ -394,23 +619,16 @@ document.addEventListener('DOMContentLoaded', () => {
   el('new-ch-name').addEventListener('keydown', e => { if (e.key === 'Enter') el('new-ch-pass').focus(); });
   el('new-ch-pass').addEventListener('keydown', e => { if (e.key === 'Enter') addChannel(); });
 
-  document.querySelectorAll('[data-mode]').forEach(btn => {
-    btn.addEventListener('click', () => setMode(btn.dataset.mode));
-  });
-
-  document.querySelectorAll('.tab-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      const tab = btn.dataset.tab;
-      ['inbox', 'compose', 'identities', 'channels'].forEach(t =>
-        el('tab-' + t).classList.toggle('hidden', t !== tab));
-      if (tab === 'compose') renderSenderDropdown();
-    });
+  el('sidebar-overlay').addEventListener('click', closeSidebar);
+  el('active-identity').addEventListener('change', e => {
+    activeIdentity = identities.find(id => id.name === e.target.value) || null;
+    rebuildConversations();
+    renderSidebar();
+    if (currentView && currentView.kind !== 'panel' && currentView.kind !== 'new') rerenderCurrentView();
   });
 });
 
-// ── api helper ─────────────────────────────────────────────────────────
+// ── api helpers ────────────────────────────────────────────────────────────
 function hdrs(withBody = false) {
   const h = {};
   if (token) h['Authorization'] = 'Bearer ' + token;
@@ -434,7 +652,7 @@ async function api(method, path, body) {
   return r;
 }
 
-// ── auth ───────────────────────────────────────────────────────────────
+// ── auth ───────────────────────────────────────────────────────────────────
 async function unlock() {
   const pw = el('pw').value;
   if (!pw) return;
@@ -464,138 +682,544 @@ async function lock() {
   await api('POST', '/api/lock');
   token = null;
   sessionStorage.removeItem('snk_token');
-  lastID = 0; msgCount = 0;
+  allMessages = []; byBlock.clear(); conversations = [];
   showLock();
 }
 
-// ── scrape ─────────────────────────────────────────────────────────────
+// ── scrape ─────────────────────────────────────────────────────────────────
 async function scrape() {
   const btn = el('scrape-btn');
   btn.disabled = true;
-  btn.textContent = 'Scanning…';
-  status('Scanning blocks…');
+  btn.textContent = '⟳  Scanning…';
+  setStatus('Scanning blocks…');
   try {
     const r = await api('POST', '/api/scrape');
     if (!r) return;
     const {found} = await r.json();
-    status(`Scan complete — ${found} new message${found === 1 ? '' : 's'}.`, found > 0 ? 'ok' : '');
+    setStatus(`Scan complete — ${found} new message${found === 1 ? '' : 's'}.`, found > 0 ? 'ok' : '');
     if (found > 0) await loadMessages();
   } finally {
     btn.disabled = false;
-    btn.textContent = 'Refresh';
+    btn.textContent = '⟳  Refresh';
   }
 }
 
-// ── messages ───────────────────────────────────────────────────────────
+// ── message loading & grouping ─────────────────────────────────────────────
 async function loadMessages() {
+  const lastID = allMessages.length ? Math.max(...allMessages.map(m => m.id)) : 0;
   const r = await api('GET', `/api/messages?after_id=${lastID}`);
   if (!r || !r.ok) return;
   const msgs = await r.json();
   if (!msgs?.length) return;
 
-  const list = el('msg-list');
-  list.querySelector('.empty')?.remove();
-
-  msgs.forEach(m => {
-    const content = b64toText(m.content);
-    const badge = m.channel ? `<span class="ch-badge">#${esc(m.channel)}</span>` : '';
-    const div = document.createElement('div');
-    div.className = 'msg-item section';
-    div.style.gap = '6px';
-    let meta = `${badge}${esc(fmtTime(m.received_at))} &nbsp;·&nbsp; ${m.block_id.slice(0, 12)}…`;
-    if (m.sender_pub) meta += ` &nbsp;·&nbsp; from ${m.sender_pub.slice(0, 8)}…`;
-    div.innerHTML =
-      `<div class="msg-meta">${meta}</div>` +
-      `<div class="msg-body">${esc(content)}</div>`;
-    list.appendChild(div);
-    if (m.id > lastID) lastID = m.id;
-    msgCount++;
-  });
-
-  el('msg-count').textContent = `${msgCount} message${msgCount === 1 ? '' : 's'}`;
+  for (const m of msgs) {
+    m.content_text = b64toText(m.content);
+    allMessages.push(m);
+    byBlock.set(m.block_id, m);
+  }
+  rebuildConversations();
+  renderSidebar();
+  if (currentView) rerenderCurrentView();
 }
 
-// ── compose mode ───────────────────────────────────────────────────────
-function setMode(mode) {
-  composeMode = mode;
-  el('compose-direct').classList.toggle('hidden', mode !== 'direct');
-  el('compose-channel').classList.toggle('hidden', mode !== 'channel');
-  el('mode-direct').style.background  = mode === 'direct'  ? 'var(--accent)' : '';
-  el('mode-direct').style.color       = mode === 'direct'  ? '#fff' : '';
-  el('mode-channel').style.background = mode === 'channel' ? 'var(--accent)' : '';
-  el('mode-channel').style.color      = mode === 'channel' ? '#fff' : '';
+function rebuildConversations() {
+  const chMap   = new Map();
+  const dirMap  = new Map();
+  const unknown = [];
+
+  // When acting as a specific identity, hide direct messages sent by other
+  // local identities — they're not relevant to the current persona.
+  const otherSignKeys = activeIdentity
+    ? new Set(identities.filter(id => id.name !== activeIdentity.name).map(id => id.signing_public_key))
+    : new Set();
+
+  for (const m of allMessages) {
+    if (m.channel) {
+      if (!chMap.has(m.channel)) chMap.set(m.channel, []);
+      chMap.get(m.channel).push(m);
+    } else {
+      if (otherSignKeys.has(m.sender_pub)) continue;
+      const name = resolveSender(m.sender_pub);
+      const key  = name === null ? '__unknown__' : (name || m.sender_pub || '__anon__');
+      if (name === null) {
+        unknown.push(m);
+      } else {
+        if (!dirMap.has(key)) dirMap.set(key, {name: name || m.sender_pub?.slice(0,8) + '…', pub: m.sender_pub, messages: []});
+        dirMap.get(key).messages.push(m);
+      }
+    }
+  }
+
+  conversations = [];
+
+  for (const [name, msgs] of chMap) {
+    conversations.push({kind: 'channel', name, messages: msgs});
+  }
+
+  for (const [, info] of dirMap) {
+    conversations.push({kind: 'direct', name: info.name, pub: info.pub, messages: info.messages});
+  }
+
+  if (unknown.length) {
+    conversations.push({kind: 'unknown', name: 'Unknown senders', messages: unknown});
+  }
 }
 
-// ── compose ────────────────────────────────────────────────────────────
-function renderSenderDropdown() {
-  const sel = el('sender-identity');
-  const prev = sel.value;
-  while (sel.options.length > 1) sel.remove(1);
-  currentIdentities.forEach(id => {
-    const opt = new Option(id.name, id.name);
-    sel.appendChild(opt);
-  });
-  sel.value = prev || '';
+// Returns display name for a sender_pub (base64 Ed25519):
+//   known identity name → string
+//   unknown pub         → truncated base64 string
+//   anonymous (empty)   → '' (empty string, show nothing)
+//   unmatchable         → null (pool into unknown)
+function resolveSender(senderPub) {
+  if (!senderPub) return '';  // anonymous
+  for (const id of identities) {
+    if (id.signing_public_key === senderPub) return id.name;
+  }
+  return null; // unknown pub — goes to unknown pool
 }
 
+function resolveSenderDisplay(senderPub) {
+  if (!senderPub) return null;
+  for (const id of identities) {
+    if (id.signing_public_key === senderPub) return id.name;
+  }
+  return senderPub.slice(0, 8) + '…';
+}
+
+// ── topological sort (Kahn's) ──────────────────────────────────────────────
+function topoSort(msgs) {
+  if (!msgs.length) return [];
+
+  const ids  = new Set(msgs.map(m => m.block_id));
+  const pred = m => m.thread_refs?.[0] && m.thread_refs[0] !== '0'.repeat(64) ? m.thread_refs[0] : null;
+
+  // in-degree counts only edges within this conversation
+  const inDeg = new Map(msgs.map(m => [m.block_id, 0]));
+  const succs = new Map(msgs.map(m => [m.block_id, []]));
+
+  for (const m of msgs) {
+    const p = pred(m);
+    if (p && ids.has(p)) {
+      inDeg.set(m.block_id, inDeg.get(m.block_id) + 1);
+      succs.get(p).push(m.block_id);
+    }
+  }
+
+  const byId = new Map(msgs.map(m => [m.block_id, m]));
+  const queue = msgs
+    .filter(m => inDeg.get(m.block_id) === 0)
+    .sort(byReceivedAt);
+
+  const sorted = [];
+  while (queue.length) {
+    const m = queue.shift();
+    sorted.push(m);
+    for (const sid of succs.get(m.block_id)) {
+      const d = inDeg.get(sid) - 1;
+      inDeg.set(sid, d);
+      if (d === 0) {
+        queue.push(byId.get(sid));
+        queue.sort(byReceivedAt);
+      }
+    }
+  }
+
+  // Append any cycle/orphan survivors
+  const seen = new Set(sorted.map(m => m.block_id));
+  msgs.filter(m => !seen.has(m.block_id)).sort(byReceivedAt).forEach(m => sorted.push(m));
+  return sorted;
+}
+
+function byReceivedAt(a, b) {
+  return new Date(a.received_at) - new Date(b.received_at);
+}
+
+// Returns the causal head block_id (last in sorted order) for a conversation
+function causalHead(msgs) {
+  const sorted = topoSort(msgs);
+  return sorted.length ? sorted[sorted.length - 1].block_id : null;
+}
+
+// ── sidebar ────────────────────────────────────────────────────────────────
+function renderSidebar() {
+  const chContainer  = el('sb-channels');
+  const dirContainer = el('sb-directs');
+  chContainer.innerHTML  = '';
+  dirContainer.innerHTML = '';
+
+  const chConvs  = conversations.filter(c => c.kind === 'channel');
+  const dirConvs = conversations.filter(c => c.kind !== 'channel');
+
+  if (!chConvs.length) {
+    chContainer.innerHTML = '<div style="padding:6px 14px;font-size:11px;color:var(--muted)">No channels joined</div>';
+  }
+  for (const conv of chConvs) {
+    chContainer.appendChild(makeSbItem(conv));
+  }
+
+  if (!dirConvs.length) {
+    dirContainer.innerHTML = '<div style="padding:6px 14px;font-size:11px;color:var(--muted)">No messages yet</div>';
+  }
+  for (const conv of dirConvs) {
+    dirContainer.appendChild(makeSbItem(conv));
+  }
+}
+
+function makeSbItem(conv) {
+  const div = document.createElement('div');
+  div.className = 'sb-item';
+  const isActive = currentView && currentView.kind === conv.kind && currentView.name === conv.name;
+  if (isActive) div.classList.add('active');
+
+  const prefix = conv.kind === 'channel' ? '<span class="sb-hash">#</span> ' : '';
+  div.innerHTML = `${prefix}<span class="sb-name">${esc(conv.name)}</span>`;
+
+  div.addEventListener('click', () => openConversation(conv));
+  return div;
+}
+
+// ── conversation view ──────────────────────────────────────────────────────
+function openConversation(conv) {
+  currentView = conv;
+  closeSidebar();
+
+  el('panel-view').classList.add('hidden');
+  el('conv-view').classList.remove('hidden');
+
+  el('conv-title').textContent = conv.kind === 'channel' ? '#' + conv.name : conv.name;
+  el('conv-sub').textContent = conv.kind === 'channel' ? 'channel' : conv.kind === 'unknown' ? 'unknown senders' : 'direct';
+
+  renderMessages(conv);
+  renderCompose(conv);
+  renderSidebar(); // refresh active state
+}
+
+function rerenderCurrentView() {
+  if (!currentView) return;
+  if (currentView.kind === 'panel' || currentView.kind === 'new') return;
+  // Find updated conv
+  const conv = conversations.find(c => c.kind === currentView.kind && c.name === currentView.name);
+  if (conv) {
+    currentView = conv;
+    renderMessages(conv);
+    updateComposeHead(conv);
+  }
+}
+
+function renderMessages(conv) {
+  const container = el('conv-messages');
+  el('conv-empty').classList.add('hidden');
+  container.innerHTML = '';
+
+  if (!conv.messages.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.textContent = 'No messages yet.';
+    container.appendChild(empty);
+    return;
+  }
+
+  const sorted = topoSort(conv.messages);
+  const convIds = new Set(sorted.map(m => m.block_id));
+
+  // Build successor map for fork detection
+  const succMap = new Map(); // block_id → [child block_ids]
+  for (const m of sorted) {
+    const p = m.thread_refs?.[0];
+    if (p && p !== '0'.repeat(64)) {
+      if (!succMap.has(p)) succMap.set(p, []);
+      succMap.get(p).push(m.block_id);
+    }
+  }
+
+  const frag = document.createDocumentFragment();
+
+  for (let i = 0; i < sorted.length; i++) {
+    const m = sorted[i];
+    const directPred = m.thread_refs?.[0];
+    const hasRef = directPred && directPred !== '0'.repeat(64);
+    const predInConv = hasRef && convIds.has(directPred);
+    const predMissing = hasRef && !predInConv;
+
+    // Fork detection
+    const siblings = hasRef ? (succMap.get(directPred) || []) : [];
+    const isFork = siblings.length > 1;
+    const forkPos = isFork ? siblings.indexOf(m.block_id) : -1;
+
+    // Insert gap node for unknown predecessor
+    if (predMissing) {
+      frag.appendChild(makeGapNode(directPred));
+    }
+
+    frag.appendChild(makeMsgRow(m, {
+      hasPred: predInConv || predMissing,
+      hasSucc: succMap.has(m.block_id),
+      isFork,
+      forkFirst: forkPos === 0,
+      forkLast: forkPos === siblings.length - 1,
+    }));
+  }
+
+  container.appendChild(frag);
+  container.scrollTop = container.scrollHeight;
+}
+
+function makeGapNode(blockId) {
+  const div = document.createElement('div');
+  div.className = 'gap-node';
+  div.innerHTML = `
+    <div class="gap-connector-col">
+      <div class="gap-line-top"></div>
+      <div style="width:6px;height:6px;border-radius:50%;background:var(--border);flex-shrink:0"></div>
+      <div class="gap-line-bottom"></div>
+    </div>
+    <div class="gap-label">╌╌╌ gap — ${blockId.slice(0,12)}… missing</div>`;
+  return div;
+}
+
+function makeMsgRow(m, {hasPred, hasSucc, isFork, forkFirst, forkLast}) {
+  const div = document.createElement('div');
+  div.className = 'msg-row';
+
+  const bulletClass = isFork
+    ? (forkFirst ? 'bullet fork-first' : forkLast ? 'bullet fork-last' : 'bullet fork-mid')
+    : 'bullet';
+
+  const forkPrefix = isFork ? (forkFirst ? '├ ' : forkLast ? '└ ' : '├ ') : '';
+
+  div.innerHTML = `
+    <div class="connector-col">
+      ${hasPred ? '<div class="conn-top"></div>' : '<div class="conn-none"></div>'}
+      <div class="${bulletClass}">●</div>
+      ${hasSucc ? '<div class="conn-bottom"></div>' : '<div class="conn-none"></div>'}
+    </div>
+    <div class="msg-body-col">
+      <div class="msg-meta">
+        ${renderSenderMeta(m)}
+        ${renderTimeMeta(m)}
+        <span class="msg-block-id">${m.block_id.slice(0,12)}…</span>
+      </div>
+      <div class="msg-content ${m.msg_type === 1 ? 'binary' : m.msg_type === 2 ? 'system' : ''}">${renderContent(m)}</div>
+    </div>`;
+
+  return div;
+}
+
+function renderSenderMeta(m) {
+  if (!m.sender_pub) return '<span class="msg-sender anon">anon</span>';
+  const name = resolveSenderDisplay(m.sender_pub);
+  return `<span class="msg-sender">${esc(name)}</span>`;
+}
+
+function renderTimeMeta(m) {
+  const ref = m.sent_at || m.received_at;
+  const sentD = m.sent_at ? new Date(m.sent_at) : null;
+  const recvD = new Date(m.received_at);
+  const delayed = sentD && (recvD - sentD) > 5 * 60 * 1000;
+
+  if (delayed) {
+    return `<span class="msg-time delayed" title="Sneakernet delay">sent ${fmtTime(m.sent_at)} · recv ${fmtTime(m.received_at)}</span>`;
+  }
+  return `<span class="msg-time">${fmtTime(ref)}</span>`;
+}
+
+function renderContent(m) {
+  if (m.msg_type === 1) return `[binary, ${b64byteLen(m.content)} bytes]`;
+  if (m.msg_type === 2) return esc(m.content_text);
+  return esc(m.content_text);
+}
+
+// ── compose ────────────────────────────────────────────────────────────────
+function renderCompose(conv) {
+  el('compose-area').classList.remove('hidden');
+  el('compose-extra').innerHTML = '';
+  el('compose-body').value = '';
+
+  if (conv.kind === 'channel') {
+    renderComposeChannel(conv);
+  } else {
+    renderComposeDirect(conv);
+  }
+}
+
+function renderComposeChannel(conv) {
+  const head = causalHead(conv.messages);
+  const asSuffix = activeIdentity ? ` · as <span class="ctx-val">${esc(activeIdentity.name)}</span>` : '';
+  el('compose-ctx').innerHTML = (head
+    ? `composing after: <span class="ctx-val">${head.slice(0,12)}…</span>`
+    : 'starting new thread in <span class="ctx-val">#' + esc(conv.name) + '</span>')
+    + asSuffix;
+  el('compose-extra').innerHTML = '';
+  el('send-btn').dataset.mode = 'channel';
+}
+
+function renderComposeDirect(conv) {
+  const recipKey = conv.pub || '';
+  const head = causalHead(conv.messages);
+  const asSuffix = activeIdentity ? ` · as <span class="ctx-val">${esc(activeIdentity.name)}</span>` : '';
+  el('compose-ctx').innerHTML = `replying to <span class="ctx-val">${esc(conv.name)}</span>`
+    + (head ? ` after <span class="ctx-val">${head.slice(0,12)}…</span>` : '')
+    + asSuffix;
+  el('compose-extra').innerHTML = '';
+  el('send-btn').dataset.mode = 'direct';
+  el('send-btn').dataset.recipKey = recipKey;
+}
+
+function updateComposeHead(conv) {
+  if (!currentView || currentView.kind !== conv.kind || currentView.name !== conv.name) return;
+  const head = causalHead(conv.messages);
+  if (!head) return;
+  const ctx = el('compose-ctx');
+  if (!ctx) return;
+  if (conv.kind === 'channel') {
+    const asSuffix = activeIdentity ? ` · as <span class="ctx-val">${esc(activeIdentity.name)}</span>` : '';
+    ctx.innerHTML = `composing after: <span class="ctx-val">${head.slice(0,12)}…</span>${asSuffix}`;
+  }
+}
+
+function openNewMsg() {
+  currentView = {kind: 'new'};
+  closeSidebar();
+
+  el('panel-view').classList.add('hidden');
+  el('conv-view').classList.remove('hidden');
+
+  el('conv-title').textContent = 'New Message';
+  el('conv-sub').textContent = '';
+  el('conv-messages').innerHTML = '';
+  el('conv-empty').classList.remove('hidden');
+  el('conv-empty').textContent = 'Your message will appear here after sending and scanning.';
+
+  const asSuffix = activeIdentity ? `as ${activeIdentity.name}` : '';
+  el('compose-ctx').textContent = asSuffix;
+  el('compose-extra').innerHTML = `
+    <div class="compose-row">
+      <input id="new-recipient" placeholder="Recipient encryption key (base64 X25519)" style="font-family:var(--mono);font-size:11px">
+    </div>`;
+  el('compose-area').classList.remove('hidden');
+  el('compose-body').value = '';
+  el('send-btn').dataset.mode = 'new';
+  renderSidebar();
+}
+
+// ── send ───────────────────────────────────────────────────────────────────
 async function send() {
-  const body = el('msg-body').value;
+  const body = el('compose-body').value.trim();
   if (!body) { toast('Enter a message.'); return; }
 
+  const mode = el('send-btn').dataset.mode;
   const btn = el('send-btn');
   btn.disabled = true;
+
   try {
     let r;
-    if (composeMode === 'direct') {
-      const recipientKey = el('recipient').value.trim();
-      if (!recipientKey) { toast('Fill in recipient key.'); return; }
-      const payload = {recipient_public_key: recipientKey, message: body};
-      const senderIdentity = el('sender-identity').value;
-      if (senderIdentity) payload.sender_identity = senderIdentity;
+    if (mode === 'channel') {
+      const conv = currentView;
+      const head = causalHead(conv.messages);
+      const payload = {channel_name: conv.name, message: body};
+      if (activeIdentity) payload.sender_identity = activeIdentity.name;
+      if (head) payload.reply_to_block_id = head;
+      r = await api('POST', '/api/send-channel', payload);
+
+    } else if (mode === 'direct') {
+      const conv = currentView;
+      const head = causalHead(conv.messages);
+      const recipKey = btn.dataset.recipKey;
+      if (!recipKey) { toast('No recipient key available.', true); return; }
+      const payload = {recipient_public_key: recipKey, message: body};
+      if (activeIdentity) payload.sender_identity = activeIdentity.name;
+      if (head) payload.reply_to_block_id = head;
       r = await api('POST', '/api/send', payload);
-    } else {
-      const channelName = el('channel-select').value;
-      if (!channelName) { toast('Select a channel.'); return; }
-      r = await api('POST', '/api/send-channel', {channel_name: channelName, message: body});
+
+    } else { // new
+      const recipKey = el('new-recipient')?.value.trim();
+      if (!recipKey) { toast('Enter recipient key.', true); return; }
+      const payload = {recipient_public_key: recipKey, message: body};
+      if (activeIdentity) payload.sender_identity = activeIdentity.name;
+      r = await api('POST', '/api/send', payload);
     }
+
     if (!r) return;
     if (!r.ok) { const d = await r.json(); toast('Send failed: ' + d.error, true); return; }
-    el('msg-body').value = '';
+    el('compose-body').value = '';
     toast('Message sent.');
-    status('Message stored in blockstore.');
+    setStatus('Message stored in blockstore.');
   } finally {
     btn.disabled = false;
   }
 }
 
-// ── identities ─────────────────────────────────────────────────────────
+// ── identities & channels panel ────────────────────────────────────────────
+function openPanel() {
+  currentView = {kind: 'panel'};
+  closeSidebar();
+  el('conv-view').classList.add('hidden');
+  el('panel-view').classList.remove('hidden');
+  el('conv-title').textContent = 'Identities & Channels';
+  el('conv-sub').textContent = '';
+  renderIdentities();
+  renderChannelList();
+  renderSidebar();
+}
+
 async function loadIdentities() {
   const r = await api('GET', '/api/identities');
   if (!r || !r.ok) return;
-  currentIdentities = await r.json() || [];
+  identities = await r.json() || [];
+  populateActiveIdentityDropdown();
+}
+
+function populateActiveIdentityDropdown() {
+  const sel = el('active-identity');
+  if (!sel) return;
+  const prev = sel.value;
+  while (sel.options.length > 1) sel.remove(1);
+  for (const id of identities) {
+    sel.appendChild(new Option(id.name, id.name));
+  }
+  if (prev && identities.find(id => id.name === prev)) {
+    sel.value = prev;
+  } else {
+    sel.value = '';
+    activeIdentity = null;
+  }
+}
+
+function renderIdentities() {
   const list = el('id-list');
   list.innerHTML = '';
-  if (!currentIdentities.length) {
-    list.innerHTML = '<div class="empty" style="padding:16px 0">No identities yet — add one to receive messages.</div>';
+  if (!identities.length) {
+    list.innerHTML = '<div style="font-size:12px;color:var(--muted)">No identities yet — add one to receive and sign messages.</div>';
     return;
   }
-  currentIdentities.forEach(id => {
+  for (const id of identities) {
     const div = document.createElement('div');
     div.className = 'card';
-    div.innerHTML =
-      `<div class="card-info">
-         <div class="card-name">${esc(id.name)}</div>
-         <div class="card-key" title="Click to copy public key">${esc(id.public_key)}</div>
-       </div>
-       <div class="card-actions">
-         <button class="sm ghost" title="Copy public key">Copy</button>
-         <button class="sm danger" title="Delete identity">Delete</button>
-       </div>`;
-    div.querySelector('.card-key').addEventListener('click', () => copyKey(id.public_key));
-    div.querySelector('.sm.ghost').addEventListener('click', () => copyKey(id.public_key));
+    div.innerHTML = `
+      <div class="card-header">
+        <span class="card-name">${esc(id.name)}</span>
+        <button class="sm danger" data-name="${esc(id.name)}">Delete</button>
+      </div>
+      <div class="card-key-row">
+        <div class="card-key-info">
+          <div class="card-key-label">Encryption key (X25519) — share so others can send you messages</div>
+          <div class="card-key">${esc(id.public_key)}</div>
+        </div>
+        <button class="sm ghost" data-copy="${esc(id.public_key)}" title="Copy encryption key">Copy</button>
+      </div>
+      <div class="card-key-row">
+        <div class="card-key-info">
+          <div class="card-key-label">Signing key (Ed25519) — share so others can verify you sent it</div>
+          <div class="card-key">${esc(id.signing_public_key)}</div>
+        </div>
+        <button class="sm ghost" data-copy="${esc(id.signing_public_key)}" title="Copy signing key">Copy</button>
+      </div>`;
     div.querySelector('.sm.danger').addEventListener('click', () => deleteIdentity(id.name));
+    div.querySelectorAll('[data-copy]').forEach(btn => {
+      btn.addEventListener('click', () => copyKey(btn.dataset.copy));
+    });
     list.appendChild(div);
-  });
+  }
 }
 
 async function addIdentity() {
@@ -607,6 +1231,9 @@ async function addIdentity() {
   if (!r.ok)            { toast('Failed to add identity.', true); return; }
   el('new-id-name').value = '';
   await loadIdentities();
+  renderIdentities();
+  rebuildConversations();
+  renderSidebar();
   toast(`Identity "${name}" created.`);
 }
 
@@ -615,42 +1242,37 @@ async function deleteIdentity(name) {
   const r = await api('DELETE', `/api/identities/${encodeURIComponent(name)}`);
   if (!r || !r.ok) { toast('Failed to delete identity.', true); return; }
   await loadIdentities();
+  renderIdentities();
+  rebuildConversations();
+  renderSidebar();
   toast(`Identity "${name}" deleted.`);
 }
 
-// ── channels ───────────────────────────────────────────────────────────
 async function loadChannels() {
   const r = await api('GET', '/api/channels');
   if (!r || !r.ok) return;
-  const chs = await r.json();
+  channels = await r.json() || [];
+}
+
+function renderChannelList() {
   const list = el('ch-list');
   list.innerHTML = '';
-
-  const sel = el('channel-select');
-  const prev = sel.value;
-  sel.innerHTML = '<option value="">— select channel —</option>';
-
-  if (!chs?.length) {
-    list.innerHTML = '<div class="empty" style="padding:16px 0">No channels yet — join one to send and receive.</div>';
+  if (!channels.length) {
+    list.innerHTML = '<div style="font-size:12px;color:var(--muted)">No channels joined yet.</div>';
     return;
   }
-  chs.forEach(ch => {
+  for (const ch of channels) {
     const div = document.createElement('div');
     div.className = 'card';
-    div.innerHTML =
-      `<div class="card-info">
-         <div class="card-name"><span class="ch-badge" style="margin-right:4px">#</span>${esc(ch.name)}</div>
-       </div>
-       <div class="card-actions">
-         <button class="sm ghost">Leave</button>
-       </div>`;
+    div.style.flexDirection = 'row';
+    div.style.alignItems = 'center';
+    div.innerHTML = `
+      <span class="ch-badge">#</span>
+      <span style="flex:1;font-size:13px;font-weight:500;margin-left:6px">${esc(ch.name)}</span>
+      <button class="sm ghost" data-name="${esc(ch.name)}">Leave</button>`;
     div.querySelector('.sm.ghost').addEventListener('click', () => removeChannel(ch.name));
     list.appendChild(div);
-
-    const opt = new Option('#' + ch.name, ch.name);
-    sel.appendChild(opt);
-  });
-  if (prev) sel.value = prev;
+  }
 }
 
 async function addChannel() {
@@ -664,6 +1286,8 @@ async function addChannel() {
   el('new-ch-name').value = '';
   el('new-ch-pass').value = '';
   await loadChannels();
+  renderChannelList();
+  renderSidebar();
   toast(`Joined channel "${name}".`);
 }
 
@@ -671,15 +1295,17 @@ async function removeChannel(name) {
   const r = await api('DELETE', `/api/channels/${encodeURIComponent(name)}`);
   if (!r || !r.ok) { toast('Failed to leave channel.', true); return; }
   await loadChannels();
+  renderChannelList();
+  renderSidebar();
   toast(`Left channel "${name}".`);
 }
 
 async function copyKey(key) {
   await navigator.clipboard.writeText(key);
-  toast('Public key copied to clipboard.');
+  toast('Copied to clipboard.');
 }
 
-// ── view transitions ───────────────────────────────────────────────────
+// ── view transitions ───────────────────────────────────────────────────────
 function showLock() {
   el('lock-screen').classList.remove('hidden');
   el('app').classList.add('hidden');
@@ -689,17 +1315,27 @@ function showLock() {
 async function showApp() {
   el('lock-screen').classList.add('hidden');
   el('app').classList.remove('hidden');
-  setMode('direct');
   await Promise.all([loadMessages(), loadIdentities(), loadChannels()]);
-  status('Ready');
+  rebuildConversations();
+  renderSidebar();
+  setStatus('Ready');
 }
 
-// ── helpers ────────────────────────────────────────────────────────────
+function openSidebar() {
+  el('sidebar').classList.add('open');
+  el('sidebar-overlay').classList.add('show');
+}
+function closeSidebar() {
+  el('sidebar').classList.remove('open');
+  el('sidebar-overlay').classList.remove('show');
+}
+
+// ── helpers ────────────────────────────────────────────────────────────────
 const el = id => document.getElementById(id);
 
 function lockErr(msg) { el('lock-err').textContent = msg; }
 
-function status(msg, cls = '') {
+function setStatus(msg, cls = '') {
   const s = el('statusbar');
   s.textContent = msg;
   s.className = cls;
@@ -717,11 +1353,12 @@ function toast(msg, err = false) {
 
 function fmtTime(iso) {
   const d = new Date(iso);
-  return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+  return d.toLocaleDateString([], {month:'short', day:'numeric'})
+    + ' ' + d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
 }
 
 function esc(s) {
-  return String(s)
+  return String(s ?? '')
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
     .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
@@ -733,6 +1370,11 @@ function b64toText(b64) {
   } catch {
     return '[binary content]';
   }
+}
+
+function b64byteLen(b64) {
+  const s = b64.replace(/=+$/, '');
+  return Math.floor(s.length * 3 / 4);
 }
 </script>
 </body>
