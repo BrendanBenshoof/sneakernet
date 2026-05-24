@@ -52,11 +52,17 @@ func (c *Client) Scrape(ctx context.Context) (int, error) {
 			if err != nil {
 				continue // block expired between list and get
 			}
-			content, ok := c.tryAllKeys(payload)
+			mp, ok := c.tryAllKeys(payload)
 			if !ok {
 				continue
 			}
-			inserted, err := c.messages.SaveMessage(ref.ID, content)
+
+			var inserted bool
+			if mp.IsFragment() {
+				inserted, err = c.messages.SaveFragment(ref.ID, mp)
+			} else {
+				inserted, err = c.messages.SaveMessage(ref.ID, mp)
+			}
 			if err != nil {
 				return found, err
 			}
@@ -75,12 +81,12 @@ func (c *Client) Scrape(ctx context.Context) (int, error) {
 }
 
 // tryAllKeys attempts decryption with each held private key.
-// Returns the plaintext and true on the first success.
-func (c *Client) tryAllKeys(payload blockstore.Payload) ([]byte, bool) {
+// Returns the MessagePayload and true on the first success.
+func (c *Client) tryAllKeys(payload blockstore.Payload) (MessagePayload, bool) {
 	for _, key := range c.privKeys {
-		if content, err := tryDecrypt(key, payload); err == nil {
-			return content, true
+		if mp, err := tryDecrypt(key, payload); err == nil {
+			return mp, true
 		}
 	}
-	return nil, false
+	return MessagePayload{}, false
 }

@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	PayloadSize = 2048
+	PayloadSize = 4096
 	StampSize   = 4
 	IDSize      = 32
 
