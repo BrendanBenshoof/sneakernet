@@ -173,6 +173,51 @@ func (s *Server) handleRemoveIdentity(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+type msgResp struct {
+	ID         int64    `json:"id"`
+	BlockID    string   `json:"block_id"`
+	SenderPub  string   `json:"sender_pub"`
+	ThreadRefs []string `json:"thread_refs"`
+	SentAt     string   `json:"sent_at,omitempty"`
+	MsgType    uint8    `json:"msg_type"`
+	Content    string   `json:"content"`
+	Channel    string   `json:"channel,omitempty"`
+	ReceivedAt string   `json:"received_at"`
+}
+
+func buildMsgResp(m client.Message) msgResp {
+	resp := msgResp{
+		ID:         m.ID,
+		BlockID:    hex.EncodeToString(m.BlockID[:]),
+		Content:    base64.StdEncoding.EncodeToString(m.Content),
+		Channel:    m.Channel,
+		ReceivedAt: m.ReceivedAt.UTC().Format(time.RFC3339),
+		MsgType:    m.MsgType,
+	}
+	if m.SenderPub != ([32]byte{}) {
+		resp.SenderPub = base64.StdEncoding.EncodeToString(m.SenderPub[:])
+	}
+	if !m.SentAt.IsZero() {
+		resp.SentAt = m.SentAt.UTC().Format(time.RFC3339)
+	}
+	var refs []string
+	last := -1
+	var zero [32]byte
+	for j, ref := range m.ThreadRefs {
+		if ref != zero {
+			last = j
+		}
+	}
+	for j := 0; j <= last; j++ {
+		refs = append(refs, hex.EncodeToString(m.ThreadRefs[j][:]))
+	}
+	if refs == nil {
+		refs = []string{}
+	}
+	resp.ThreadRefs = refs
+	return resp
+}
+
 // GET /api/messages?after_id=N
 // Returns messages with id > after_id (default 0).
 func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
@@ -184,52 +229,34 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	type msgResp struct {
-		ID         int64    `json:"id"`
-		BlockID    string   `json:"block_id"`
-		SenderPub  string   `json:"sender_pub"`
-		ThreadRefs []string `json:"thread_refs"`
-		SentAt     string   `json:"sent_at,omitempty"`
-		MsgType    uint8    `json:"msg_type"`
-		Content    string   `json:"content"`
-		Channel    string   `json:"channel,omitempty"`
-		ReceivedAt string   `json:"received_at"`
-	}
 	out := make([]msgResp, len(msgs))
 	for i, m := range msgs {
-		resp := msgResp{
-			ID:         m.ID,
-			BlockID:    hex.EncodeToString(m.BlockID[:]),
-			Content:    base64.StdEncoding.EncodeToString(m.Content),
-			Channel:    m.Channel,
-			ReceivedAt: m.ReceivedAt.UTC().Format(time.RFC3339),
-			MsgType:    m.MsgType,
-		}
-		if m.SenderPub != ([32]byte{}) {
-			resp.SenderPub = base64.StdEncoding.EncodeToString(m.SenderPub[:])
-		}
-		if !m.SentAt.IsZero() {
-			resp.SentAt = m.SentAt.UTC().Format(time.RFC3339)
-		}
-		// Build trimmed thread_refs: drop trailing all-zero entries.
-		var refs []string
-		last := -1
-		var zero [32]byte
-		for j, ref := range m.ThreadRefs {
-			if ref != zero {
-				last = j
-			}
-		}
-		for j := 0; j <= last; j++ {
-			refs = append(refs, hex.EncodeToString(m.ThreadRefs[j][:]))
-		}
-		if refs == nil {
-			refs = []string{}
-		}
-		resp.ThreadRefs = refs
-		out[i] = resp
+		out[i] = buildMsgResp(m)
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// GET /api/messages/{block_id}
+// Returns a single message by its block ID (hex).
+func (s *Server) handleGetMessage(w http.ResponseWriter, r *http.Request) {
+	blockIDBytes, err := hex.DecodeString(r.PathValue("block_id"))
+	if err != nil || len(blockIDBytes) != blockstore.IDSize {
+		writeError(w, http.StatusBadRequest, "invalid block_id")
+		return
+	}
+	var blockID blockstore.ID
+	copy(blockID[:], blockIDBytes)
+
+	m, found, err := s.msgs.GetMessage(blockID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to retrieve message")
+		return
+	}
+	if !found {
+		writeError(w, http.StatusNotFound, "message not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, buildMsgResp(m))
 }
 
 // POST /api/scrape
@@ -500,13 +527,22 @@ func (s *Server) handleRemoveChannel(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// POST /api/send-channel  {"channel_name":"...", "message":"..."}
+// POST /api/send-channel
+//
+//	{
+//	  "channel_name": "...",
+//	  "message": "...",
+//	  "sender_identity": "<name>",          // optional; omit = anonymous
+//	  "reply_to_block_id": "<hex block ID>" // optional; omit = new thread
+//	}
+//
 // Encrypts message with the named channel key and stores the resulting block.
-// The sender is anonymous — no identity information is embedded in the block.
 func (s *Server) handleSendChannel(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		ChannelName string `json:"channel_name"`
-		Message     string `json:"message"`
+		ChannelName    string `json:"channel_name"`
+		Message        string `json:"message"`
+		SenderIdentity string `json:"sender_identity"`
+		ReplyToBlockID string `json:"reply_to_block_id"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -517,6 +553,7 @@ func (s *Server) handleSendChannel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.mu.RLock()
+	ks := s.ks
 	chs := s.ks.ListChannels()
 	s.mu.RUnlock()
 
@@ -537,9 +574,48 @@ func (s *Server) handleSendChannel(w http.ResponseWriter, r *http.Request) {
 	mp := client.MessagePayload{
 		MsgType:   client.MsgTypeText,
 		FragTotal: 1,
+		Timestamp: time.Now().Unix(),
 		Content:   []byte(req.Message),
 	}
-	payload, err := client.EncryptChannel(channelKey, mp)
+
+	var signerID *client.Identity
+	if req.SenderIdentity != "" {
+		signerID = ks.GetIdentity(req.SenderIdentity)
+		if signerID == nil {
+			writeError(w, http.StatusBadRequest, "sender_identity not found")
+			return
+		}
+		pubKeyBytes := []byte(signerID.SignKey.Public().(ed25519.PublicKey))
+		copy(mp.SenderPub[:], pubKeyBytes)
+	}
+
+	if req.ReplyToBlockID != "" {
+		replyIDBytes, err := hex.DecodeString(req.ReplyToBlockID)
+		if err != nil || len(replyIDBytes) != blockstore.IDSize {
+			writeError(w, http.StatusBadRequest, "invalid reply_to_block_id")
+			return
+		}
+		var replyID blockstore.ID
+		copy(replyID[:], replyIDBytes)
+		if m, found, err := s.msgs.GetMessage(replyID); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to look up reply target")
+			return
+		} else if found {
+			mp.ThreadRefs = client.BuildThreadRefs(replyID, m.ThreadRefs)
+		} else {
+			mp.ThreadRefs[0] = replyID
+		}
+	}
+
+	var (
+		payload blockstore.Payload
+		err     error
+	)
+	if signerID != nil {
+		payload, err = client.EncryptChannelSigned(channelKey, mp, signerID.SignKey)
+	} else {
+		payload, err = client.EncryptChannel(channelKey, mp)
+	}
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
