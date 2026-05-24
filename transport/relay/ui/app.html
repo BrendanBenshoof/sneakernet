@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Sneakernet — Web Client</title>
+  <title>Sneakernet Relay — Browser Demo</title>
   <style>
     :root {
       --bg:           #0f1117;
@@ -218,7 +218,7 @@
 <body>
 
 <header>
-  <h1>Sneakernet</h1>
+  <h1>Sneakernet <span style="font-weight:400;color:var(--muted);font-size:12px;padding-left:6px">Relay — Browser Demo</span></h1>
   <nav class="tabs">
     <button class="tab-btn active" data-tab="inbox">Inbox</button>
     <button class="tab-btn" data-tab="compose">Compose</button>
@@ -238,7 +238,7 @@
         <button class="sm" id="scan-btn">Scan blocks</button>
       </div>
       <p style="font-size:12px;color:var(--muted)">
-        Messages are decrypted in your browser and held in memory only — they clear on reload.
+        This is a public relay browser demo. Crypto runs entirely in your browser — keys live in IndexedDB, messages are decrypted client-side and held in memory only (they clear on reload). For persistent storage, use the local node client.
       </p>
     </div>
     <div id="msg-list">
@@ -269,7 +269,7 @@
       <h2>Your keys</h2>
       <p style="font-size:12px;color:var(--muted)">
         Keys are generated in your browser and stored in IndexedDB. Share your public key so
-        others can send you messages.
+        others can send you messages. These keys are separate from any local node keystore — they exist only in this browser.
       </p>
       <div id="key-list"></div>
       <div class="row">

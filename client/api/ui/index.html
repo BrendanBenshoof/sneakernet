@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Sneakernet</title>
+  <title>Sneakernet — Local Node</title>
   <style>
     :root {
       --bg:           #0f1117;
@@ -32,12 +32,12 @@
     .hidden { display: none !important; }
 
     /* ── inputs & buttons ──────────────────────────────── */
-    input, textarea, button {
+    input, textarea, select, button {
       font-family: inherit;
       font-size: 14px;
       border-radius: 6px;
     }
-    input, textarea {
+    input, textarea, select {
       background: var(--bg);
       border: 1px solid var(--border);
       color: var(--text);
@@ -45,7 +45,8 @@
       width: 100%;
       transition: border-color .15s;
     }
-    input:focus, textarea:focus { outline: none; border-color: var(--accent); }
+    input:focus, textarea:focus, select:focus { outline: none; border-color: var(--accent); }
+    select { cursor: pointer; }
     textarea { resize: vertical; min-height: 90px; line-height: 1.5; }
 
     button {
@@ -69,6 +70,9 @@
     button.ghost:hover { background: var(--surface); }
 
     button.sm { padding: 5px 10px; font-size: 12px; }
+
+    button.danger { background: var(--danger); }
+    button.danger:hover { background: #c04040; }
 
     /* ── lock screen ───────────────────────────────────── */
     #lock-screen {
@@ -98,85 +102,54 @@
     header {
       background: var(--surface);
       border-bottom: 1px solid var(--border);
-      padding: 10px 16px;
+      padding: 0 16px;
       display: flex;
-      align-items: center;
-      gap: 8px;
+      align-items: stretch;
+      gap: 0;
     }
-    header h1 { flex: 1; font-size: 15px; }
+    header h1 { font-size: 15px; padding: 12px 14px 12px 0; white-space: nowrap; }
 
-    .app-body {
-      flex: 1;
-      display: grid;
-      grid-template-columns: 1fr 340px;
-      overflow: hidden;
-    }
-
-    /* ── inbox panel ───────────────────────────────────── */
-    #inbox-panel {
-      display: flex;
-      flex-direction: column;
-      border-right: 1px solid var(--border);
-      overflow: hidden;
-    }
-    .panel-hdr {
-      padding: 10px 16px;
-      border-bottom: 1px solid var(--border);
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      flex-shrink: 0;
-    }
-    .panel-hdr h2 {
-      flex: 1;
-      font-size: 11px;
-      text-transform: uppercase;
-      letter-spacing: .06em;
+    /* ── tabs ──────────────────────────────────────────── */
+    nav.tabs { display: flex; align-items: stretch; }
+    .tab-btn {
+      background: transparent;
+      border: none;
+      border-bottom: 2px solid transparent;
       color: var(--muted);
-    }
-    #msg-list { flex: 1; overflow-y: auto; }
-
-    .msg-item {
-      padding: 12px 16px;
-      border-bottom: 1px solid var(--border);
-    }
-    .msg-item:hover { background: var(--surface); }
-    .msg-meta {
-      font-family: var(--mono);
-      font-size: 11px;
-      color: var(--muted);
-      margin-bottom: 5px;
-    }
-    .msg-body { line-height: 1.55; word-break: break-word; white-space: pre-wrap; }
-
-    .empty {
-      padding: 48px 16px;
-      text-align: center;
-      color: var(--muted);
+      cursor: pointer;
       font-size: 13px;
+      font-weight: 500;
+      padding: 12px 14px 10px;
+      transition: color .15s, border-color .15s;
+      border-radius: 0;
     }
+    .tab-btn:hover { color: var(--text); background: transparent; }
+    .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
 
-    /* ── right column ──────────────────────────────────── */
-    #right-col {
-      display: flex;
-      flex-direction: column;
+    .header-actions { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+
+    /* ── content area ──────────────────────────────────── */
+    #content {
+      flex: 1;
       overflow-y: auto;
+      padding: 20px;
+      max-width: 760px;
+      width: 100%;
+      margin: 0 auto;
     }
 
+    /* ── section cards ─────────────────────────────────── */
     .section {
-      padding: 14px 16px;
-      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px;
+      margin-bottom: 14px;
       display: flex;
       flex-direction: column;
-      gap: 8px;
-      flex-shrink: 0;
+      gap: 10px;
     }
-    .section h2 {
-      font-size: 11px;
-      text-transform: uppercase;
-      letter-spacing: .06em;
-      color: var(--muted);
-    }
+    .section h2 { font-size: 15px; }
 
     /* ── channel badge ─────────────────────────────────── */
     .ch-badge {
@@ -192,15 +165,19 @@
       vertical-align: middle;
     }
 
-    /* ── identities ────────────────────────────────────── */
-    .id-item {
+    /* ── identity / channel cards ──────────────────────── */
+    .card {
       background: var(--bg);
       border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 8px 10px;
+      border-radius: 8px;
+      padding: 10px 12px;
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
     }
-    .id-name { font-size: 13px; font-weight: 500; margin-bottom: 3px; }
-    .id-key {
+    .card-info { flex: 1; min-width: 0; }
+    .card-name { font-size: 13px; font-weight: 500; margin-bottom: 3px; }
+    .card-key {
       font-family: var(--mono);
       font-size: 10px;
       color: var(--muted);
@@ -208,10 +185,28 @@
       cursor: pointer;
       line-height: 1.4;
     }
-    .id-key:hover { color: var(--accent); }
+    .card-key:hover { color: var(--accent); }
+    .card-actions { display: flex; gap: 6px; flex-shrink: 0; align-items: center; }
+
+    /* ── messages ──────────────────────────────────────── */
+    .msg-item { margin-bottom: 10px; }
+    .msg-meta {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--muted);
+      margin-bottom: 5px;
+    }
+    .msg-body { line-height: 1.55; word-break: break-word; white-space: pre-wrap; }
+
+    .empty {
+      padding: 48px 16px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 13px;
+    }
 
     .row { display: flex; gap: 6px; }
-    .row input { flex: 1; }
+    .row input, .row select { flex: 1; }
 
     /* ── status bar ────────────────────────────────────── */
     #statusbar {
@@ -243,18 +238,8 @@
     }
     #toast.show { opacity: 1; }
 
-    /* ── mobile ────────────────────────────────────────── */
-    @media (max-width: 600px) {
-      .app-body {
-        grid-template-columns: 1fr;
-        grid-template-rows: 1fr auto;
-        overflow-y: auto;
-      }
-      #inbox-panel {
-        border-right: none;
-        min-height: 40dvh;
-      }
-      #right-col { overflow-y: visible; }
+    @media (max-width: 500px) {
+      .tab-btn { padding: 10px 10px 8px; font-size: 12px; }
     }
   </style>
 </head>
@@ -264,11 +249,10 @@
 <div id="lock-screen">
   <div class="lock-card">
     <h1>Sneakernet</h1>
-    <p class="sub">Anonymous messaging</p>
-    <input type="password" id="pw" placeholder="Password"
-           onkeydown="if(event.key==='Enter')unlock()">
-    <button onclick="unlock()">Unlock</button>
-    <button class="ghost" onclick="createAndUnlock()">Create new keystore</button>
+    <p class="sub">Local Node — server-side crypto, persistent keystore</p>
+    <input type="password" id="pw" placeholder="Password">
+    <button id="unlock-btn">Unlock</button>
+    <button class="ghost" id="create-btn">Create new keystore</button>
     <p id="lock-err"></p>
   </div>
 </div>
@@ -277,74 +261,99 @@
 <div id="app" class="hidden">
 
   <header>
-    <h1>Sneakernet</h1>
-    <button class="ghost sm" id="scrape-btn" onclick="scrape()">Refresh inbox</button>
-    <button class="ghost sm" onclick="lock()">Lock</button>
+    <h1>Sneakernet <span style="font-weight:400;color:var(--muted);font-size:12px;padding-left:6px">Local Node</span></h1>
+    <nav class="tabs">
+      <button class="tab-btn active" data-tab="inbox">Inbox</button>
+      <button class="tab-btn" data-tab="compose">Compose</button>
+      <button class="tab-btn" data-tab="identities">Identities</button>
+      <button class="tab-btn" data-tab="channels">Channels</button>
+    </nav>
+    <div class="header-actions">
+      <button class="ghost sm" id="scrape-btn">Refresh</button>
+      <button class="ghost sm" id="lock-btn">Lock</button>
+    </div>
   </header>
 
-  <div class="app-body">
+  <div id="content">
 
-    <!-- inbox -->
-    <div id="inbox-panel">
-      <div class="panel-hdr">
-        <h2>Inbox</h2>
-        <span id="msg-count" style="font-size:11px;color:var(--muted)"></span>
+    <!-- ── Inbox tab ──────────────────────────────────── -->
+    <div id="tab-inbox">
+      <div class="section">
+        <div class="row" style="align-items:center">
+          <h2 style="flex:1;margin:0">Inbox</h2>
+          <span id="msg-count" style="font-size:11px;color:var(--muted)"></span>
+        </div>
+        <p style="font-size:12px;color:var(--muted)">
+          Messages are decrypted server-side using your encrypted keystore. Click Refresh to scan new blocks.
+        </p>
       </div>
       <div id="msg-list">
-        <div class="empty">No messages yet — hit Refresh to scan new blocks.</div>
+        <div class="empty">No messages yet — click Refresh to scan new blocks.</div>
       </div>
     </div>
 
-    <!-- right column -->
-    <div id="right-col">
-
-      <!-- compose -->
+    <!-- ── Compose tab ────────────────────────────────── -->
+    <div id="tab-compose" class="hidden">
       <div class="section">
         <h2>Compose</h2>
         <div class="row" style="gap:0;border:1px solid var(--border);border-radius:6px;overflow:hidden">
           <button id="mode-direct" class="ghost sm" style="flex:1;border-radius:0;border:none;border-right:1px solid var(--border)"
-                  onclick="setMode('direct')">Direct</button>
+                  data-mode="direct">Direct</button>
           <button id="mode-channel" class="ghost sm" style="flex:1;border-radius:0;border:none"
-                  onclick="setMode('channel')">Channel</button>
+                  data-mode="channel">Channel</button>
         </div>
         <div id="compose-direct">
+          <div style="margin-bottom:8px">
+            <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Send as (optional)</label>
+            <select id="sender-identity">
+              <option value="">— anonymous —</option>
+            </select>
+          </div>
           <input id="recipient" placeholder="Recipient public key (base64)"
                  style="font-family:var(--mono);font-size:11px">
         </div>
         <div id="compose-channel" class="hidden">
-          <select id="channel-select" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 10px;width:100%;border-radius:6px;font-size:14px">
+          <select id="channel-select">
             <option value="">— select channel —</option>
           </select>
         </div>
         <textarea id="msg-body" placeholder="Message…"></textarea>
-        <button id="send-btn" onclick="send()">Send</button>
+        <button id="send-btn">Encrypt &amp; Send</button>
       </div>
+    </div>
 
-      <!-- identities -->
+    <!-- ── Identities tab ─────────────────────────────── -->
+    <div id="tab-identities" class="hidden">
       <div class="section">
         <h2>Your identities</h2>
+        <p style="font-size:12px;color:var(--muted)">
+          Stored in the server-side encrypted keystore, protected by your password.
+          Share a public key so others can send you messages.
+        </p>
         <div id="id-list"></div>
         <div class="row">
-          <input id="new-id-name" placeholder="Identity name"
-                 onkeydown="if(event.key==='Enter')addIdentity()">
-          <button class="sm" onclick="addIdentity()">Add</button>
+          <input id="new-id-name" placeholder="Identity name">
+          <button class="sm" id="add-id-btn">Add</button>
         </div>
       </div>
+    </div>
 
-      <!-- channels -->
-      <div class="section" style="flex:1">
+    <!-- ── Channels tab ───────────────────────────────── -->
+    <div id="tab-channels" class="hidden">
+      <div class="section">
         <h2>Channels</h2>
+        <p style="font-size:12px;color:var(--muted)">
+          Channels use a shared symmetric key derived from a passphrase. Anyone with the same passphrase can post and receive anonymously.
+        </p>
         <div id="ch-list"></div>
         <div class="row">
-          <input id="new-ch-name" placeholder="Channel name"
-                 onkeydown="if(event.key==='Enter')document.getElementById('new-ch-pass').focus()">
-          <input id="new-ch-pass" type="password" placeholder="Passphrase"
-                 onkeydown="if(event.key==='Enter')addChannel()">
-          <button class="sm" onclick="addChannel()">Join</button>
+          <input id="new-ch-name" placeholder="Channel name">
+          <input id="new-ch-pass" type="password" placeholder="Passphrase">
+          <button class="sm" id="join-ch-btn">Join</button>
         </div>
       </div>
-
     </div>
+
   </div>
 
   <div id="statusbar">Ready</div>
@@ -354,10 +363,11 @@
 
 <script>
 // ── state ──────────────────────────────────────────────────────────────
-let token    = sessionStorage.getItem('snk_token');
-let lastID   = 0;
-let msgCount = 0;
-let composeMode = 'direct'; // 'direct' | 'channel'
+let token       = sessionStorage.getItem('snk_token');
+let lastID      = 0;
+let msgCount    = 0;
+let composeMode = 'direct';
+let currentIdentities = [];
 
 // ── boot ───────────────────────────────────────────────────────────────
 (async () => {
@@ -369,6 +379,36 @@ let composeMode = 'direct'; // 'direct' | 'channel'
   sessionStorage.removeItem('snk_token');
   showLock();
 })();
+
+// ── event wiring ───────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  el('unlock-btn').addEventListener('click', unlock);
+  el('create-btn').addEventListener('click', createAndUnlock);
+  el('pw').addEventListener('keydown', e => { if (e.key === 'Enter') unlock(); });
+  el('scrape-btn').addEventListener('click', scrape);
+  el('lock-btn').addEventListener('click', lock);
+  el('send-btn').addEventListener('click', send);
+  el('add-id-btn').addEventListener('click', addIdentity);
+  el('new-id-name').addEventListener('keydown', e => { if (e.key === 'Enter') addIdentity(); });
+  el('join-ch-btn').addEventListener('click', addChannel);
+  el('new-ch-name').addEventListener('keydown', e => { if (e.key === 'Enter') el('new-ch-pass').focus(); });
+  el('new-ch-pass').addEventListener('keydown', e => { if (e.key === 'Enter') addChannel(); });
+
+  document.querySelectorAll('[data-mode]').forEach(btn => {
+    btn.addEventListener('click', () => setMode(btn.dataset.mode));
+  });
+
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const tab = btn.dataset.tab;
+      ['inbox', 'compose', 'identities', 'channels'].forEach(t =>
+        el('tab-' + t).classList.toggle('hidden', t !== tab));
+      if (tab === 'compose') renderSenderDropdown();
+    });
+  });
+});
 
 // ── api helper ─────────────────────────────────────────────────────────
 function hdrs(withBody = false) {
@@ -442,7 +482,7 @@ async function scrape() {
     if (found > 0) await loadMessages();
   } finally {
     btn.disabled = false;
-    btn.textContent = 'Refresh inbox';
+    btn.textContent = 'Refresh';
   }
 }
 
@@ -460,9 +500,12 @@ async function loadMessages() {
     const content = b64toText(m.content);
     const badge = m.channel ? `<span class="ch-badge">#${esc(m.channel)}</span>` : '';
     const div = document.createElement('div');
-    div.className = 'msg-item';
+    div.className = 'msg-item section';
+    div.style.gap = '6px';
+    let meta = `${badge}${esc(fmtTime(m.received_at))} &nbsp;·&nbsp; ${m.block_id.slice(0, 12)}…`;
+    if (m.sender_pub) meta += ` &nbsp;·&nbsp; from ${m.sender_pub.slice(0, 8)}…`;
     div.innerHTML =
-      `<div class="msg-meta">${badge}${esc(fmtTime(m.received_at))} &nbsp;·&nbsp; ${m.block_id.slice(0,12)}…</div>` +
+      `<div class="msg-meta">${meta}</div>` +
       `<div class="msg-body">${esc(content)}</div>`;
     list.appendChild(div);
     if (m.id > lastID) lastID = m.id;
@@ -472,7 +515,7 @@ async function loadMessages() {
   el('msg-count').textContent = `${msgCount} message${msgCount === 1 ? '' : 's'}`;
 }
 
-// ── compose mode ────────────────────────────────────────────────────────
+// ── compose mode ───────────────────────────────────────────────────────
 function setMode(mode) {
   composeMode = mode;
   el('compose-direct').classList.toggle('hidden', mode !== 'direct');
@@ -484,6 +527,17 @@ function setMode(mode) {
 }
 
 // ── compose ────────────────────────────────────────────────────────────
+function renderSenderDropdown() {
+  const sel = el('sender-identity');
+  const prev = sel.value;
+  while (sel.options.length > 1) sel.remove(1);
+  currentIdentities.forEach(id => {
+    const opt = new Option(id.name, id.name);
+    sel.appendChild(opt);
+  });
+  sel.value = prev || '';
+}
+
 async function send() {
   const body = el('msg-body').value;
   if (!body) { toast('Enter a message.'); return; }
@@ -495,7 +549,10 @@ async function send() {
     if (composeMode === 'direct') {
       const recipientKey = el('recipient').value.trim();
       if (!recipientKey) { toast('Fill in recipient key.'); return; }
-      r = await api('POST', '/api/send', {recipient_public_key: recipientKey, message: body});
+      const payload = {recipient_public_key: recipientKey, message: body};
+      const senderIdentity = el('sender-identity').value;
+      if (senderIdentity) payload.sender_identity = senderIdentity;
+      r = await api('POST', '/api/send', payload);
     } else {
       const channelName = el('channel-select').value;
       if (!channelName) { toast('Select a channel.'); return; }
@@ -515,19 +572,28 @@ async function send() {
 async function loadIdentities() {
   const r = await api('GET', '/api/identities');
   if (!r || !r.ok) return;
-  const ids = await r.json();
+  currentIdentities = await r.json() || [];
   const list = el('id-list');
   list.innerHTML = '';
-  if (!ids?.length) {
-    list.innerHTML = '<p style="color:var(--muted);font-size:12px;margin-bottom:4px">No identities yet — add one to receive messages.</p>';
+  if (!currentIdentities.length) {
+    list.innerHTML = '<div class="empty" style="padding:16px 0">No identities yet — add one to receive messages.</div>';
     return;
   }
-  ids.forEach(id => {
+  currentIdentities.forEach(id => {
     const div = document.createElement('div');
-    div.className = 'id-item';
+    div.className = 'card';
     div.innerHTML =
-      `<div class="id-name">${esc(id.name)}</div>` +
-      `<div class="id-key" title="Click to copy public key" onclick="copyKey('${esc(id.public_key)}')">${esc(id.public_key)}</div>`;
+      `<div class="card-info">
+         <div class="card-name">${esc(id.name)}</div>
+         <div class="card-key" title="Click to copy public key">${esc(id.public_key)}</div>
+       </div>
+       <div class="card-actions">
+         <button class="sm ghost" title="Copy public key">Copy</button>
+         <button class="sm danger" title="Delete identity">Delete</button>
+       </div>`;
+    div.querySelector('.card-key').addEventListener('click', () => copyKey(id.public_key));
+    div.querySelector('.sm.ghost').addEventListener('click', () => copyKey(id.public_key));
+    div.querySelector('.sm.danger').addEventListener('click', () => deleteIdentity(id.name));
     list.appendChild(div);
   });
 }
@@ -544,6 +610,14 @@ async function addIdentity() {
   toast(`Identity "${name}" created.`);
 }
 
+async function deleteIdentity(name) {
+  if (!confirm(`Delete identity "${name}"? This cannot be undone.`)) return;
+  const r = await api('DELETE', `/api/identities/${encodeURIComponent(name)}`);
+  if (!r || !r.ok) { toast('Failed to delete identity.', true); return; }
+  await loadIdentities();
+  toast(`Identity "${name}" deleted.`);
+}
+
 // ── channels ───────────────────────────────────────────────────────────
 async function loadChannels() {
   const r = await api('GET', '/api/channels');
@@ -552,30 +626,28 @@ async function loadChannels() {
   const list = el('ch-list');
   list.innerHTML = '';
 
-  // Rebuild channel-select dropdown.
   const sel = el('channel-select');
   const prev = sel.value;
   sel.innerHTML = '<option value="">— select channel —</option>';
 
   if (!chs?.length) {
-    list.innerHTML = '<p style="color:var(--muted);font-size:12px;margin-bottom:4px">No channels yet — join one to send and receive.</p>';
+    list.innerHTML = '<div class="empty" style="padding:16px 0">No channels yet — join one to send and receive.</div>';
     return;
   }
   chs.forEach(ch => {
     const div = document.createElement('div');
-    div.className = 'id-item';
-    div.style.display = 'flex';
-    div.style.alignItems = 'center';
-    div.style.gap = '8px';
+    div.className = 'card';
     div.innerHTML =
-      `<span class="ch-badge" style="margin:0">#</span>` +
-      `<span class="id-name" style="flex:1">${esc(ch.name)}</span>` +
-      `<button class="ghost sm" onclick="removeChannel('${esc(ch.name)}')">Leave</button>`;
+      `<div class="card-info">
+         <div class="card-name"><span class="ch-badge" style="margin-right:4px">#</span>${esc(ch.name)}</div>
+       </div>
+       <div class="card-actions">
+         <button class="sm ghost">Leave</button>
+       </div>`;
+    div.querySelector('.sm.ghost').addEventListener('click', () => removeChannel(ch.name));
     list.appendChild(div);
 
-    const opt = document.createElement('option');
-    opt.value = ch.name;
-    opt.textContent = '#' + ch.name;
+    const opt = new Option('#' + ch.name, ch.name);
     sel.appendChild(opt);
   });
   if (prev) sel.value = prev;
@@ -654,7 +726,6 @@ function esc(s) {
     .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
-// Decode base64 → UTF-8 text. Falls back gracefully for binary payloads.
 function b64toText(b64) {
   try {
     const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
