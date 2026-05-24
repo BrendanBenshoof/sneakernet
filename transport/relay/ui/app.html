@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Sneakernet — Web Client</title>
+  <title>Sneakernet Relay — Browser Demo</title>
   <style>
     :root {
       --bg:           #0f1117;
@@ -141,6 +141,7 @@
       border: 1px solid var(--border);
       border-radius: 8px;
       padding: 12px;
+      margin-bottom: 10px;
     }
     .msg-meta {
       font-family: var(--mono);
@@ -149,6 +150,20 @@
       margin-bottom: 6px;
     }
     .msg-body { line-height: 1.55; word-break: break-word; white-space: pre-wrap; }
+
+    /* ── channel badge ─────────────────────────────────── */
+    .ch-badge {
+      display: inline-block;
+      font-family: var(--mono);
+      font-size: 10px;
+      background: #2a3a5c;
+      color: var(--accent);
+      border: 1px solid #3a5080;
+      border-radius: 4px;
+      padding: 1px 6px;
+      margin-right: 6px;
+      vertical-align: middle;
+    }
 
     /* ── identity / contact cards ──────────────────────── */
     .card {
@@ -218,12 +233,13 @@
 <body>
 
 <header>
-  <h1>Sneakernet</h1>
+  <h1>Sneakernet <span style="font-weight:400;color:var(--muted);font-size:12px;padding-left:6px">Relay — Browser Demo</span></h1>
   <nav class="tabs">
     <button class="tab-btn active" data-tab="inbox">Inbox</button>
     <button class="tab-btn" data-tab="compose">Compose</button>
     <button class="tab-btn" data-tab="keys">Keys</button>
     <button class="tab-btn" data-tab="contacts">Contacts</button>
+    <button class="tab-btn" data-tab="channels">Channels</button>
   </nav>
 </header>
 
@@ -238,7 +254,7 @@
         <button class="sm" id="scan-btn">Scan blocks</button>
       </div>
       <p style="font-size:12px;color:var(--muted)">
-        Messages are decrypted in your browser and held in memory only — they clear on reload.
+        This is a public relay browser demo. Crypto runs entirely in your browser — keys live in IndexedDB, messages are decrypted client-side and held in memory only (they clear on reload). For persistent storage, use the local node client.
       </p>
     </div>
     <div id="msg-list">
@@ -250,14 +266,27 @@
   <div id="tab-compose" class="hidden">
     <div class="section">
       <h2>Compose</h2>
-      <div>
-        <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Recipient</label>
-        <select id="compose-contact">
-          <option value="">— paste a public key below —</option>
+      <div class="row" style="gap:0;border:1px solid var(--border);border-radius:6px;overflow:hidden">
+        <button id="mode-direct" class="ghost sm" style="flex:1;border-radius:0;border:none;border-right:1px solid var(--border)"
+                data-mode="direct">Direct</button>
+        <button id="mode-channel" class="ghost sm" style="flex:1;border-radius:0;border:none"
+                data-mode="channel">Channel</button>
+      </div>
+      <div id="compose-direct">
+        <div style="margin-bottom:8px">
+          <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Recipient</label>
+          <select id="compose-contact">
+            <option value="">— paste a public key below —</option>
+          </select>
+        </div>
+        <input id="compose-key" placeholder="Public key (base64) — or pick a contact above"
+               style="font-family:var(--mono);font-size:11px">
+      </div>
+      <div id="compose-channel" class="hidden">
+        <select id="channel-select">
+          <option value="">— select channel —</option>
         </select>
       </div>
-      <input id="compose-key" placeholder="Public key (base64) — or pick a contact above"
-             style="font-family:var(--mono);font-size:11px">
       <textarea id="compose-body" placeholder="Message…"></textarea>
       <button id="send-btn">Encrypt &amp; Send</button>
     </div>
@@ -269,11 +298,11 @@
       <h2>Your keys</h2>
       <p style="font-size:12px;color:var(--muted)">
         Keys are generated in your browser and stored in IndexedDB. Share your public key so
-        others can send you messages.
+        others can send you messages. These keys are separate from any local node keystore — they exist only in this browser.
       </p>
       <div id="key-list"></div>
       <div class="row">
-        <input id="new-key-name" placeholder="Identity name (e.g. "alice")">
+        <input id="new-key-name" placeholder="Identity name (e.g. &ldquo;alice&rdquo;)">
         <button class="sm" id="gen-btn">Generate</button>
       </div>
     </div>
@@ -291,6 +320,22 @@
                  style="font-family:var(--mono);font-size:11px;flex:2">
         </div>
         <button class="sm" style="align-self:flex-end" id="add-contact-btn">Add contact</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Channels ──────────────────────────────────────── -->
+  <div id="tab-channels" class="hidden">
+    <div class="section">
+      <h2>Channels</h2>
+      <p style="font-size:12px;color:var(--muted)">
+        Channels use a shared symmetric key derived from a passphrase. Anyone with the same passphrase can post and receive anonymously. Channel keys are stored in localStorage.
+      </p>
+      <div id="channel-list"></div>
+      <div class="row">
+        <input id="new-ch-name" placeholder="Channel name">
+        <input id="new-ch-pass" type="password" placeholder="Passphrase">
+        <button class="sm" id="join-ch-btn">Join</button>
       </div>
     </div>
   </div>
@@ -333,8 +378,6 @@ function _rounds(s) {
   }
 }
 
-// HChaCha20: derives subkey from key + first 16 bytes of nonce.
-// Output: first 4 and last 4 words of the round-output state (NOT added back).
 function _hchacha20(key, n16) {
   const s = new Uint32Array(16);
   s[0]=_CC[0]; s[1]=_CC[1]; s[2]=_CC[2]; s[3]=_CC[3];
@@ -347,7 +390,6 @@ function _hchacha20(key, n16) {
   return out;
 }
 
-// ChaCha20 block: state + rounds + add original state → 64 bytes.
 function _block(key, counter, n12) {
   const s = new Uint32Array(16);
   s[0]=_CC[0]; s[1]=_CC[1]; s[2]=_CC[2]; s[3]=_CC[3];
@@ -360,7 +402,6 @@ function _block(key, counter, n12) {
   return out;
 }
 
-// XOR data with ChaCha20 keystream starting at startCounter.
 function _xor(key, startCounter, n12, data) {
   const out = new Uint8Array(data.length);
   let pos=0, c=startCounter>>>0;
@@ -373,7 +414,6 @@ function _xor(key, startCounter, n12, data) {
   return out;
 }
 
-// Poly1305 MAC over concatenated AEAD input (empty AAD).
 const _P = (1n<<130n)-5n;
 const _CLAMP = 0x0ffffffc0ffffffc0ffffffc0fffffffn;
 
@@ -384,11 +424,9 @@ function _leBytes(b) {
 }
 
 function _poly1305(key32, ct) {
-  // Build AEAD mac input: ct || pad16(ct) || LE64(0) || LE64(len(ct))
   const pad = ct.length%16===0?0:16-(ct.length%16);
   const mac = new Uint8Array(ct.length+pad+16);
   mac.set(ct);
-  // LE64(aad_len=0) → already zero at [ct.length+pad..+8]
   let L=ct.length;
   const off=ct.length+pad+8;
   for (let i=0;i<8;i++){mac[off+i]=L&255;L>>>=8;}
@@ -406,12 +444,11 @@ function _poly1305(key32, ct) {
   return tag;
 }
 
-// XChaCha20-Poly1305 decrypt. Throws on MAC failure.
 function xchacha20Open(key, nonce24, sealed) {
   if (sealed.length < 16) throw new Error('too short');
   const subkey = _hchacha20(key, nonce24.slice(0,16));
   const n12 = new Uint8Array(12);
-  n12.set(nonce24.slice(16), 4); // bytes 0-3 stay 0; bytes 4-11 = nonce24[16:24]
+  n12.set(nonce24.slice(16), 4);
 
   const polyKey = _block(subkey, 0, n12).slice(0, 32);
   const ct  = sealed.slice(0, sealed.length-16);
@@ -425,7 +462,6 @@ function xchacha20Open(key, nonce24, sealed) {
   return _xor(subkey, 1, n12, ct);
 }
 
-// XChaCha20-Poly1305 encrypt. Returns ciphertext+tag.
 function xchacha20Seal(key, nonce24, plain) {
   const subkey = _hchacha20(key, nonce24.slice(0,16));
   const n12 = new Uint8Array(12);
@@ -447,75 +483,99 @@ function xchacha20Seal(key, nonce24, plain) {
 async function genKeypair() {
   return crypto.subtle.generateKey({name:'X25519'}, true, ['deriveBits']);
 }
-
 async function exportPubRaw(key) {
   return new Uint8Array(await crypto.subtle.exportKey('raw', key));
 }
-
 async function exportPrivJWK(key) {
   return crypto.subtle.exportKey('jwk', key);
 }
-
 async function importPrivJWK(jwk) {
   return crypto.subtle.importKey('jwk', jwk, {name:'X25519'}, true, ['deriveBits']);
 }
-
 async function importPubRaw(bytes) {
   return crypto.subtle.importKey('raw', bytes, {name:'X25519'}, false, []);
 }
-
 async function sha256(data) {
   return new Uint8Array(await crypto.subtle.digest('SHA-256', data));
 }
-
 async function ecdh(privKey, theirPubBytes) {
   const pub = await importPubRaw(theirPubBytes);
   const bits = await crypto.subtle.deriveBits({name:'X25519', public:pub}, privKey, 256);
   return new Uint8Array(bits);
 }
 
-// base64 standard encoding (not URL-safe)
-function b64enc(bytes) {
-  return btoa(String.fromCharCode(...bytes));
-}
-function b64dec(s) {
-  return Uint8Array.from(atob(s), c=>c.charCodeAt(0));
-}
+function b64enc(bytes) { return btoa(String.fromCharCode(...bytes)); }
+function b64dec(s)     { return Uint8Array.from(atob(s), c=>c.charCodeAt(0)); }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  Encrypt / Decrypt (mirrors client/crypto.go)
-// ═══════════════════════════════════════════════════════════════════════
-// Payload layout:
-//   [0:32]   ephemeral public key
-//   [32:56]  nonce (24 bytes)
-//   [56:2048] ciphertext + 16-byte Poly1305 tag
+//  Encrypt / Decrypt (mirrors client/crypto.go + message_format.go)
 //
-// Plaintext layout (1976 bytes, zero-padded):
-//   [0:4]   magic 'SNK\x01'
-//   [4:6]   message length uint16 LE
-//   [6:...]  message bytes
+//  Block layout (4096 bytes):
+//    [0:32]   ephemeral X25519 public key (direct) or random salt (channel)
+//    [32:56]  XChaCha20 nonce (24 bytes)
+//    [56:]    ciphertext + 16-byte Poly1305 tag
+//
+//  Plaintext layout — v2 (4024 bytes):
+//    [0:4]    magic 'SNK\x02'
+//    [4]      msg_type (0=text)
+//    [5]      flags
+//    [6:14]   timestamp int64 LE (0=unknown)
+//    [14:46]  sender_ed25519_pub (all-zeros = anonymous)
+//    [46:110] ed25519 signature  (all-zeros = unsigned)
+//    [110:366] thread_refs[8]   (all-zeros = absent)
+//    [366:398] frag_id          (all-zeros = single block)
+//    [398:400] frag_index uint16 LE
+//    [400:402] frag_total uint16 LE  (1 = single block)
+//    [402:404] content_len uint16 LE
+//    [404:]   content + zero padding
+//
+//  v1 backward-compat (2048-byte blocks, still on relay):
+//    [0:4]   magic 'SNK\x01'
+//    [4:6]   content_len uint16 LE
+//    [6:]    content + zero padding
+// ═══════════════════════════════════════════════════════════════════════
 
-const MAGIC = new Uint8Array([0x53,0x4e,0x4b,0x01]);
+const PLAINTEXT_SIZE = 4024;
+const MAX_CONTENT    = 3620; // PLAINTEXT_SIZE - 404 header bytes
+
+function _buildV2Plain(msgText) {
+  const msg = new TextEncoder().encode(msgText);
+  if (msg.length > MAX_CONTENT) throw new Error(`Message too long (max ${MAX_CONTENT} bytes)`);
+  const plain = new Uint8Array(PLAINTEXT_SIZE);
+  plain[0]=0x53; plain[1]=0x4e; plain[2]=0x4b; plain[3]=0x02; // SNK\x02
+  // [4] msg_type=0, [5] flags=0, [6:14] timestamp=0, [14:110] zeros (anon/unsigned)
+  // [110:398] zeros (thread_refs, frag_id, frag_index)
+  plain[400] = 1; plain[401] = 0;                          // frag_total = 1 LE
+  plain[402] = msg.length & 0xff;
+  plain[403] = (msg.length >> 8) & 0xff;
+  plain.set(msg, 404);
+  return plain;
+}
+
+function _readV2Plain(plain) {
+  if (plain[0]!==0x53||plain[1]!==0x4e||plain[2]!==0x4b||plain[3]!==0x02) return null;
+  const msgLen = plain[402] | (plain[403]<<8);
+  if (msgLen > MAX_CONTENT) return null;
+  return new TextDecoder().decode(plain.slice(404, 404+msgLen));
+}
+
+function _readV1Plain(plain) {
+  if (plain[0]!==0x53||plain[1]!==0x4e||plain[2]!==0x4b||plain[3]!==0x01) return null;
+  const msgLen = plain[4] | (plain[5]<<8);
+  if (msgLen > 1970) return null;
+  return new TextDecoder().decode(plain.slice(6, 6+msgLen));
+}
 
 async function encryptMessage(recipientPubBase64, msgText) {
-  const msg = new TextEncoder().encode(msgText);
-  if (msg.length > 1970) throw new Error('Message too long (max 1970 bytes)');
-
-  const ephKP = await genKeypair();
+  const ephKP  = await genKeypair();
   const ephPub = await exportPubRaw(ephKP.publicKey);
   const shared = await ecdh(ephKP.privateKey, b64dec(recipientPubBase64));
-  const key = await sha256(shared);
-  const nonce = crypto.getRandomValues(new Uint8Array(24));
-
-  const plain = new Uint8Array(1976);
-  plain.set(MAGIC, 0);
-  plain[4] = msg.length & 0xff;
-  plain[5] = (msg.length >> 8) & 0xff;
-  plain.set(msg, 6);
-
+  const key    = await sha256(shared);
+  const nonce  = crypto.getRandomValues(new Uint8Array(24));
+  const plain  = _buildV2Plain(msgText);
   const sealed = xchacha20Seal(key, nonce, plain);
 
-  const payload = new Uint8Array(2048);
+  const payload = new Uint8Array(4096);
   payload.set(ephPub, 0);
   payload.set(nonce, 32);
   payload.set(sealed, 56);
@@ -524,19 +584,53 @@ async function encryptMessage(recipientPubBase64, msgText) {
 
 async function tryDecrypt(privKeyJWK, payloadBytes) {
   try {
-    const priv = await importPrivJWK(privKeyJWK);
+    const priv   = await importPrivJWK(privKeyJWK);
     const ephPub = payloadBytes.slice(0, 32);
-    const nonce = payloadBytes.slice(32, 56);
+    const nonce  = payloadBytes.slice(32, 56);
     const sealed = payloadBytes.slice(56);
-
     const shared = await ecdh(priv, ephPub);
-    const key = await sha256(shared);
-    const plain = xchacha20Open(key, nonce, sealed);
+    const key    = await sha256(shared);
+    const plain  = xchacha20Open(key, nonce, sealed);
 
-    if (plain[0]!==0x53||plain[1]!==0x4e||plain[2]!==0x4b||plain[3]!==0x01) return null;
-    const msgLen = plain[4] | (plain[5]<<8);
-    if (msgLen > 1970) return null;
-    return new TextDecoder().decode(plain.slice(6, 6+msgLen));
+    const v2 = _readV2Plain(plain);
+    if (v2 !== null) return v2;
+    return _readV1Plain(plain);   // backward compat for old 2048-byte blocks
+  } catch {
+    return null;
+  }
+}
+
+// Channel key derivation: SHA-256(UTF-8(passphrase))  — mirrors server-side
+async function passphraseToKey(passphrase) {
+  return sha256(new TextEncoder().encode(passphrase));
+}
+
+async function encryptChannel(channelKey32, msgText) {
+  const salt   = crypto.getRandomValues(new Uint8Array(32));
+  const catted = new Uint8Array(64);
+  catted.set(channelKey32); catted.set(salt, 32);
+  const blockKey = await sha256(catted);
+  const nonce    = crypto.getRandomValues(new Uint8Array(24));
+  const plain    = _buildV2Plain(msgText);
+  const sealed   = xchacha20Seal(blockKey, nonce, plain);
+
+  const payload = new Uint8Array(4096);
+  payload.set(salt, 0);
+  payload.set(nonce, 32);
+  payload.set(sealed, 56);
+  return payload;
+}
+
+async function tryDecryptChannel(channelKey32, payloadBytes) {
+  try {
+    const salt   = payloadBytes.slice(0, 32);
+    const nonce  = payloadBytes.slice(32, 56);
+    const sealed = payloadBytes.slice(56);
+    const catted = new Uint8Array(64);
+    catted.set(channelKey32); catted.set(salt, 32);
+    const blockKey = await sha256(catted);
+    const plain    = xchacha20Open(blockKey, nonce, sealed);
+    return _readV2Plain(plain);
   } catch {
     return null;
   }
@@ -587,25 +681,32 @@ async function dbDelete(store, key) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  Contacts — localStorage
+//  Contacts & Channels — localStorage
 // ═══════════════════════════════════════════════════════════════════════
 
 function loadContacts() {
   try { return JSON.parse(localStorage.getItem('snk_contacts') || '[]'); }
   catch { return []; }
 }
-function saveContacts(arr) {
-  localStorage.setItem('snk_contacts', JSON.stringify(arr));
+function saveContacts(arr) { localStorage.setItem('snk_contacts', JSON.stringify(arr)); }
+
+// Channels stored as [{name, keyBase64}] — keyBase64 is SHA-256(passphrase)
+function loadChannelStore() {
+  try { return JSON.parse(localStorage.getItem('snk_channels') || '[]'); }
+  catch { return []; }
 }
+function saveChannelStore(arr) { localStorage.setItem('snk_channels', JSON.stringify(arr)); }
 
 // ═══════════════════════════════════════════════════════════════════════
 //  Application state
 // ═══════════════════════════════════════════════════════════════════════
 
-let identities = []; // [{name, pubBase64, privJWK}]
-let contacts   = []; // [{name, publicKey}]
-let inbox      = []; // [{blockId, content, receivedAt, identity}]
-let lastScan   = 0;  // unix timestamp of last scan start
+let identities   = []; // [{name, pubBase64, privJWK}]
+let contacts     = []; // [{name, publicKey}]
+let channelStore = []; // [{name, keyBase64}]  (derived keys, not passphrases)
+let inbox        = []; // [{blockId, content, channel, receivedAt, identity}]
+let lastScan     = 0;
+let composeMode  = 'direct';
 
 // ═══════════════════════════════════════════════════════════════════════
 //  UI helpers
@@ -640,10 +741,6 @@ function fmtTime(iso) {
   return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
 }
 
-function truncate(s, n=24) {
-  return s.length > n ? s.slice(0,n)+'…' : s;
-}
-
 // ═══════════════════════════════════════════════════════════════════════
 //  Tab switching
 // ═══════════════════════════════════════════════════════════════════════
@@ -653,11 +750,29 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
     btn.classList.add('active');
     const tab = btn.dataset.tab;
-    ['inbox','compose','keys','contacts'].forEach(t => {
+    ['inbox','compose','keys','contacts','channels'].forEach(t => {
       el('tab-'+t).classList.toggle('hidden', t!==tab);
     });
-    if (tab==='compose') renderContactDropdown();
+    if (tab==='compose') { renderContactDropdown(); renderChannelDropdown(); }
   });
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+//  Compose mode toggle
+// ═══════════════════════════════════════════════════════════════════════
+
+function setMode(mode) {
+  composeMode = mode;
+  el('compose-direct').classList.toggle('hidden', mode !== 'direct');
+  el('compose-channel').classList.toggle('hidden', mode !== 'channel');
+  el('mode-direct').style.background  = mode === 'direct'  ? 'var(--accent)' : '';
+  el('mode-direct').style.color       = mode === 'direct'  ? '#fff' : '';
+  el('mode-channel').style.background = mode === 'channel' ? 'var(--accent)' : '';
+  el('mode-channel').style.color      = mode === 'channel' ? '#fff' : '';
+}
+
+document.querySelectorAll('[data-mode]').forEach(btn => {
+  btn.addEventListener('click', () => setMode(btn.dataset.mode));
 });
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -674,7 +789,7 @@ async function generateKey() {
   try {
     const kp = await genKeypair();
     const pubBytes = await exportPubRaw(kp.publicKey);
-    const privJWK = await exportPrivJWK(kp.privateKey);
+    const privJWK  = await exportPrivJWK(kp.privateKey);
     const pubBase64 = b64enc(pubBytes);
 
     const identity = {name, pubBase64, privJWK};
@@ -792,9 +907,7 @@ function renderContactDropdown() {
   const prev = sel.value;
   while (sel.options.length > 1) sel.remove(1);
   contacts.forEach(c => {
-    const opt = document.createElement('option');
-    opt.value = c.publicKey;
-    opt.textContent = c.name;
+    const opt = new Option(c.name, c.publicKey);
     sel.appendChild(opt);
   });
   sel.value = prev || '';
@@ -806,12 +919,73 @@ el('compose-contact').addEventListener('change', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════
+//  Channels tab
+// ═══════════════════════════════════════════════════════════════════════
+
+async function joinChannel() {
+  const name = el('new-ch-name').value.trim();
+  const pass = el('new-ch-pass').value;
+  if (!name || !pass) { toast('Enter channel name and passphrase.', true); return; }
+  if (channelStore.find(c=>c.name===name)) { toast('Already joined that channel.', true); return; }
+
+  const keyBytes = await passphraseToKey(pass);
+  channelStore.push({name, keyBase64: b64enc(keyBytes)});
+  saveChannelStore(channelStore);
+  el('new-ch-name').value = '';
+  el('new-ch-pass').value = '';
+  renderChannels();
+  renderChannelDropdown();
+  toast(`Joined channel "${name}".`);
+}
+
+function leaveChannel(name) {
+  channelStore = channelStore.filter(c=>c.name!==name);
+  saveChannelStore(channelStore);
+  renderChannels();
+  renderChannelDropdown();
+  toast(`Left channel "${name}".`);
+}
+
+function renderChannels() {
+  const list = el('channel-list');
+  if (!channelStore.length) {
+    list.innerHTML = '<div class="empty">No channels yet — join one below.</div>';
+    return;
+  }
+  list.innerHTML = '';
+  channelStore.forEach(ch => {
+    const div = document.createElement('div');
+    div.className = 'card';
+    div.innerHTML =
+      `<div class="card-info">
+         <div class="card-name"><span class="ch-badge" style="margin-right:4px">#</span>${esc(ch.name)}</div>
+       </div>
+       <div class="card-actions">
+         <button class="sm ghost">Leave</button>
+       </div>`;
+    div.querySelector('.sm.ghost').addEventListener('click', ()=>leaveChannel(ch.name));
+    list.appendChild(div);
+  });
+}
+
+function renderChannelDropdown() {
+  const sel = el('channel-select');
+  const prev = sel.value;
+  sel.innerHTML = '<option value="">— select channel —</option>';
+  channelStore.forEach(ch => {
+    const opt = new Option('#' + ch.name, ch.name);
+    sel.appendChild(opt);
+  });
+  sel.value = prev || '';
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 //  Inbox — scan + decrypt
 // ═══════════════════════════════════════════════════════════════════════
 
 async function scan() {
-  if (!identities.length) {
-    toast('Generate or load a key first (Keys tab).', true);
+  if (!identities.length && !channelStore.length) {
+    toast('Add a key or join a channel first.', true);
     return;
   }
   const btn = el('scan-btn');
@@ -821,6 +995,12 @@ async function scan() {
 
   const scanStart = Math.floor(Date.now()/1000);
   let fetched = 0, found = 0;
+
+  // Pre-decode channel keys once
+  const channelKeys = channelStore.map(ch => ({
+    name: ch.name,
+    key: b64dec(ch.keyBase64),
+  }));
 
   try {
     let pageToken = '';
@@ -839,17 +1019,27 @@ async function scan() {
 
       for (const blk of blocks) {
         const payload = b64dec(blk.payload);
+        let matched = false;
+
+        // Try direct identity decryption
         for (const id of identities) {
           const msg = await tryDecrypt(id.privJWK, payload);
           if (msg !== null) {
-            inbox.push({
-              blockId: blk.id,
-              content: msg,
-              receivedAt: new Date().toISOString(),
-              identity: id.name,
-            });
-            found++;
-            break; // don't try other keys once decrypted
+            inbox.push({blockId: blk.id, content: msg, channel: null,
+                        receivedAt: new Date().toISOString(), identity: id.name});
+            found++; matched = true; break;
+          }
+        }
+
+        // Try channel decryption
+        if (!matched) {
+          for (const ch of channelKeys) {
+            const msg = await tryDecryptChannel(ch.key, payload);
+            if (msg !== null) {
+              inbox.push({blockId: blk.id, content: msg, channel: ch.name,
+                          receivedAt: new Date().toISOString(), identity: null});
+              found++; break;
+            }
           }
         }
       }
@@ -879,13 +1069,13 @@ function renderInbox() {
     return;
   }
 
-  // Show newest first
   [...inbox].reverse().forEach(m => {
+    const badge = m.channel ? `<span class="ch-badge">#${esc(m.channel)}</span>` : '';
+    const to    = m.identity ? `to&nbsp;<strong>${esc(m.identity)}</strong> &nbsp;·&nbsp; ` : '';
     const div = document.createElement('div');
-    div.className = 'msg-item section';
-    div.style.gap = '6px';
+    div.className = 'msg-item';
     div.innerHTML =
-      `<div class="msg-meta">${esc(fmtTime(m.receivedAt))} &nbsp;·&nbsp; to&nbsp;<strong>${esc(m.identity)}</strong> &nbsp;·&nbsp; ${esc(m.blockId.slice(0,12))}…</div>` +
+      `<div class="msg-meta">${badge}${esc(fmtTime(m.receivedAt))} &nbsp;·&nbsp; ${to}${esc(m.blockId.slice(0,12))}…</div>` +
       `<div class="msg-body">${esc(m.content)}</div>`;
     list.appendChild(div);
   });
@@ -896,29 +1086,36 @@ function renderInbox() {
 // ═══════════════════════════════════════════════════════════════════════
 
 async function sendMessage() {
-  const recipKey = el('compose-key').value.trim();
-  const body     = el('compose-body').value;
-  if (!recipKey) { toast('Enter or select a recipient public key.', true); return; }
-  if (!body)     { toast('Message is empty.', true); return; }
-
-  let pubBytes;
-  try { pubBytes = b64dec(recipKey); } catch { toast('Invalid base64 key.', true); return; }
-  if (pubBytes.length !== 32) { toast('Public key must be 32 bytes.', true); return; }
+  const body = el('compose-body').value;
+  if (!body) { toast('Message is empty.', true); return; }
 
   const btn = el('send-btn');
   btn.disabled = true;
   status('Encrypting…');
-  try {
-    const payload = await encryptMessage(recipKey, body);
-    const stamp   = new Uint8Array(4); // zero stamp → work_factor 0, 24h TTL
 
+  try {
+    let payload;
+
+    if (composeMode === 'direct') {
+      const recipKey = el('compose-key').value.trim();
+      if (!recipKey) { toast('Enter or select a recipient public key.', true); return; }
+      let pubBytes;
+      try { pubBytes = b64dec(recipKey); } catch { toast('Invalid base64 key.', true); return; }
+      if (pubBytes.length !== 32) { toast('Public key must be 32 bytes.', true); return; }
+      payload = await encryptMessage(recipKey, body);
+    } else {
+      const chName = el('channel-select').value;
+      if (!chName) { toast('Select a channel.', true); return; }
+      const ch = channelStore.find(c=>c.name===chName);
+      if (!ch) { toast('Channel not found.', true); return; }
+      payload = await encryptChannel(b64dec(ch.keyBase64), body);
+    }
+
+    const stamp = new Uint8Array(4); // zero stamp → work_factor 0, 24h TTL
     const r = await fetch('/api/blocks', {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({
-        stamp:   b64enc(stamp),
-        payload: b64enc(payload),
-      }),
+      body: JSON.stringify({stamp: b64enc(stamp), payload: b64enc(payload)}),
     });
 
     if (!r.ok) {
@@ -944,26 +1141,30 @@ async function sendMessage() {
 
 async function init() {
   try {
-    const stored = await dbGetAll('identities');
-    identities = stored || [];
-    contacts   = loadContacts();
+    identities   = await dbGetAll('identities') || [];
+    contacts     = loadContacts();
+    channelStore = loadChannelStore();
     renderKeys();
     renderContacts();
+    renderChannels();
     renderInbox();
+    setMode('direct');
     status('Ready — ' + identities.length + ' key' + (identities.length===1?'':'s') + ' loaded.');
   } catch(e) {
     status('IndexedDB unavailable: ' + e.message, 'err');
   }
 }
 
-// Wire up button event listeners
 el('gen-btn').addEventListener('click', generateKey);
 el('scan-btn').addEventListener('click', scan);
 el('send-btn').addEventListener('click', sendMessage);
 el('add-contact-btn').addEventListener('click', addContact);
+el('join-ch-btn').addEventListener('click', joinChannel);
 el('new-key-name').addEventListener('keydown', e => { if(e.key==='Enter') generateKey(); });
 el('new-contact-name').addEventListener('keydown', e => { if(e.key==='Enter') el('new-contact-key').focus(); });
 el('new-contact-key').addEventListener('keydown', e => { if(e.key==='Enter') addContact(); });
+el('new-ch-name').addEventListener('keydown', e => { if(e.key==='Enter') el('new-ch-pass').focus(); });
+el('new-ch-pass').addEventListener('keydown', e => { if(e.key==='Enter') joinChannel(); });
 
 init();
 </script>
