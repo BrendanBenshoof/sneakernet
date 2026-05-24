@@ -19,6 +19,7 @@ import (
 	"github.com/brendanbenshoof/sneakernet/client"
 	"github.com/brendanbenshoof/sneakernet/client/api"
 	"github.com/brendanbenshoof/sneakernet/transport/dht"
+	"github.com/brendanbenshoof/sneakernet/transport/lan"
 	"github.com/brendanbenshoof/sneakernet/transport/relay"
 )
 
@@ -54,6 +55,7 @@ func cmdRelay(args []string) {
 	powFloor      := fs.Int("pow-floor", 0, "minimum proof-of-work for relay block acceptance")
 	syncInterval  := fs.Duration("sync-interval", 5*time.Minute, "interval between peer sync rounds")
 	peersFlag     := fs.String("peers", "", "comma-separated list of peer base URLs to always sync with (e.g. https://relay.example.com)")
+	lanScan       := fs.Bool("lan", false, fmt.Sprintf("scan LAN for sneakernet peers on port %d (\"snk\" in base32)", lan.Port))
 	fs.Parse(args)
 
 	var staticPeers []string
@@ -125,8 +127,15 @@ func cmdRelay(args []string) {
 		}
 	}()
 
-	// Sync loop: collect DHT-discovered peers and exchange blocks with them.
-	go syncPeers(ctx, bs, disc.Peers(), *powFloor, *syncInterval, staticPeers)
+	// Collect peer addresses from all discovery sources.
+	peerSources := []<-chan string{disc.Peers()}
+	if *lanScan {
+		log.Printf("LAN scan enabled (port %d)", lan.Port)
+		peerSources = append(peerSources, lan.Discover(ctx, *syncInterval))
+	}
+
+	// Sync loop: collect discovered peers and exchange blocks with them.
+	go syncPeers(ctx, bs, mergePeers(ctx, peerSources...), *powFloor, *syncInterval, staticPeers)
 
 	// User-facing API server.
 	apiSrv := api.New(bs, ms, *keystoreFile)
@@ -139,6 +148,35 @@ func cmdRelay(args []string) {
 
 	<-ctx.Done()
 	log.Println("shutting down")
+}
+
+// mergePeers fans in multiple peer address channels into one.
+func mergePeers(ctx context.Context, sources ...<-chan string) <-chan string {
+	out := make(chan string, 16)
+	var wg sync.WaitGroup
+	for _, src := range sources {
+		wg.Add(1)
+		go func(ch <-chan string) {
+			defer wg.Done()
+			for {
+				select {
+				case addr, ok := <-ch:
+					if !ok {
+						return
+					}
+					select {
+					case out <- addr:
+					case <-ctx.Done():
+						return
+					}
+				case <-ctx.Done():
+					return
+				}
+			}
+		}(src)
+	}
+	go func() { wg.Wait(); close(out) }()
+	return out
 }
 
 // peerURL constructs the base URL for a peer given its "host:port" address.
