@@ -2,6 +2,7 @@ package client
 
 import (
 	"crypto/ecdh"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
@@ -23,10 +24,12 @@ const (
 	keystoreVersion = 1
 )
 
-// Identity is a named X25519 key pair held in a Keystore.
+// Identity is a named key pair held in a Keystore.
+// Key is the X25519 encryption key; SignKey is the Ed25519 signing key.
 type Identity struct {
-	Name string
-	Key  *ecdh.PrivateKey
+	Name    string
+	Key     *ecdh.PrivateKey
+	SignKey ed25519.PrivateKey
 }
 
 // Channel is a named symmetric channel key. Anyone who knows the passphrase
@@ -36,7 +39,7 @@ type Channel struct {
 	Key  [32]byte
 }
 
-// Keystore is a password-protected collection of named X25519 identities and channel keys.
+// Keystore is a password-protected collection of named identities and channel keys.
 // Load it once at startup; all keys are decrypted into memory.
 type Keystore struct {
 	masterKey  [kdfKeyLen]byte
@@ -66,6 +69,8 @@ func NewKeystore(password []byte) (*Keystore, error) {
 
 // LoadKeystore reads and decrypts a keystore file at path using password.
 // Returns an error immediately if the password is wrong or the file is corrupted.
+// If any identity is missing a signing key (old keystore), a fresh Ed25519 key
+// is generated and the file is updated in-place.
 func LoadKeystore(path string, password []byte) (*Keystore, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -100,6 +105,7 @@ func LoadKeystore(path string, password []byte) (*Keystore, error) {
 		kdfThreads: f.KDFThreads,
 	}
 
+	migrated := false
 	for _, rec := range f.Identities {
 		privBytes, err := ksDecrypt(masterKey, rec.Nonce, rec.Ciphertext)
 		if err != nil {
@@ -109,7 +115,29 @@ func LoadKeystore(path string, password []byte) (*Keystore, error) {
 		if err != nil {
 			return nil, fmt.Errorf("client: load keystore: invalid key %q: %w", rec.Name, err)
 		}
-		k.identities = append(k.identities, &Identity{Name: rec.Name, Key: privKey})
+
+		var signKey ed25519.PrivateKey
+		if len(rec.SignNonce) > 0 && len(rec.SignCiphertext) > 0 {
+			signBytes, err := ksDecrypt(masterKey, rec.SignNonce, rec.SignCiphertext)
+			if err != nil {
+				return nil, fmt.Errorf("client: load keystore: wrong password or corrupted data")
+			}
+			signKey = ed25519.PrivateKey(signBytes)
+		} else {
+			_, signKey, err = ed25519.GenerateKey(rand.Reader)
+			if err != nil {
+				return nil, fmt.Errorf("client: load keystore: generate sign key: %w", err)
+			}
+			migrated = true
+		}
+
+		k.identities = append(k.identities, &Identity{Name: rec.Name, Key: privKey, SignKey: signKey})
+	}
+
+	if migrated {
+		if err := k.Save(path); err != nil {
+			return nil, fmt.Errorf("client: load keystore: persist migrated sign keys: %w", err)
+		}
 	}
 
 	for _, rec := range f.Channels {
@@ -150,11 +178,20 @@ func (k *Keystore) Save(path string) error {
 		if err != nil {
 			return fmt.Errorf("client: save keystore: encrypt %q: %w", id.Name, err)
 		}
-		f.Identities = append(f.Identities, identityRecord{
+		rec := identityRecord{
 			Name:       id.Name,
 			Nonce:      nonce,
 			Ciphertext: ct,
-		})
+		}
+		if len(id.SignKey) > 0 {
+			sNonce, sCT, err := ksEncrypt(k.masterKey, id.SignKey)
+			if err != nil {
+				return fmt.Errorf("client: save keystore: encrypt sign key %q: %w", id.Name, err)
+			}
+			rec.SignNonce = sNonce
+			rec.SignCiphertext = sCT
+		}
+		f.Identities = append(f.Identities, rec)
 	}
 
 	for _, ch := range k.channels {
@@ -185,7 +222,7 @@ func (k *Keystore) Save(path string) error {
 	return nil
 }
 
-// Add generates a fresh X25519 identity under name and returns it.
+// Add generates a fresh identity under name and returns it.
 // Returns an error if name is already taken.
 func (k *Keystore) Add(name string) (*Identity, error) {
 	if k.get(name) != nil {
@@ -195,7 +232,11 @@ func (k *Keystore) Add(name string) (*Identity, error) {
 	if err != nil {
 		return nil, err
 	}
-	id := &Identity{Name: name, Key: privKey}
+	_, signKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	id := &Identity{Name: name, Key: privKey, SignKey: signKey}
 	k.identities = append(k.identities, id)
 	return id, nil
 }
@@ -206,7 +247,11 @@ func (k *Keystore) Import(name string, privKey *ecdh.PrivateKey) error {
 	if k.get(name) != nil {
 		return fmt.Errorf("client: identity %q already exists", name)
 	}
-	k.identities = append(k.identities, &Identity{Name: name, Key: privKey})
+	_, signKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return err
+	}
+	k.identities = append(k.identities, &Identity{Name: name, Key: privKey, SignKey: signKey})
 	return nil
 }
 
@@ -229,7 +274,12 @@ func (k *Keystore) List() []*Identity {
 	return out
 }
 
-// Keys returns the private key for every stored identity, suitable for
+// GetIdentity returns the named identity, or nil if not found.
+func (k *Keystore) GetIdentity(name string) *Identity {
+	return k.get(name)
+}
+
+// Keys returns the X25519 private key for every stored identity, suitable for
 // passing to client.New for multi-identity scraping.
 func (k *Keystore) Keys() []*ecdh.PrivateKey {
 	keys := make([]*ecdh.PrivateKey, len(k.identities))
@@ -330,9 +380,11 @@ type keystoreFile struct {
 }
 
 type identityRecord struct {
-	Name       string `json:"name"`
-	Nonce      []byte `json:"nonce"`
-	Ciphertext []byte `json:"ciphertext"`
+	Name           string `json:"name"`
+	Nonce          []byte `json:"nonce"`
+	Ciphertext     []byte `json:"ciphertext"`
+	SignNonce      []byte `json:"sign_nonce,omitempty"`
+	SignCiphertext []byte `json:"sign_ciphertext,omitempty"`
 }
 
 type channelRecord struct {

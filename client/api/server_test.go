@@ -209,10 +209,11 @@ func TestSendAndScrape(t *testing.T) {
 	if w.Code != http.StatusCreated {
 		t.Fatalf("send: got %d (body: %s)", w.Code, w.Body.String())
 	}
-	var sendResp map[string]string
+	var sendResp map[string]any
 	mustJSON(t, w, &sendResp)
-	if sendResp["block_id"] == "" {
-		t.Fatal("expected block_id in send response")
+	blockIDs, _ := sendResp["block_ids"].([]any)
+	if len(blockIDs) == 0 {
+		t.Fatal("expected block_ids in send response")
 	}
 
 	// Scrape should find it.

@@ -53,11 +53,17 @@ func (c *Client) Scrape(ctx context.Context) (int, error) {
 			if err != nil {
 				continue // block expired between list and get
 			}
-			content, channel, ok := c.tryAllKeys(payload)
+			mp, ok := c.tryAllKeys(payload)
 			if !ok {
 				continue
 			}
-			inserted, err := c.messages.SaveMessage(ref.ID, content, channel)
+
+			var inserted bool
+			if mp.IsFragment() {
+				inserted, err = c.messages.SaveFragment(ref.ID, mp)
+			} else {
+				inserted, err = c.messages.SaveMessage(ref.ID, mp)
+			}
 			if err != nil {
 				return found, err
 			}
@@ -76,17 +82,19 @@ func (c *Client) Scrape(ctx context.Context) (int, error) {
 }
 
 // tryAllKeys attempts decryption with each held private key and channel key.
-// Returns the plaintext, the channel name (empty for direct messages), and true on success.
-func (c *Client) tryAllKeys(payload blockstore.Payload) ([]byte, string, bool) {
+// Returns the MessagePayload and true on the first success. mp.Channel is set
+// to the channel name for channel messages, empty for direct messages.
+func (c *Client) tryAllKeys(payload blockstore.Payload) (MessagePayload, bool) {
 	for _, key := range c.privKeys {
-		if content, err := tryDecrypt(key, payload); err == nil {
-			return content, "", true
+		if mp, err := tryDecrypt(key, payload); err == nil {
+			return mp, true
 		}
 	}
 	for _, ch := range c.channels {
-		if content, err := tryDecryptChannel(ch.Key, payload); err == nil {
-			return content, ch.Name, true
+		if mp, err := tryDecryptChannel(ch.Key, payload); err == nil {
+			mp.Channel = ch.Name
+			return mp, true
 		}
 	}
-	return nil, "", false
+	return MessagePayload{}, false
 }

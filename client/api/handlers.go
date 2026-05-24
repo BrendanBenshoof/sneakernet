@@ -2,6 +2,8 @@ package api
 
 import (
 	"crypto/ecdh"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -93,28 +95,30 @@ func (s *Server) handleLock(w http.ResponseWriter, r *http.Request) {
 }
 
 // GET /api/identities
-// Returns all stored identities with their public keys (base64).
+// Returns all stored identities with their public keys.
 func (s *Server) handleListIdentities(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	ids := s.ks.List()
 	s.mu.RUnlock()
 
 	type identityResp struct {
-		Name      string `json:"name"`
-		PublicKey string `json:"public_key"`
+		Name            string `json:"name"`
+		PublicKey       string `json:"public_key"`
+		SigningPublicKey string `json:"signing_public_key"`
 	}
 	out := make([]identityResp, len(ids))
 	for i, id := range ids {
 		out[i] = identityResp{
-			Name:      id.Name,
-			PublicKey: base64.StdEncoding.EncodeToString(id.Key.PublicKey().Bytes()),
+			Name:            id.Name,
+			PublicKey:       base64.StdEncoding.EncodeToString(id.Key.PublicKey().Bytes()),
+			SigningPublicKey: base64.StdEncoding.EncodeToString(id.SignKey.Public().(ed25519.PublicKey)),
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
 }
 
 // POST /api/identities  {"name":"alice"}
-// Generates a new X25519 identity, saves the keystore, and returns the public key.
+// Generates a new identity, saves the keystore, and returns the public keys.
 func (s *Server) handleAddIdentity(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name string `json:"name"`
@@ -135,14 +139,17 @@ func (s *Server) handleAddIdentity(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
-	pub := base64.StdEncoding.EncodeToString(id.Key.PublicKey().Bytes())
 	if err := s.ks.Save(s.ksPath); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to save keystore")
 		return
 	}
 	s.rebuildScraper()
 
-	writeJSON(w, http.StatusCreated, map[string]string{"name": req.Name, "public_key": pub})
+	writeJSON(w, http.StatusCreated, map[string]string{
+		"name":               req.Name,
+		"public_key":         base64.StdEncoding.EncodeToString(id.Key.PublicKey().Bytes()),
+		"signing_public_key": base64.StdEncoding.EncodeToString(id.SignKey.Public().(ed25519.PublicKey)),
+	})
 }
 
 // DELETE /api/identities/{name}
@@ -167,8 +174,7 @@ func (s *Server) handleRemoveIdentity(w http.ResponseWriter, r *http.Request) {
 }
 
 // GET /api/messages?after_id=N
-// Returns messages with id > after_id (default 0). Use for simple poll-based sync.
-// Message content is base64-encoded; block_id is hex.
+// Returns messages with id > after_id (default 0).
 func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 	afterID, _ := strconv.ParseInt(r.URL.Query().Get("after_id"), 10, 64)
 
@@ -179,29 +185,55 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type msgResp struct {
-		ID         int64  `json:"id"`
-		BlockID    string `json:"block_id"`
-		Content    string `json:"content"`
-		Channel    string `json:"channel,omitempty"`
-		ReceivedAt string `json:"received_at"`
+		ID         int64    `json:"id"`
+		BlockID    string   `json:"block_id"`
+		SenderPub  string   `json:"sender_pub"`
+		ThreadRefs []string `json:"thread_refs"`
+		SentAt     string   `json:"sent_at,omitempty"`
+		MsgType    uint8    `json:"msg_type"`
+		Content    string   `json:"content"`
+		Channel    string   `json:"channel,omitempty"`
+		ReceivedAt string   `json:"received_at"`
 	}
 	out := make([]msgResp, len(msgs))
 	for i, m := range msgs {
-		out[i] = msgResp{
+		resp := msgResp{
 			ID:         m.ID,
 			BlockID:    hex.EncodeToString(m.BlockID[:]),
 			Content:    base64.StdEncoding.EncodeToString(m.Content),
 			Channel:    m.Channel,
 			ReceivedAt: m.ReceivedAt.UTC().Format(time.RFC3339),
+			MsgType:    m.MsgType,
 		}
+		if m.SenderPub != ([32]byte{}) {
+			resp.SenderPub = base64.StdEncoding.EncodeToString(m.SenderPub[:])
+		}
+		if !m.SentAt.IsZero() {
+			resp.SentAt = m.SentAt.UTC().Format(time.RFC3339)
+		}
+		// Build trimmed thread_refs: drop trailing all-zero entries.
+		var refs []string
+		last := -1
+		var zero [32]byte
+		for j, ref := range m.ThreadRefs {
+			if ref != zero {
+				last = j
+			}
+		}
+		for j := 0; j <= last; j++ {
+			refs = append(refs, hex.EncodeToString(m.ThreadRefs[j][:]))
+		}
+		if refs == nil {
+			refs = []string{}
+		}
+		resp.ThreadRefs = refs
+		out[i] = resp
 	}
 	writeJSON(w, http.StatusOK, out)
 }
 
 // POST /api/scrape
 // Scans all new blocks and attempts decryption with every stored identity.
-// Returns {"found": N} where N is newly decoded messages this run.
-// Concurrent scrape calls are serialised; the request blocks until done.
 func (s *Server) handleScrape(w http.ResponseWriter, r *http.Request) {
 	s.scrapeMu.Lock()
 	defer s.scrapeMu.Unlock()
@@ -218,15 +250,26 @@ func (s *Server) handleScrape(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]int{"found": found})
 }
 
-// POST /api/send  {"recipient_public_key":"<base64>","message":"<text>"}
-// Encrypts message for the recipient and stores the resulting block.
-// Returns {"block_id":"<hex>"}.
-// The block is stored with a zero stamp (work_factor 0, TTL 24 h). Stamp
-// mining for longer TTLs is not yet implemented.
+// POST /api/send
+//
+//	{
+//	  "recipient_public_key": "<base64 X25519>",
+//	  "message": "<text>",
+//	  "sender_identity": "<name>",          // optional; omit = anonymous
+//	  "reply_to_block_id": "<hex block ID>" // optional; omit = new thread
+//	}
+//
+// Encrypts and stores one or more blocks. Returns:
+//
+//	{"block_ids": ["<hex>", ...], "frag_id": "<hex>"}
+//
+// frag_id is the empty string for single-block messages.
 func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		RecipientPublicKey string `json:"recipient_public_key"`
 		Message            string `json:"message"`
+		SenderIdentity     string `json:"sender_identity"`
+		ReplyToBlockID     string `json:"reply_to_block_id"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -247,25 +290,121 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	payload, err := client.Encrypt(recipientPub, []byte(req.Message))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	// Resolve optional sender identity.
+	s.mu.RLock()
+	ks := s.ks
+	s.mu.RUnlock()
+
+	var mp client.MessagePayload
+	mp.MsgType = client.MsgTypeText
+	mp.Timestamp = time.Now().Unix()
+
+	var signerID *client.Identity
+	if req.SenderIdentity != "" {
+		signerID = ks.GetIdentity(req.SenderIdentity)
+		if signerID == nil {
+			writeError(w, http.StatusBadRequest, "sender_identity not found")
+			return
+		}
+		pubKeyBytes := []byte(signerID.SignKey.Public().(ed25519.PublicKey))
+		copy(mp.SenderPub[:], pubKeyBytes)
+	}
+
+	// Resolve optional thread refs from the replied-to message.
+	if req.ReplyToBlockID != "" {
+		replyIDBytes, err := hex.DecodeString(req.ReplyToBlockID)
+		if err != nil || len(replyIDBytes) != blockstore.IDSize {
+			writeError(w, http.StatusBadRequest, "invalid reply_to_block_id")
+			return
+		}
+		var replyID blockstore.ID
+		copy(replyID[:], replyIDBytes)
+
+		if m, found, err := s.msgs.GetMessage(replyID); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to look up reply target")
+			return
+		} else if found {
+			mp.ThreadRefs = client.BuildThreadRefs(replyID, m.ThreadRefs)
+		} else {
+			// Reply target not in our store; set just the direct ref.
+			mp.ThreadRefs[0] = replyID
+		}
+	}
+
+	content := []byte(req.Message)
+	if len(content) <= client.V2MaxContent {
+		// Single block.
+		mp.Content = content
+		mp.FragTotal = 1
+
+		var payload blockstore.Payload
+		if signerID != nil {
+			payload, err = client.EncryptSigned(recipientPub, mp, signerID.SignKey)
+		} else {
+			payload, err = client.Encrypt(recipientPub, mp)
+		}
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+
+		var stamp blockstore.Stamp
+		id, err := s.blocks.Put(stamp, payload)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to store block")
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{
+			"block_ids": []string{hex.EncodeToString(id[:])},
+			"frag_id":   "",
+		})
 		return
 	}
 
+	// Multi-block: split content into fragments.
+	var fragID [32]byte
+	if _, err := rand.Read(fragID[:]); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to generate fragment ID")
+		return
+	}
+
+	chunks := splitBytes(content, client.V2MaxContent)
+	total := uint16(len(chunks))
+	blockIDs := make([]string, 0, total)
 	var stamp blockstore.Stamp
-	id, err := s.blocks.Put(stamp, payload)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to store block")
-		return
+
+	for i, chunk := range chunks {
+		fmp := mp
+		fmp.Content = chunk
+		fmp.FragID = fragID
+		fmp.FragIndex = uint16(i)
+		fmp.FragTotal = total
+
+		var payload blockstore.Payload
+		if signerID != nil {
+			payload, err = client.EncryptSigned(recipientPub, fmp, signerID.SignKey)
+		} else {
+			payload, err = client.Encrypt(recipientPub, fmp)
+		}
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to encrypt fragment")
+			return
+		}
+		id, err := s.blocks.Put(stamp, payload)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to store fragment block")
+			return
+		}
+		blockIDs = append(blockIDs, hex.EncodeToString(id[:]))
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]string{"block_id": hex.EncodeToString(id[:])})
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"block_ids": blockIDs,
+		"frag_id":   hex.EncodeToString(fragID[:]),
+	})
 }
 
 // POST /api/keystore/change-password  {"new_password":"..."}
-// Re-keys the keystore with a new password and saves it. All existing tokens
-// remain valid; the old password can no longer unlock the file.
 func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		NewPassword string `json:"new_password"`
@@ -395,7 +534,12 @@ func (s *Server) handleSendChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	payload, err := client.EncryptChannel(channelKey, []byte(req.Message))
+	mp := client.MessagePayload{
+		MsgType:   client.MsgTypeText,
+		FragTotal: 1,
+		Content:   []byte(req.Message),
+	}
+	payload, err := client.EncryptChannel(channelKey, mp)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -429,4 +573,18 @@ func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 		return false
 	}
 	return true
+}
+
+// splitBytes splits b into chunks of at most size bytes.
+func splitBytes(b []byte, size int) [][]byte {
+	var chunks [][]byte
+	for len(b) > 0 {
+		n := size
+		if n > len(b) {
+			n = len(b)
+		}
+		chunks = append(chunks, b[:n])
+		b = b[n:]
+	}
+	return chunks
 }

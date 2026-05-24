@@ -2,6 +2,7 @@ package client
 
 import (
 	"crypto/ecdh"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
@@ -13,21 +14,23 @@ import (
 )
 
 const (
-	pubKeySize  = 32 // X25519 public key
-	nonceSize   = chacha20poly1305.NonceSizeX
-	tagSize     = 16 // XChaCha20-Poly1305 auth tag
-	magicSize   = 4
-	lenSize     = 2
+	pubKeySize = 32 // X25519 public key
+	nonceSize  = chacha20poly1305.NonceSizeX
+	tagSize    = 16 // XChaCha20-Poly1305 auth tag
 
-	ciphertextOffset = pubKeySize + nonceSize                                          // 56
-	plaintextSize    = blockstore.PayloadSize - ciphertextOffset - tagSize             // 1976
-	headerSize       = magicSize + lenSize                                             // 6
-	maxMessageSize   = plaintextSize - headerSize                                      // 1970
+	ciphertextOffset = pubKeySize + nonceSize                              // 56
+	plaintextSize    = blockstore.PayloadSize - ciphertextOffset - tagSize // 4024
 )
 
-var magic = [magicSize]byte{'S', 'N', 'K', 0x01}
+// v1 format constants — kept for backward-compat decryption only.
+var magicV1 = [4]byte{'S', 'N', 'K', 0x01}
 
-var magicChannel = [magicSize]byte{'S', 'N', 'K', 0x02}
+const (
+	v1MagicSize  = 4
+	v1LenSize    = 2
+	v1HeaderSize = v1MagicSize + v1LenSize // 6
+	v1MaxContent = plaintextSize - v1HeaderSize
+)
 
 // channelSaltSize is the per-block random salt prepended to channel payloads.
 // It occupies the same first 32 bytes as the ephemeral pubkey in direct messages.
@@ -41,19 +44,31 @@ func GenerateKey() (*ecdh.PrivateKey, error) {
 	return ecdh.X25519().GenerateKey(rand.Reader)
 }
 
-// Encrypt encodes msg into a fixed-size Payload addressed to recipientPub.
-// The resulting payload is indistinguishable from random bytes to anyone
-// who does not hold the corresponding private key.
-func Encrypt(recipientPub *ecdh.PublicKey, msg []byte) (blockstore.Payload, error) {
-	if len(msg) > maxMessageSize {
-		return blockstore.Payload{}, errors.New("client: message too large")
+// Encrypt encodes mp and encrypts it for recipientPub (anonymous — no signature).
+func Encrypt(recipientPub *ecdh.PublicKey, mp MessagePayload) (blockstore.Payload, error) {
+	plain, err := EncodePayload(mp)
+	if err != nil {
+		return blockstore.Payload{}, err
 	}
+	return encryptPlain(recipientPub, plain)
+}
 
+// EncryptSigned encodes mp, signs the plaintext with sigKey, then encrypts.
+// mp.SenderPub must already be set to the Ed25519 public key corresponding to sigKey.
+func EncryptSigned(recipientPub *ecdh.PublicKey, mp MessagePayload, sigKey ed25519.PrivateKey) (blockstore.Payload, error) {
+	plain, err := EncodePayload(mp)
+	if err != nil {
+		return blockstore.Payload{}, err
+	}
+	SignPayload(&plain, sigKey)
+	return encryptPlain(recipientPub, plain)
+}
+
+func encryptPlain(recipientPub *ecdh.PublicKey, plain [plaintextSize]byte) (blockstore.Payload, error) {
 	ephemeral, err := ecdh.X25519().GenerateKey(rand.Reader)
 	if err != nil {
 		return blockstore.Payload{}, err
 	}
-
 	shared, err := ephemeral.ECDH(recipientPub)
 	if err != nil {
 		return blockstore.Payload{}, err
@@ -64,12 +79,6 @@ func Encrypt(recipientPub *ecdh.PublicKey, msg []byte) (blockstore.Payload, erro
 	if err != nil {
 		return blockstore.Payload{}, err
 	}
-
-	var plain [plaintextSize]byte
-	copy(plain[:magicSize], magic[:])
-	binary.LittleEndian.PutUint16(plain[magicSize:], uint16(len(msg)))
-	copy(plain[headerSize:], msg)
-	// remaining bytes are zero padding — always encrypt the full buffer
 
 	var nonce [nonceSize]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
@@ -85,12 +94,13 @@ func Encrypt(recipientPub *ecdh.PublicKey, msg []byte) (blockstore.Payload, erro
 	return payload, nil
 }
 
-// EncryptChannel encrypts msg into a fixed-size Payload using a symmetric channelKey.
+// EncryptChannel encrypts mp into a fixed-size Payload using a symmetric channelKey.
 // Anyone who knows the passphrase (and thus the channelKey) can decrypt it.
-// The sender is anonymous — no identity information is embedded.
-func EncryptChannel(channelKey [32]byte, msg []byte) (blockstore.Payload, error) {
-	if len(msg) > maxMessageSize {
-		return blockstore.Payload{}, errors.New("client: message too large")
+// The mp.Channel field is ignored (it is a local routing annotation, not wire data).
+func EncryptChannel(channelKey [32]byte, mp MessagePayload) (blockstore.Payload, error) {
+	plain, err := EncodePayload(mp)
+	if err != nil {
+		return blockstore.Payload{}, err
 	}
 
 	var salt [channelSaltSize]byte
@@ -104,11 +114,6 @@ func EncryptChannel(channelKey [32]byte, msg []byte) (blockstore.Payload, error)
 	if err != nil {
 		return blockstore.Payload{}, err
 	}
-
-	var plain [plaintextSize]byte
-	copy(plain[:magicSize], magicChannel[:])
-	binary.LittleEndian.PutUint16(plain[magicSize:], uint16(len(msg)))
-	copy(plain[headerSize:], msg)
 
 	var nonce [nonceSize]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
@@ -125,67 +130,88 @@ func EncryptChannel(channelKey [32]byte, msg []byte) (blockstore.Payload, error)
 }
 
 // tryDecryptChannel attempts to decrypt payload as a channel message using channelKey.
-func tryDecryptChannel(channelKey [32]byte, payload blockstore.Payload) ([]byte, error) {
+func tryDecryptChannel(channelKey [32]byte, payload blockstore.Payload) (MessagePayload, error) {
 	blockKey := sha256.Sum256(append(channelKey[:], payload[:channelSaltSize]...))
 
 	aead, err := chacha20poly1305.NewX(blockKey[:])
 	if err != nil {
-		return nil, ErrNotOurMessage
+		return MessagePayload{}, ErrNotOurMessage
 	}
 
-	plain, err := aead.Open(nil, payload[channelSaltSize:ciphertextOffset], payload[ciphertextOffset:], nil)
+	plainSlice, err := aead.Open(nil, payload[channelSaltSize:ciphertextOffset], payload[ciphertextOffset:], nil)
 	if err != nil {
-		return nil, ErrNotOurMessage
+		return MessagePayload{}, ErrNotOurMessage
+	}
+	if len(plainSlice) != plaintextSize {
+		return MessagePayload{}, ErrNotOurMessage
 	}
 
-	if len(plain) < headerSize || [magicSize]byte(plain[:magicSize]) != magicChannel {
-		return nil, ErrNotOurMessage
+	mp, err := DecodePayload([plaintextSize]byte(plainSlice))
+	if err != nil {
+		return MessagePayload{}, ErrNotOurMessage
 	}
-
-	msgLen := int(binary.LittleEndian.Uint16(plain[magicSize:headerSize]))
-	if msgLen > maxMessageSize {
-		return nil, ErrNotOurMessage
-	}
-
-	out := make([]byte, msgLen)
-	copy(out, plain[headerSize:headerSize+msgLen])
-	return out, nil
+	return mp, nil
 }
 
 // tryDecrypt attempts to decrypt payload using privKey.
 // Returns ErrNotOurMessage if the block was not addressed to us or is malformed.
-func tryDecrypt(privKey *ecdh.PrivateKey, payload blockstore.Payload) ([]byte, error) {
+// Handles both v1 (magic 0x01) and v2 (magic 0x02) formats.
+func tryDecrypt(privKey *ecdh.PrivateKey, payload blockstore.Payload) (MessagePayload, error) {
 	ephPub, err := ecdh.X25519().NewPublicKey(payload[:pubKeySize])
 	if err != nil {
-		return nil, ErrNotOurMessage
+		return MessagePayload{}, ErrNotOurMessage
 	}
-
 	shared, err := privKey.ECDH(ephPub)
 	if err != nil {
-		return nil, ErrNotOurMessage
+		return MessagePayload{}, ErrNotOurMessage
 	}
 	key := sha256.Sum256(shared)
 
 	aead, err := chacha20poly1305.NewX(key[:])
 	if err != nil {
-		return nil, ErrNotOurMessage
+		return MessagePayload{}, ErrNotOurMessage
 	}
 
 	plain, err := aead.Open(nil, payload[pubKeySize:ciphertextOffset], payload[ciphertextOffset:], nil)
 	if err != nil {
-		return nil, ErrNotOurMessage
+		return MessagePayload{}, ErrNotOurMessage
+	}
+	if len(plain) < 4 {
+		return MessagePayload{}, ErrNotOurMessage
 	}
 
-	if len(plain) < headerSize || [magicSize]byte(plain[:magicSize]) != magic {
-		return nil, ErrNotOurMessage
+	magic4 := [4]byte(plain[:4])
+
+	if magic4 == MagicV2 {
+		buf := [plaintextSize]byte(plain)
+		mp, err := DecodePayload(buf)
+		if err != nil {
+			return MessagePayload{}, ErrNotOurMessage
+		}
+		// Reject messages that claim a sender but carry an invalid signature.
+		if !mp.IsAnonymous() && !VerifySignature(buf) {
+			return MessagePayload{}, ErrNotOurMessage
+		}
+		return mp, nil
 	}
 
-	msgLen := int(binary.LittleEndian.Uint16(plain[magicSize:headerSize]))
-	if msgLen > maxMessageSize {
-		return nil, ErrNotOurMessage
+	// v1 backward-compat
+	if magic4 == magicV1 {
+		if len(plain) < v1HeaderSize {
+			return MessagePayload{}, ErrNotOurMessage
+		}
+		msgLen := int(binary.LittleEndian.Uint16(plain[v1MagicSize:v1HeaderSize]))
+		if msgLen > v1MaxContent || v1HeaderSize+msgLen > len(plain) {
+			return MessagePayload{}, ErrNotOurMessage
+		}
+		content := make([]byte, msgLen)
+		copy(content, plain[v1HeaderSize:v1HeaderSize+msgLen])
+		return MessagePayload{
+			MsgType:   MsgTypeText,
+			FragTotal: 1,
+			Content:   content,
+		}, nil
 	}
 
-	out := make([]byte, msgLen)
-	copy(out, plain[headerSize:headerSize+msgLen])
-	return out, nil
+	return MessagePayload{}, ErrNotOurMessage
 }

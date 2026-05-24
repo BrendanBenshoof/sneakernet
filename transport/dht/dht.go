@@ -1,10 +1,9 @@
 // Package dht discovers sneakernet relay peers via BitTorrent mainline DHT (BEP 5).
 //
-// All sneakernet nodes agree on a fixed info-hash derived from the project name.
-// Each node continuously calls get_peers for that info-hash, collects the tokens
-// returned by DHT nodes, and announces its relay HTTP port via announce_peer.
-// Other sneakernet nodes doing the same will see each other in the "values"
-// field of get_peers responses.
+// The DHT rendezvous key rotates each UTC hour: it is the SHA-1 of a fixed
+// prefix concatenated with the current Unix epoch divided by 3600. To tolerate
+// clock skew, nodes poll the previous, current, and next hour's info-hashes,
+// but only announce (announce_peer) to the current hour's hash.
 //
 // No modifications to the DHT network are made; this is a standard use of
 // BEP 5 announce_peer with implied_port=0 and an application-specific port.
@@ -21,9 +20,31 @@ import (
 	"time"
 )
 
-// sneakernetInfoHash is the fixed DHT rendezvous point for all sneakernet nodes.
-// Using a sha1 of a versioned string lets us change it in future protocol versions.
-var sneakernetInfoHash = sha1.Sum([]byte("test-sneakernet-relay-v1"))
+// dhtPrefix is the versioned string prefix for the rotating DHT info-hash.
+// Changing this prefix breaks compatibility with all existing nodes.
+const dhtPrefix = "sneakernet-relay-v2"
+
+// infoHashForHour returns the DHT info-hash for the given Unix hour index
+// (Unix epoch divided by 3600).
+func infoHashForHour(hour int64) [20]byte {
+	return sha1.Sum([]byte(fmt.Sprintf("%s-%d", dhtPrefix, hour)))
+}
+
+// currentInfoHash returns the info-hash for the current UTC hour.
+func currentInfoHash() [20]byte {
+	return infoHashForHour(time.Now().Unix() / 3600)
+}
+
+// dhtInfoHashes returns info-hashes for the previous, current, and next UTC
+// hours. Polling all three tolerates clock skew between peers.
+func dhtInfoHashes() [3][20]byte {
+	h := time.Now().Unix() / 3600
+	return [3][20]byte{
+		infoHashForHour(h - 1),
+		infoHashForHour(h),
+		infoHashForHour(h + 1),
+	}
+}
 
 var bootstrapAddrs = []string{
 	"router.bittorrent.com:6881",
@@ -83,8 +104,8 @@ func New(relayPort int) (*Discovery, error) {
 // The channel is buffered; drain it continuously to avoid blocking discovery.
 func (d *Discovery) Peers() <-chan string { return d.peers }
 
-// InfoHash returns the fixed DHT info-hash used as the sneakernet rendezvous key.
-func (d *Discovery) InfoHash() [20]byte { return sneakernetInfoHash }
+// InfoHash returns the current hour's DHT info-hash used as the sneakernet rendezvous key.
+func (d *Discovery) InfoHash() [20]byte { return currentInfoHash() }
 
 // Start opens a UDP socket, bootstraps into the mainline DHT, and continuously
 // discovers and announces peers. It blocks until ctx is cancelled.
@@ -111,7 +132,9 @@ func (d *Discovery) Start(ctx context.Context) error {
 		d.mu.Lock()
 		d.nodes[ua.String()] = &nodeEntry{addr: ua, seen: time.Now()}
 		d.mu.Unlock()
-		d.sendGetPeers(ua)
+		for _, h := range dhtInfoHashes() {
+			d.sendGetPeers(ua, h)
+		}
 	}
 
 	getPeersTick := time.NewTicker(getPeersInterval)
@@ -190,8 +213,8 @@ func (d *Discovery) dispatch(msg map[string]any, from *net.UDPAddr) {
 	}
 }
 
-// sendGetPeers sends a get_peers query for sneakernetInfoHash to addr.
-func (d *Discovery) sendGetPeers(addr *net.UDPAddr) {
+// sendGetPeers sends a get_peers query for the given info-hash to addr.
+func (d *Discovery) sendGetPeers(addr *net.UDPAddr, infoHash [20]byte) {
 	txid := d.newTxID()
 	d.mu.Lock()
 	d.pending[txid] = pendingReq{
@@ -205,7 +228,7 @@ func (d *Discovery) sendGetPeers(addr *net.UDPAddr) {
 		"q": "get_peers",
 		"a": map[string]any{
 			"id":        string(d.nodeID[:]),
-			"info_hash": string(sneakernetInfoHash[:]),
+			"info_hash": string(infoHash[:]),
 		},
 	})
 }
@@ -250,13 +273,17 @@ func (d *Discovery) handleGetPeersResp(from *net.UDPAddr, r map[string]any) {
 	if nodesRaw, ok := r["nodes"].(string); ok {
 		newAddrs := d.addCompactNodes([]byte(nodesRaw))
 		for _, ua := range newAddrs {
-			d.sendGetPeers(ua)
+			for _, h := range dhtInfoHashes() {
+				d.sendGetPeers(ua, h)
+			}
 		}
 	}
 }
 
-// sendAnnounce sends an announce_peer for sneakernetInfoHash with our relay port.
+// sendAnnounce sends an announce_peer for the current hour's info-hash with our relay port.
+// We always announce to the current hour only; peers poll prev/current/next to find us.
 func (d *Discovery) sendAnnounce(addr *net.UDPAddr, token []byte) {
+	h := currentInfoHash()
 	d.send(addr, map[string]any{
 		"t": d.newTxID(),
 		"y": "q",
@@ -264,7 +291,7 @@ func (d *Discovery) sendAnnounce(addr *net.UDPAddr, token []byte) {
 		"a": map[string]any{
 			"id":           string(d.nodeID[:]),
 			"implied_port": 0,
-			"info_hash":    string(sneakernetInfoHash[:]),
+			"info_hash":    string(h[:]),
 			"port":         d.port,
 			"token":        string(token),
 		},
@@ -279,8 +306,10 @@ func (d *Discovery) sendPong(txid string, to *net.UDPAddr) {
 	})
 }
 
-// broadcastGetPeers sends get_peers to every known node.
+// broadcastGetPeers sends get_peers to every known node for the previous,
+// current, and next hour's info-hashes.
 func (d *Discovery) broadcastGetPeers() {
+	hashes := dhtInfoHashes()
 	d.mu.Lock()
 	addrs := make([]*net.UDPAddr, 0, len(d.nodes))
 	for _, n := range d.nodes {
@@ -288,7 +317,9 @@ func (d *Discovery) broadcastGetPeers() {
 	}
 	d.mu.Unlock()
 	for _, addr := range addrs {
-		d.sendGetPeers(addr)
+		for _, h := range hashes {
+			d.sendGetPeers(addr, h)
+		}
 	}
 }
 
