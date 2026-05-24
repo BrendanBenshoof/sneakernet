@@ -3,6 +3,7 @@ package relay
 import (
 	"encoding/binary"
 	"fmt"
+	"time"
 
 	"github.com/brendanbenshoof/sneakernet/blockstore"
 )
@@ -10,31 +11,49 @@ import (
 const (
 	bloomBits  = 1 << 16 // 65 536 bits
 	bloomBytes = bloomBits / 8 // 8 192 bytes
+
+	// maxBloomPow is the highest PoW level tracked in the filter.
+	// Blocks with work_factor > maxBloomPow are treated as maxBloomPow.
+	maxBloomPow = 16
 )
 
-// Bloom is a fixed-size Bloom filter tuned for blockstore.IDs.
-// Uses 3 hash functions at byte offsets 0, 8, 16 of the ID.
-// False-positive rate ≈ 0.4 % at 1 000 items, ≈ 3.5 % at 5 000.
+// Bloom is a fixed-size Bloom filter that encodes both block identity and
+// proof-of-work level. Add(id, wf) sets bits at levels 0..wf, so Has(id, k)
+// returns true iff the filter contains id at work_factor >= k.
 type Bloom struct {
 	bits [bloomBytes]byte
 }
 
-func (b *Bloom) slot(id blockstore.ID, byteOffset int) uint32 {
-	return binary.BigEndian.Uint32(id[byteOffset:byteOffset+4]) & (bloomBits - 1)
+// slot returns the bit index for (id, level) using bytes at byteOffset.
+// The level is mixed in so that the same id at different levels maps to
+// different slots.
+func (b *Bloom) slot(id blockstore.ID, byteOffset, level int) uint32 {
+	v := binary.BigEndian.Uint32(id[byteOffset : byteOffset+4])
+	v ^= uint32(level) * 2654435761 // Knuth multiplicative hash
+	return v & (bloomBits - 1)
 }
 
-// Add inserts id into the filter.
-func (b *Bloom) Add(id blockstore.ID) {
-	for _, off := range []int{0, 8, 16} {
-		s := b.slot(id, off)
-		b.bits[s>>3] |= 1 << (s & 7)
+// Add inserts id into the filter at all levels from 0 up to min(wf, maxBloomPow).
+func (b *Bloom) Add(id blockstore.ID, wf int) {
+	if wf > maxBloomPow {
+		wf = maxBloomPow
+	}
+	for level := 0; level <= wf; level++ {
+		for _, off := range []int{0, 8, 16} {
+			s := b.slot(id, off, level)
+			b.bits[s>>3] |= 1 << (s & 7)
+		}
 	}
 }
 
-// Has reports whether id is probably in the filter (may false-positive, never false-negative).
-func (b *Bloom) Has(id blockstore.ID) bool {
+// Has reports whether id is probably present at work_factor >= wf.
+// Never false-negative: if Add(id, k) was called with k >= wf, Has returns true.
+func (b *Bloom) Has(id blockstore.ID, wf int) bool {
+	if wf > maxBloomPow {
+		wf = maxBloomPow
+	}
 	for _, off := range []int{0, 8, 16} {
-		s := b.slot(id, off)
+		s := b.slot(id, off, wf)
 		if b.bits[s>>3]&(1<<(s&7)) == 0 {
 			return false
 		}
@@ -59,15 +78,23 @@ func BloomFromBytes(data []byte) (*Bloom, error) {
 	return &b, nil
 }
 
-// BloomOfStore builds a Bloom filter containing every ID currently in store.
+// BloomOfStore builds a Bloom filter containing every non-expired block in
+// store, with each entry reflecting its actual work_factor.
 func BloomOfStore(store blockstore.Store) (*Bloom, error) {
-	ids, err := store.ListIDs()
-	if err != nil {
-		return nil, err
-	}
 	var b Bloom
-	for _, id := range ids {
-		b.Add(id)
+	pageToken := ""
+	for {
+		next, refs, err := store.ListBlocks(pageToken, 500, 0, time.Time{})
+		if err != nil {
+			return nil, err
+		}
+		for _, ref := range refs {
+			b.Add(ref.ID, ref.WorkFactor)
+		}
+		if next == "" {
+			break
+		}
+		pageToken = next
 	}
 	return &b, nil
 }

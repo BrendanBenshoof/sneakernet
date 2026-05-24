@@ -154,8 +154,10 @@ func peerURL(hostport string) string {
 const maxBackoffRounds = 64
 
 type peerState struct {
-	skipRounds int // rounds remaining before next attempt
-	failures   int // consecutive failed attempts
+	skipRounds int       // rounds remaining before next attempt
+	failures   int       // consecutive failed attempts
+	pullSince  time.Time // cursor: only pull blocks created after this time
+	pushSince  time.Time // cursor: only push blocks created after this time
 }
 
 // syncPeers collects relay addresses from DHT discovery and periodically
@@ -165,47 +167,65 @@ func syncPeers(ctx context.Context, store blockstore.Store, peers <-chan string,
 	var mu sync.Mutex
 	known := make(map[string]*peerState, maxPeers)
 
-	recordResult := func(u string, err error) {
+	syncOne := func(u string) {
+		// Read cursors under lock; do network I/O without holding it.
 		mu.Lock()
-		defer mu.Unlock()
 		st, ok := known[u]
 		if !ok {
+			mu.Unlock()
 			return
 		}
-		if err != nil {
-			st.failures++
-			rounds := 1 << st.failures
-			if rounds > maxBackoffRounds {
-				rounds = maxBackoffRounds
-			}
-			st.skipRounds = rounds
-			log.Printf("peer %s unreachable (failures: %d, retry in %d rounds)", u, st.failures, st.skipRounds)
-		} else {
-			if st.failures > 0 {
-				log.Printf("peer %s recovered", u)
-			}
-			st.failures = 0
-			st.skipRounds = 0
-		}
-	}
+		pullSince := st.pullSince
+		pushSince := st.pushSince
+		mu.Unlock()
 
-	syncOne := func(u string) {
 		c := relay.NewClient(u)
-		n, err := c.Pull(ctx, store, powFloor, time.Time{})
+
+		pullStart := time.Now()
+		n, err := c.Pull(ctx, store, powFloor, pullSince)
+
+		mu.Lock()
+		if st, ok := known[u]; ok {
+			if err != nil {
+				log.Printf("sync pull %s: %v", u, err)
+				st.failures++
+				rounds := 1 << st.failures
+				if rounds > maxBackoffRounds {
+					rounds = maxBackoffRounds
+				}
+				st.skipRounds = rounds
+				log.Printf("peer %s unreachable (failures: %d, retry in %d rounds)", u, st.failures, st.skipRounds)
+			} else {
+				if n > 0 {
+					log.Printf("sync pull %s: %d new blocks", u, n)
+				}
+				if st.failures > 0 {
+					log.Printf("peer %s recovered", u)
+				}
+				st.failures = 0
+				st.skipRounds = 0
+				st.pullSince = pullStart
+			}
+		}
+		mu.Unlock()
+
 		if err != nil {
-			log.Printf("sync pull %s: %v", u, err)
-			recordResult(u, err)
 			return
 		}
-		if n > 0 {
-			log.Printf("sync pull %s: %d new blocks", u, n)
-		}
-		if n, err := c.Push(ctx, store, powFloor, time.Time{}); err != nil {
+
+		pushStart := time.Now()
+		if n, err := c.Push(ctx, store, powFloor, pushSince); err != nil {
 			log.Printf("sync push %s: %v", u, err)
-		} else if n > 0 {
-			log.Printf("sync push %s: %d blocks uploaded", u, n)
+		} else {
+			if n > 0 {
+				log.Printf("sync push %s: %d blocks uploaded", u, n)
+			}
+			mu.Lock()
+			if st, ok := known[u]; ok {
+				st.pushSince = pushStart
+			}
+			mu.Unlock()
 		}
-		recordResult(u, nil)
 	}
 
 	addPeer := func(u string) (isNew bool) {
