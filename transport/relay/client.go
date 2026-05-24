@@ -201,10 +201,6 @@ func (c *Client) Pull(ctx context.Context, localStore blockstore.Store, powFloor
 		if err := ctx.Err(); err != nil {
 			return stored, err
 		}
-		// Skip blocks we actually have (bloom may false-positive in reverse).
-		if ok, _ := localStore.Has(id); ok {
-			continue
-		}
 		stamp, payload, err := c.Get(ctx, id)
 		if err != nil {
 			continue // relay may have pruned it between delta and get

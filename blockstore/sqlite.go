@@ -50,8 +50,14 @@ func (s *SQLiteStore) Put(stamp Stamp, payload Payload) (ID, error) {
 	expiresAt := now.Add(TTLFromWorkFactor(wf))
 
 	_, err := s.db.Exec(
-		`INSERT OR REPLACE INTO blocks (id, stamp, payload, work_factor, created_at, expires_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO blocks (id, stamp, payload, work_factor, created_at, expires_at)
+		 VALUES (?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(id) DO UPDATE SET
+		     stamp       = excluded.stamp,
+		     work_factor = excluded.work_factor,
+		     created_at  = excluded.created_at,
+		     expires_at  = excluded.expires_at
+		 WHERE excluded.work_factor > blocks.work_factor`,
 		id[:], stamp[:], payload[:], wf, now.Unix(), expiresAt.Unix(),
 	)
 	if err != nil {

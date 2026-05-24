@@ -219,11 +219,18 @@ func TestBloomNoFalseNegatives(t *testing.T) {
 	for i := range ids {
 		ids[i][0] = byte(i)
 		ids[i][1] = byte(i >> 8)
-		b.Add(ids[i])
+		b.Add(ids[i], 3)
 	}
 	for _, id := range ids {
-		if !b.Has(id) {
-			t.Errorf("false negative for id %x", id)
+		// Must be found at the added level and below.
+		for wf := 0; wf <= 3; wf++ {
+			if !b.Has(id, wf) {
+				t.Errorf("false negative for id %x at wf %d", id, wf)
+			}
+		}
+		// Must not be found above the added level.
+		if b.Has(id, 4) {
+			t.Errorf("false positive above PoW level for id %x", id)
 		}
 	}
 }
@@ -232,20 +239,39 @@ func TestBloomFromBytes(t *testing.T) {
 	var b relay.Bloom
 	var id blockstore.ID
 	id[0] = 0xAB
-	b.Add(id)
+	b.Add(id, 5)
 
 	data := b.Bytes()
 	b2, err := relay.BloomFromBytes(data)
 	if err != nil {
 		t.Fatalf("BloomFromBytes: %v", err)
 	}
-	if !b2.Has(id) {
-		t.Error("round-tripped bloom lost the inserted id")
+	if !b2.Has(id, 5) {
+		t.Error("round-tripped bloom lost the inserted id at wf 5")
+	}
+	if !b2.Has(id, 0) {
+		t.Error("round-tripped bloom lost the inserted id at wf 0")
 	}
 
 	_, err = relay.BloomFromBytes([]byte{0, 1, 2})
 	if err == nil {
 		t.Error("expected error for wrong-size bytes")
+	}
+}
+
+func TestBloomPowUpgrade(t *testing.T) {
+	// A block added at wf=2 should be visible up to level 2 but not level 3.
+	// The delta server should include it for a remote that has wf=3.
+	var b relay.Bloom
+	var id blockstore.ID
+	id[0] = 0xCC
+	b.Add(id, 2)
+
+	if !b.Has(id, 2) {
+		t.Error("expected Has(id, 2) true after Add(id, 2)")
+	}
+	if b.Has(id, 3) {
+		t.Error("expected Has(id, 3) false after Add(id, 2) — remote should send upgrade")
 	}
 }
 

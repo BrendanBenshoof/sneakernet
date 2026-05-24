@@ -175,7 +175,7 @@ func (s *Server) handleDelta(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		for _, ref := range refs {
-			if !bloom.Has(ref.ID) {
+			if !bloom.Has(ref.ID, ref.WorkFactor) {
 				ids = append(ids, hex.EncodeToString(ref.ID[:]))
 			}
 		}
