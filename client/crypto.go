@@ -32,6 +32,10 @@ const (
 	v1MaxContent = plaintextSize - v1HeaderSize
 )
 
+// channelSaltSize is the per-block random salt prepended to channel payloads.
+// It occupies the same first 32 bytes as the ephemeral pubkey in direct messages.
+const channelSaltSize = pubKeySize // 32
+
 // ErrNotOurMessage is returned by tryDecrypt when a block is not addressed to us.
 var ErrNotOurMessage = errors.New("client: not our message")
 
@@ -88,6 +92,65 @@ func encryptPlain(recipientPub *ecdh.PublicKey, plain [plaintextSize]byte) (bloc
 	copy(payload[pubKeySize:ciphertextOffset], nonce[:])
 	copy(payload[ciphertextOffset:], ct)
 	return payload, nil
+}
+
+// EncryptChannel encrypts mp into a fixed-size Payload using a symmetric channelKey.
+// Anyone who knows the passphrase (and thus the channelKey) can decrypt it.
+// The mp.Channel field is ignored (it is a local routing annotation, not wire data).
+func EncryptChannel(channelKey [32]byte, mp MessagePayload) (blockstore.Payload, error) {
+	plain, err := EncodePayload(mp)
+	if err != nil {
+		return blockstore.Payload{}, err
+	}
+
+	var salt [channelSaltSize]byte
+	if _, err := rand.Read(salt[:]); err != nil {
+		return blockstore.Payload{}, err
+	}
+
+	blockKey := sha256.Sum256(append(channelKey[:], salt[:]...))
+
+	aead, err := chacha20poly1305.NewX(blockKey[:])
+	if err != nil {
+		return blockstore.Payload{}, err
+	}
+
+	var nonce [nonceSize]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return blockstore.Payload{}, err
+	}
+
+	ct := aead.Seal(nil, nonce[:], plain[:], nil)
+
+	var payload blockstore.Payload
+	copy(payload[:channelSaltSize], salt[:])
+	copy(payload[channelSaltSize:ciphertextOffset], nonce[:])
+	copy(payload[ciphertextOffset:], ct)
+	return payload, nil
+}
+
+// tryDecryptChannel attempts to decrypt payload as a channel message using channelKey.
+func tryDecryptChannel(channelKey [32]byte, payload blockstore.Payload) (MessagePayload, error) {
+	blockKey := sha256.Sum256(append(channelKey[:], payload[:channelSaltSize]...))
+
+	aead, err := chacha20poly1305.NewX(blockKey[:])
+	if err != nil {
+		return MessagePayload{}, ErrNotOurMessage
+	}
+
+	plainSlice, err := aead.Open(nil, payload[channelSaltSize:ciphertextOffset], payload[ciphertextOffset:], nil)
+	if err != nil {
+		return MessagePayload{}, ErrNotOurMessage
+	}
+	if len(plainSlice) != plaintextSize {
+		return MessagePayload{}, ErrNotOurMessage
+	}
+
+	mp, err := DecodePayload([plaintextSize]byte(plainSlice))
+	if err != nil {
+		return MessagePayload{}, ErrNotOurMessage
+	}
+	return mp, nil
 }
 
 // tryDecrypt attempts to decrypt payload using privKey.

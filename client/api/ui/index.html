@@ -178,6 +178,20 @@
       color: var(--muted);
     }
 
+    /* ── channel badge ─────────────────────────────────── */
+    .ch-badge {
+      display: inline-block;
+      font-family: var(--mono);
+      font-size: 10px;
+      background: #2a3a5c;
+      color: var(--accent);
+      border: 1px solid #3a5080;
+      border-radius: 4px;
+      padding: 1px 6px;
+      margin-right: 6px;
+      vertical-align: middle;
+    }
+
     /* ── identities ────────────────────────────────────── */
     .id-item {
       background: var(--bg);
@@ -287,20 +301,46 @@
       <!-- compose -->
       <div class="section">
         <h2>Compose</h2>
-        <input id="recipient" placeholder="Recipient public key (base64)"
-               style="font-family:var(--mono);font-size:11px">
+        <div class="row" style="gap:0;border:1px solid var(--border);border-radius:6px;overflow:hidden">
+          <button id="mode-direct" class="ghost sm" style="flex:1;border-radius:0;border:none;border-right:1px solid var(--border)"
+                  onclick="setMode('direct')">Direct</button>
+          <button id="mode-channel" class="ghost sm" style="flex:1;border-radius:0;border:none"
+                  onclick="setMode('channel')">Channel</button>
+        </div>
+        <div id="compose-direct">
+          <input id="recipient" placeholder="Recipient public key (base64)"
+                 style="font-family:var(--mono);font-size:11px">
+        </div>
+        <div id="compose-channel" class="hidden">
+          <select id="channel-select" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 10px;width:100%;border-radius:6px;font-size:14px">
+            <option value="">— select channel —</option>
+          </select>
+        </div>
         <textarea id="msg-body" placeholder="Message…"></textarea>
         <button id="send-btn" onclick="send()">Send</button>
       </div>
 
       <!-- identities -->
-      <div class="section" style="flex:1">
+      <div class="section">
         <h2>Your identities</h2>
         <div id="id-list"></div>
         <div class="row">
           <input id="new-id-name" placeholder="Identity name"
                  onkeydown="if(event.key==='Enter')addIdentity()">
           <button class="sm" onclick="addIdentity()">Add</button>
+        </div>
+      </div>
+
+      <!-- channels -->
+      <div class="section" style="flex:1">
+        <h2>Channels</h2>
+        <div id="ch-list"></div>
+        <div class="row">
+          <input id="new-ch-name" placeholder="Channel name"
+                 onkeydown="if(event.key==='Enter')document.getElementById('new-ch-pass').focus()">
+          <input id="new-ch-pass" type="password" placeholder="Passphrase"
+                 onkeydown="if(event.key==='Enter')addChannel()">
+          <button class="sm" onclick="addChannel()">Join</button>
         </div>
       </div>
 
@@ -314,9 +354,10 @@
 
 <script>
 // ── state ──────────────────────────────────────────────────────────────
-let token   = sessionStorage.getItem('snk_token');
-let lastID  = 0;
+let token    = sessionStorage.getItem('snk_token');
+let lastID   = 0;
 let msgCount = 0;
+let composeMode = 'direct'; // 'direct' | 'channel'
 
 // ── boot ───────────────────────────────────────────────────────────────
 (async () => {
@@ -417,10 +458,11 @@ async function loadMessages() {
 
   msgs.forEach(m => {
     const content = b64toText(m.content);
+    const badge = m.channel ? `<span class="ch-badge">#${esc(m.channel)}</span>` : '';
     const div = document.createElement('div');
     div.className = 'msg-item';
     div.innerHTML =
-      `<div class="msg-meta">${esc(fmtTime(m.received_at))} &nbsp;·&nbsp; ${m.block_id.slice(0,12)}…</div>` +
+      `<div class="msg-meta">${badge}${esc(fmtTime(m.received_at))} &nbsp;·&nbsp; ${m.block_id.slice(0,12)}…</div>` +
       `<div class="msg-body">${esc(content)}</div>`;
     list.appendChild(div);
     if (m.id > lastID) lastID = m.id;
@@ -430,16 +472,35 @@ async function loadMessages() {
   el('msg-count').textContent = `${msgCount} message${msgCount === 1 ? '' : 's'}`;
 }
 
+// ── compose mode ────────────────────────────────────────────────────────
+function setMode(mode) {
+  composeMode = mode;
+  el('compose-direct').classList.toggle('hidden', mode !== 'direct');
+  el('compose-channel').classList.toggle('hidden', mode !== 'channel');
+  el('mode-direct').style.background  = mode === 'direct'  ? 'var(--accent)' : '';
+  el('mode-direct').style.color       = mode === 'direct'  ? '#fff' : '';
+  el('mode-channel').style.background = mode === 'channel' ? 'var(--accent)' : '';
+  el('mode-channel').style.color      = mode === 'channel' ? '#fff' : '';
+}
+
 // ── compose ────────────────────────────────────────────────────────────
 async function send() {
-  const recipientKey = el('recipient').value.trim();
   const body = el('msg-body').value;
-  if (!recipientKey || !body) { toast('Fill in recipient key and message.'); return; }
+  if (!body) { toast('Enter a message.'); return; }
 
   const btn = el('send-btn');
   btn.disabled = true;
   try {
-    const r = await api('POST', '/api/send', {recipient_public_key: recipientKey, message: body});
+    let r;
+    if (composeMode === 'direct') {
+      const recipientKey = el('recipient').value.trim();
+      if (!recipientKey) { toast('Fill in recipient key.'); return; }
+      r = await api('POST', '/api/send', {recipient_public_key: recipientKey, message: body});
+    } else {
+      const channelName = el('channel-select').value;
+      if (!channelName) { toast('Select a channel.'); return; }
+      r = await api('POST', '/api/send-channel', {channel_name: channelName, message: body});
+    }
     if (!r) return;
     if (!r.ok) { const d = await r.json(); toast('Send failed: ' + d.error, true); return; }
     el('msg-body').value = '';
@@ -483,6 +544,64 @@ async function addIdentity() {
   toast(`Identity "${name}" created.`);
 }
 
+// ── channels ───────────────────────────────────────────────────────────
+async function loadChannels() {
+  const r = await api('GET', '/api/channels');
+  if (!r || !r.ok) return;
+  const chs = await r.json();
+  const list = el('ch-list');
+  list.innerHTML = '';
+
+  // Rebuild channel-select dropdown.
+  const sel = el('channel-select');
+  const prev = sel.value;
+  sel.innerHTML = '<option value="">— select channel —</option>';
+
+  if (!chs?.length) {
+    list.innerHTML = '<p style="color:var(--muted);font-size:12px;margin-bottom:4px">No channels yet — join one to send and receive.</p>';
+    return;
+  }
+  chs.forEach(ch => {
+    const div = document.createElement('div');
+    div.className = 'id-item';
+    div.style.display = 'flex';
+    div.style.alignItems = 'center';
+    div.style.gap = '8px';
+    div.innerHTML =
+      `<span class="ch-badge" style="margin:0">#</span>` +
+      `<span class="id-name" style="flex:1">${esc(ch.name)}</span>` +
+      `<button class="ghost sm" onclick="removeChannel('${esc(ch.name)}')">Leave</button>`;
+    list.appendChild(div);
+
+    const opt = document.createElement('option');
+    opt.value = ch.name;
+    opt.textContent = '#' + ch.name;
+    sel.appendChild(opt);
+  });
+  if (prev) sel.value = prev;
+}
+
+async function addChannel() {
+  const name = el('new-ch-name').value.trim();
+  const pass = el('new-ch-pass').value;
+  if (!name || !pass) { toast('Enter channel name and passphrase.', true); return; }
+  const r = await api('POST', '/api/channels', {name, passphrase: pass});
+  if (!r) return;
+  if (r.status === 409) { toast('Channel name already joined.', true); return; }
+  if (!r.ok)            { toast('Failed to join channel.', true); return; }
+  el('new-ch-name').value = '';
+  el('new-ch-pass').value = '';
+  await loadChannels();
+  toast(`Joined channel "${name}".`);
+}
+
+async function removeChannel(name) {
+  const r = await api('DELETE', `/api/channels/${encodeURIComponent(name)}`);
+  if (!r || !r.ok) { toast('Failed to leave channel.', true); return; }
+  await loadChannels();
+  toast(`Left channel "${name}".`);
+}
+
 async function copyKey(key) {
   await navigator.clipboard.writeText(key);
   toast('Public key copied to clipboard.');
@@ -498,7 +617,8 @@ function showLock() {
 async function showApp() {
   el('lock-screen').classList.add('hidden');
   el('app').classList.remove('hidden');
-  await Promise.all([loadMessages(), loadIdentities()]);
+  setMode('direct');
+  await Promise.all([loadMessages(), loadIdentities(), loadChannels()]);
   status('Ready');
 }
 

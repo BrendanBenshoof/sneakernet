@@ -20,6 +20,7 @@ type Message struct {
 	SentAt     time.Time     // sender-claimed send time; zero = unknown
 	MsgType    uint8
 	Content    []byte
+	Channel    string // empty for direct messages; channel name for channel messages
 	ReceivedAt time.Time
 }
 
@@ -43,7 +44,7 @@ func OpenMessageStore(path string) (*MessageStore, error) {
 }
 
 func (s *MessageStore) migrate() error {
-	_, err := s.db.Exec(`
+	if _, err := s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS messages (
 			id          INTEGER PRIMARY KEY AUTOINCREMENT,
 			block_id    BLOB    NOT NULL UNIQUE,
@@ -55,8 +56,7 @@ func (s *MessageStore) migrate() error {
 			since_unix INTEGER NOT NULL DEFAULT 0
 		);
 		INSERT OR IGNORE INTO checkpoint (id, since_unix) VALUES (1, 0);
-	`)
-	if err != nil {
+	`); err != nil {
 		return err
 	}
 
@@ -67,6 +67,7 @@ func (s *MessageStore) migrate() error {
 		{"sent_at", "INTEGER DEFAULT NULL"},
 		{"msg_type", "INTEGER NOT NULL DEFAULT 0"},
 		{"frag_id", "BLOB DEFAULT NULL"},
+		{"channel", "TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, col := range addCols {
 		var count int
@@ -81,7 +82,7 @@ func (s *MessageStore) migrate() error {
 		}
 	}
 
-	_, err = s.db.Exec(`
+	_, err := s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS fragments (
 			frag_id     BLOB    NOT NULL,
 			frag_index  INTEGER NOT NULL,
@@ -92,6 +93,7 @@ func (s *MessageStore) migrate() error {
 			thread_refs BLOB,
 			sent_at     INTEGER,
 			msg_type    INTEGER NOT NULL DEFAULT 0,
+			channel     TEXT    NOT NULL DEFAULT '',
 			received_at INTEGER NOT NULL,
 			PRIMARY KEY (frag_id, frag_index)
 		);
@@ -127,8 +129,8 @@ func (s *MessageStore) SetCheckpoint(t time.Time) error {
 func (s *MessageStore) SaveMessage(blockID blockstore.ID, mp MessagePayload) (bool, error) {
 	result, err := s.db.Exec(
 		`INSERT OR IGNORE INTO messages
-			(block_id, content, received_at, sender_pub, thread_refs, sent_at, msg_type)
-			VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			(block_id, content, received_at, sender_pub, thread_refs, sent_at, msg_type, channel)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		blockID[:],
 		mp.Content,
 		time.Now().Unix(),
@@ -136,6 +138,7 @@ func (s *MessageStore) SaveMessage(blockID blockstore.ID, mp MessagePayload) (bo
 		encodeThreadRefs(mp.ThreadRefs),
 		zeroInt64(mp.Timestamp),
 		mp.MsgType,
+		mp.Channel,
 	)
 	if err != nil {
 		return false, fmt.Errorf("client: save message: %w", err)
@@ -157,8 +160,8 @@ func (s *MessageStore) SaveFragment(blockID blockstore.ID, mp MessagePayload) (b
 	_, err = tx.Exec(
 		`INSERT OR IGNORE INTO fragments
 			(frag_id, frag_index, frag_total, block_id, content,
-			 sender_pub, thread_refs, sent_at, msg_type, received_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			 sender_pub, thread_refs, sent_at, msg_type, channel, received_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		mp.FragID[:],
 		mp.FragIndex,
 		mp.FragTotal,
@@ -168,6 +171,7 @@ func (s *MessageStore) SaveFragment(blockID blockstore.ID, mp MessagePayload) (b
 		encodeThreadRefs(mp.ThreadRefs),
 		zeroInt64(mp.Timestamp),
 		mp.MsgType,
+		mp.Channel,
 		time.Now().Unix(),
 	)
 	if err != nil {
@@ -211,8 +215,8 @@ func (s *MessageStore) SaveFragment(blockID blockstore.ID, mp MessagePayload) (b
 
 	res, err := tx.Exec(
 		`INSERT OR IGNORE INTO messages
-			(block_id, content, received_at, sender_pub, thread_refs, sent_at, msg_type, frag_id)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			(block_id, content, received_at, sender_pub, thread_refs, sent_at, msg_type, channel, frag_id)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		firstBlockID[:],
 		buf.Bytes(),
 		time.Now().Unix(),
@@ -220,6 +224,7 @@ func (s *MessageStore) SaveFragment(blockID blockstore.ID, mp MessagePayload) (b
 		encodeThreadRefs(mp.ThreadRefs),
 		zeroInt64(mp.Timestamp),
 		mp.MsgType,
+		mp.Channel,
 		mp.FragID[:],
 	)
 	if err != nil {
@@ -238,7 +243,7 @@ func (s *MessageStore) SaveFragment(blockID blockstore.ID, mp MessagePayload) (b
 // GetMessage looks up a single message by block ID. Returns (Message{}, false, nil) if not found.
 func (s *MessageStore) GetMessage(blockID blockstore.ID) (Message, bool, error) {
 	row := s.db.QueryRow(
-		`SELECT id, block_id, content, received_at, sender_pub, thread_refs, sent_at, msg_type
+		`SELECT id, block_id, content, received_at, sender_pub, thread_refs, sent_at, msg_type, channel
 		 FROM messages WHERE block_id = ?`,
 		blockID[:],
 	)
@@ -260,7 +265,7 @@ func (s *MessageStore) ListMessages() ([]Message, error) {
 // ListMessagesAfter returns messages with id > afterID, ordered by receipt time.
 func (s *MessageStore) ListMessagesAfter(afterID int64) ([]Message, error) {
 	rows, err := s.db.Query(
-		`SELECT id, block_id, content, received_at, sender_pub, thread_refs, sent_at, msg_type
+		`SELECT id, block_id, content, received_at, sender_pub, thread_refs, sent_at, msg_type, channel
 		 FROM messages WHERE id > ? ORDER BY received_at ASC`,
 		afterID,
 	)
@@ -301,7 +306,7 @@ func scanMessage(s scanner) (Message, error) {
 	var msgType int
 
 	err := s.Scan(&m.ID, &blockBytes, &m.Content, &unix,
-		&senderPub, &threadRefsBlob, &sentAt, &msgType)
+		&senderPub, &threadRefsBlob, &sentAt, &msgType, &m.Channel)
 	if err != nil {
 		return Message{}, err
 	}

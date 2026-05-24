@@ -192,6 +192,7 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 		SentAt     string   `json:"sent_at,omitempty"`
 		MsgType    uint8    `json:"msg_type"`
 		Content    string   `json:"content"`
+		Channel    string   `json:"channel,omitempty"`
 		ReceivedAt string   `json:"received_at"`
 	}
 	out := make([]msgResp, len(msgs))
@@ -200,6 +201,7 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 			ID:         m.ID,
 			BlockID:    hex.EncodeToString(m.BlockID[:]),
 			Content:    base64.StdEncoding.EncodeToString(m.Content),
+			Channel:    m.Channel,
 			ReceivedAt: m.ReceivedAt.UTC().Format(time.RFC3339),
 			MsgType:    m.MsgType,
 		}
@@ -427,6 +429,130 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// GET /api/channels
+// Returns all stored channel names.
+func (s *Server) handleListChannels(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	chs := s.ks.ListChannels()
+	s.mu.RUnlock()
+
+	type chanResp struct {
+		Name string `json:"name"`
+	}
+	out := make([]chanResp, len(chs))
+	for i, ch := range chs {
+		out[i] = chanResp{Name: ch.Name}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// POST /api/channels  {"name":"...", "passphrase":"..."}
+// Derives a 32-byte channel key from passphrase, saves the keystore.
+func (s *Server) handleAddChannel(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name       string `json:"name"`
+		Passphrase string `json:"passphrase"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	if req.Name == "" || req.Passphrase == "" {
+		writeError(w, http.StatusBadRequest, "name and passphrase required")
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, err := s.ks.AddChannel(req.Name, req.Passphrase); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	if err := s.ks.Save(s.ksPath); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to save keystore")
+		return
+	}
+	s.rebuildScraper()
+
+	writeJSON(w, http.StatusCreated, map[string]string{"name": req.Name})
+}
+
+// DELETE /api/channels/{name}
+// Removes the named channel key from the keystore.
+func (s *Server) handleRemoveChannel(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.ks.RemoveChannel(name) {
+		writeError(w, http.StatusNotFound, "channel not found")
+		return
+	}
+	if err := s.ks.Save(s.ksPath); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to save keystore")
+		return
+	}
+	s.rebuildScraper()
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// POST /api/send-channel  {"channel_name":"...", "message":"..."}
+// Encrypts message with the named channel key and stores the resulting block.
+// The sender is anonymous — no identity information is embedded in the block.
+func (s *Server) handleSendChannel(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ChannelName string `json:"channel_name"`
+		Message     string `json:"message"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	if req.ChannelName == "" || req.Message == "" {
+		writeError(w, http.StatusBadRequest, "channel_name and message required")
+		return
+	}
+
+	s.mu.RLock()
+	chs := s.ks.ListChannels()
+	s.mu.RUnlock()
+
+	var channelKey [32]byte
+	found := false
+	for _, ch := range chs {
+		if ch.Name == req.ChannelName {
+			channelKey = ch.Key
+			found = true
+			break
+		}
+	}
+	if !found {
+		writeError(w, http.StatusNotFound, "channel not found")
+		return
+	}
+
+	mp := client.MessagePayload{
+		MsgType:   client.MsgTypeText,
+		FragTotal: 1,
+		Content:   []byte(req.Message),
+	}
+	payload, err := client.EncryptChannel(channelKey, mp)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	var stamp blockstore.Stamp
+	id, err := s.blocks.Put(stamp, payload)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to store block")
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]string{"block_id": hex.EncodeToString(id[:])})
 }
 
 // --- helpers ---

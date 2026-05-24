@@ -15,11 +15,12 @@ type Client struct {
 	blocks   blockstore.Store
 	messages *MessageStore
 	privKeys []*ecdh.PrivateKey
+	channels []Channel
 }
 
-// New creates a Client. Pass one key per identity; all are tried on every block.
-func New(blocks blockstore.Store, messages *MessageStore, privKeys ...*ecdh.PrivateKey) *Client {
-	return &Client{blocks: blocks, messages: messages, privKeys: privKeys}
+// New creates a Client. All identity and channel keys are tried on every block.
+func New(blocks blockstore.Store, messages *MessageStore, privKeys []*ecdh.PrivateKey, channels []Channel) *Client {
+	return &Client{blocks: blocks, messages: messages, privKeys: privKeys, channels: channels}
 }
 
 // Scrape pages through all blocks added since the last checkpoint, attempts
@@ -80,11 +81,18 @@ func (c *Client) Scrape(ctx context.Context) (int, error) {
 	return found, c.messages.SetCheckpoint(scanStart)
 }
 
-// tryAllKeys attempts decryption with each held private key.
-// Returns the MessagePayload and true on the first success.
+// tryAllKeys attempts decryption with each held private key and channel key.
+// Returns the MessagePayload and true on the first success. mp.Channel is set
+// to the channel name for channel messages, empty for direct messages.
 func (c *Client) tryAllKeys(payload blockstore.Payload) (MessagePayload, bool) {
 	for _, key := range c.privKeys {
 		if mp, err := tryDecrypt(key, payload); err == nil {
+			return mp, true
+		}
+	}
+	for _, ch := range c.channels {
+		if mp, err := tryDecryptChannel(ch.Key, payload); err == nil {
+			mp.Channel = ch.Name
 			return mp, true
 		}
 	}

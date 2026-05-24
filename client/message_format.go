@@ -53,6 +53,10 @@ type MessagePayload struct {
 	FragIndex  uint16
 	FragTotal  uint16         // 1 = single block
 	Content    []byte
+
+	// Channel is set by tryAllKeys to the channel name used to decrypt this
+	// payload. Empty for direct messages. Not part of the wire format.
+	Channel string
 }
 
 // IsFragment reports whether the FlagIsFragment bit is set.

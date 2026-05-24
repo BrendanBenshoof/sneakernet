@@ -89,9 +89,13 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/identities", s.auth(s.handleListIdentities))
 	s.mux.HandleFunc("POST /api/identities", s.auth(s.handleAddIdentity))
 	s.mux.HandleFunc("DELETE /api/identities/{name}", s.auth(s.handleRemoveIdentity))
+	s.mux.HandleFunc("GET /api/channels", s.auth(s.handleListChannels))
+	s.mux.HandleFunc("POST /api/channels", s.auth(s.handleAddChannel))
+	s.mux.HandleFunc("DELETE /api/channels/{name}", s.auth(s.handleRemoveChannel))
 	s.mux.HandleFunc("GET /api/messages", s.auth(s.handleListMessages))
 	s.mux.HandleFunc("POST /api/scrape", s.auth(s.handleScrape))
 	s.mux.HandleFunc("POST /api/send", s.auth(s.handleSend))
+	s.mux.HandleFunc("POST /api/send-channel", s.auth(s.handleSendChannel))
 }
 
 // auth wraps a handler requiring a valid Bearer token.
@@ -109,10 +113,10 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// rebuildScraper recreates the Client from the current keystore identities.
+// rebuildScraper recreates the Client from the current keystore identities and channels.
 // Caller must hold s.mu write lock.
 func (s *Server) rebuildScraper() {
-	s.scraper = client.New(s.blocks, s.msgs, s.ks.Keys()...)
+	s.scraper = client.New(s.blocks, s.msgs, s.ks.Keys(), s.ks.Channels())
 }
 
 func newToken() (string, error) {
