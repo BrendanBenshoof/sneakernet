@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -52,7 +53,17 @@ func cmdRelay(args []string) {
 	keystoreFile  := fs.String("keystore", "keystore.json", "keystore file path")
 	powFloor      := fs.Int("pow-floor", 0, "minimum proof-of-work for relay block acceptance")
 	syncInterval  := fs.Duration("sync-interval", 5*time.Minute, "interval between peer sync rounds")
+	peersFlag     := fs.String("peers", "", "comma-separated list of peer base URLs to always sync with (e.g. https://relay.example.com)")
 	fs.Parse(args)
+
+	var staticPeers []string
+	if *peersFlag != "" {
+		for _, p := range strings.Split(*peersFlag, ",") {
+			if p = strings.TrimSpace(p); p != "" {
+				staticPeers = append(staticPeers, p)
+			}
+		}
+	}
 
 	_, portStr, err := net.SplitHostPort(*relayAddr)
 	if err != nil {
@@ -115,7 +126,7 @@ func cmdRelay(args []string) {
 	}()
 
 	// Sync loop: collect DHT-discovered peers and exchange blocks with them.
-	go syncPeers(ctx, bs, disc.Peers(), *powFloor, *syncInterval)
+	go syncPeers(ctx, bs, disc.Peers(), *powFloor, *syncInterval, staticPeers)
 
 	// User-facing API server.
 	apiSrv := api.New(bs, ms, *keystoreFile)
@@ -140,35 +151,101 @@ func peerURL(hostport string) string {
 	return "http://" + hostport
 }
 
+const maxBackoffRounds = 64
+
+type peerState struct {
+	skipRounds int // rounds remaining before next attempt
+	failures   int // consecutive failed attempts
+}
+
 // syncPeers collects relay addresses from DHT discovery and periodically
 // pushes and pulls blocks to/from each known peer.
-func syncPeers(ctx context.Context, store blockstore.Store, peers <-chan string, powFloor int, interval time.Duration) {
-	var mu sync.RWMutex
-	known := make(map[string]struct{}, maxPeers)
+// known stores full base URLs; staticPeers are pre-seeded and never evicted.
+func syncPeers(ctx context.Context, store blockstore.Store, peers <-chan string, powFloor int, interval time.Duration, staticPeers []string) {
+	var mu sync.Mutex
+	known := make(map[string]*peerState, maxPeers)
+
+	recordResult := func(u string, err error) {
+		mu.Lock()
+		defer mu.Unlock()
+		st, ok := known[u]
+		if !ok {
+			return
+		}
+		if err != nil {
+			st.failures++
+			rounds := 1 << st.failures
+			if rounds > maxBackoffRounds {
+				rounds = maxBackoffRounds
+			}
+			st.skipRounds = rounds
+			log.Printf("peer %s unreachable (failures: %d, retry in %d rounds)", u, st.failures, st.skipRounds)
+		} else {
+			if st.failures > 0 {
+				log.Printf("peer %s recovered", u)
+			}
+			st.failures = 0
+			st.skipRounds = 0
+		}
+	}
+
+	syncOne := func(u string) {
+		c := relay.NewClient(u)
+		n, err := c.Pull(ctx, store, powFloor, time.Time{})
+		if err != nil {
+			log.Printf("sync pull %s: %v", u, err)
+			recordResult(u, err)
+			return
+		}
+		if n > 0 {
+			log.Printf("sync pull %s: %d new blocks", u, n)
+		}
+		if n, err := c.Push(ctx, store, powFloor, time.Time{}); err != nil {
+			log.Printf("sync push %s: %v", u, err)
+		} else if n > 0 {
+			log.Printf("sync push %s: %d blocks uploaded", u, n)
+		}
+		recordResult(u, nil)
+	}
+
+	addPeer := func(u string) (isNew bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		if _, exists := known[u]; !exists && len(known) < maxPeers {
+			known[u] = &peerState{}
+			return true
+		}
+		return false
+	}
+
+	for _, u := range staticPeers {
+		addPeer(u)
+		log.Printf("static peer: %s", u)
+		go syncOne(u)
+	}
 
 	doSync := func() {
-		mu.RLock()
-		addrs := make([]string, 0, len(known))
-		for addr := range known {
-			addrs = append(addrs, addr)
+		mu.Lock()
+		type entry struct {
+			url string
+			st  *peerState
 		}
-		mu.RUnlock()
+		var ready []string
+		for u, st := range known {
+			if st.skipRounds > 0 {
+				st.skipRounds--
+				log.Printf("skipping peer %s (backoff: %d rounds remaining, %d failures)", u, st.skipRounds, st.failures)
+				continue
+			}
+			ready = append(ready, u)
+		}
+		mu.Unlock()
 
-		for _, addr := range addrs {
+		for _, u := range ready {
 			if ctx.Err() != nil {
 				return
 			}
-			c := relay.NewClient(peerURL(addr))
-			if n, err := c.Pull(ctx, store, powFloor, time.Time{}); err != nil {
-				log.Printf("sync pull %s: %v", addr, err)
-			} else if n > 0 {
-				log.Printf("sync pull %s: %d new blocks", addr, n)
-			}
-			if n, err := c.Push(ctx, store, powFloor, time.Time{}); err != nil {
-				log.Printf("sync push %s: %v", addr, err)
-			} else if n > 0 {
-				log.Printf("sync push %s: %d blocks uploaded", addr, n)
-			}
+			syncOne(u)
 		}
 	}
 
@@ -180,14 +257,11 @@ func syncPeers(ctx context.Context, store blockstore.Store, peers <-chan string,
 		case <-ctx.Done():
 			return
 		case addr := <-peers:
-			mu.Lock()
-			if len(known) < maxPeers {
-				if _, exists := known[addr]; !exists {
-					known[addr] = struct{}{}
-					log.Printf("discovered peer: %s", addr)
-				}
+			u := peerURL(addr)
+			if addPeer(u) {
+				log.Printf("discovered peer: %s", u)
+				go syncOne(u)
 			}
-			mu.Unlock()
 		case <-ticker.C:
 			doSync()
 		}
