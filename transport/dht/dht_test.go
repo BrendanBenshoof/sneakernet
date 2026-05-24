@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"reflect"
 	"testing"
+	"time"
 )
 
 // --- bencode ---
@@ -195,25 +196,50 @@ func TestDiscoveryNew(t *testing.T) {
 	if d.nodeID == [20]byte{} {
 		t.Error("node ID should not be all zeros")
 	}
-	if d.InfoHash() != sneakernetInfoHash {
-		t.Error("InfoHash mismatch")
+	if d.InfoHash() == ([20]byte{}) {
+		t.Error("InfoHash should not be zero")
 	}
 }
 
 func TestInfoHash(t *testing.T) {
-	// Verify the info-hash is stable. If this changes, all existing nodes
-	// stop seeing each other, so pin it here as a regression guard.
-	want := "3f6e7a9b2c8d4e5f1a0b3c7d9e2f4a6b8c1d5e7f"
-	got := hex.EncodeToString(sneakernetInfoHash[:])
-	// We compute the actual hash rather than hard-code it, so just verify
-	// it's 20 bytes and deterministic across two calls.
+	h := time.Now().Unix() / 3600
+
+	// Same hour always produces the same hash.
+	if infoHashForHour(h) != infoHashForHour(h) {
+		t.Error("infoHashForHour is not deterministic")
+	}
+	// Adjacent hours must differ.
+	if infoHashForHour(h) == infoHashForHour(h+1) {
+		t.Error("adjacent hours should have different info-hashes")
+	}
+	// InfoHash() returns a 20-byte non-zero value consistent between Discovery instances.
 	d1, _ := New(1234)
 	d2, _ := New(5678)
 	if d1.InfoHash() != d2.InfoHash() {
-		t.Error("InfoHash is not deterministic")
+		t.Error("InfoHash is not deterministic within the same hour")
 	}
-	if len(got) != 40 {
+	ih := d1.InfoHash()
+	if got := hex.EncodeToString(ih[:]); len(got) != 40 {
 		t.Errorf("InfoHash wrong length: %s", got)
 	}
-	_ = want
+}
+
+func TestDHTInfoHashes(t *testing.T) {
+	h := time.Now().Unix() / 3600
+	hashes := dhtInfoHashes()
+
+	// Must be exactly prev, current, next.
+	if hashes[0] != infoHashForHour(h-1) {
+		t.Error("dhtInfoHashes[0] should be previous hour")
+	}
+	if hashes[1] != infoHashForHour(h) {
+		t.Error("dhtInfoHashes[1] should be current hour")
+	}
+	if hashes[2] != infoHashForHour(h+1) {
+		t.Error("dhtInfoHashes[2] should be next hour")
+	}
+	// All three must be distinct.
+	if hashes[0] == hashes[1] || hashes[1] == hashes[2] || hashes[0] == hashes[2] {
+		t.Error("prev/current/next info-hashes should all differ")
+	}
 }
