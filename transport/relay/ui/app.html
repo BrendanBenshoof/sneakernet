@@ -319,6 +319,23 @@
     }
     .msg-sender { color: var(--accent); font-weight: 500; }
     .msg-sender.anon { color: var(--muted); font-style: italic; }
+    .msg-sender.addable { cursor: pointer; text-decoration: underline dotted; }
+    .msg-sender.addable:hover { color: var(--ok); }
+    .snk-hint { font-size: 9px; opacity: .6; }
+    .snk-inline-card {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 3px 0 4px;
+      padding: 5px 8px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--muted);
+    }
+    .snk-inline-card .snk-card-uri { flex: 1; word-break: break-all; }
     .msg-time { color: var(--muted); }
     .msg-time.delayed { color: #c09050; }
     .msg-block-id { color: var(--border); font-size: 9px; }
@@ -1420,6 +1437,14 @@ function parseSnkUri(uri) {
   if (pubPart.length !== 43) return null;
   return {name, public_key: fromB64url(pubPart)};
 }
+function parseSnkHeader(contentText, senderPub) {
+  if (!contentText || !senderPub) return {claimedName: null, bodyText: contentText || ''};
+  const nl = contentText.indexOf('\n');
+  const firstLine = nl >= 0 ? contentText.slice(0, nl) : contentText;
+  const parsed = parseSnkUri(firstLine);
+  if (!parsed || parsed.public_key !== senderPub) return {claimedName: null, bodyText: contentText};
+  return {claimedName: parsed.name, bodyText: nl >= 0 ? contentText.slice(nl + 1) : ''};
+}
 async function contactHash(pubKeyB64) {
   const bytes = Uint8Array.from(atob(pubKeyB64), c => c.charCodeAt(0));
   const hash = await crypto.subtle.digest('SHA-256', bytes);
@@ -1796,12 +1821,46 @@ function makeMsgRow(m, {hasPred, hasSucc, isFork, forkFirst, forkLast}) {
       </div>
       <div class="msg-content ${m.msg_type === 1 ? 'binary' : m.msg_type === 2 ? 'system' : ''}">${renderContent(m)}</div>
     </div>`;
+
+  const senderEl = div.querySelector('[data-snk-uri]');
+  if (senderEl) senderEl.addEventListener('click', () => toggleSnkCard(senderEl));
+
   return div;
+}
+
+function toggleSnkCard(senderEl) {
+  if (senderEl._snkCard) { senderEl._snkCard.remove(); senderEl._snkCard = null; return; }
+  const {snkUri: uri, snkName: name, snkKey: key} = senderEl.dataset;
+  const card = document.createElement('div');
+  card.className = 'snk-inline-card';
+  card.innerHTML = `<span class="snk-card-uri">${esc(uri)}</span><button class="sm">Add contact</button>`;
+  card.querySelector('button').addEventListener('click', async e => {
+    e.stopPropagation();
+    try {
+      await backend.addContact(name, key);
+      card.remove(); senderEl._snkCard = null;
+      await loadContacts();
+      rebuildConversations(); renderSidebar();
+      if (currentView) rerenderCurrentView();
+      toast(`Added "${name}" to contacts.`);
+    } catch(err) {
+      toast(err.message === 'duplicate' ? 'Already in contacts.' : 'Failed to add contact.', true);
+    }
+  });
+  senderEl._snkCard = card;
+  senderEl.closest('.msg-meta').insertAdjacentElement('afterend', card);
 }
 
 function renderSenderMeta(m) {
   if (!m.sender_pub) return '<span class="msg-sender anon">anon</span>';
-  return `<span class="msg-sender">${esc(resolveSenderDisplay(m.sender_pub))}</span>`;
+  const {claimedName} = parseSnkHeader(m.content_text, m.sender_pub);
+  const knownName = resolveByPub(m.sender_pub);
+  const name = knownName || claimedName || (m.sender_pub.slice(0, 8) + '…');
+  if (claimedName && !knownName) {
+    const uri = esc(snkUri(claimedName, m.sender_pub));
+    return `<span class="msg-sender addable" data-snk-uri="${uri}" data-snk-name="${esc(claimedName)}" data-snk-key="${esc(m.sender_pub)}">${esc(name)} <span class="snk-hint">+</span></span>`;
+  }
+  return `<span class="msg-sender">${esc(name)}</span>`;
 }
 
 function renderTimeMeta(m) {
@@ -1817,7 +1876,8 @@ function renderTimeMeta(m) {
 
 function renderContent(m) {
   if (m.msg_type === 1) return `[binary, ${b64byteLen(m.content)} bytes]`;
-  return esc(m.content_text);
+  const {bodyText} = parseSnkHeader(m.content_text, m.sender_pub);
+  return esc(bodyText);
 }
 
 // ── compose ────────────────────────────────────────────────────────────────
@@ -1908,8 +1968,11 @@ function openNewMsg() {
 
 // ── send ───────────────────────────────────────────────────────────────────
 async function send() {
-  const body = el('compose-body').value.trim();
-  if (!body) { toast('Enter a message.'); return; }
+  const rawBody = el('compose-body').value.trim();
+  if (!rawBody) { toast('Enter a message.'); return; }
+  const body = activeIdentity
+    ? snkUri(activeIdentity.name, activeIdentity.public_key) + '\n' + rawBody
+    : rawBody;
 
   const mode = el('send-btn').dataset.mode;
   const btn  = el('send-btn');
