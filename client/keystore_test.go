@@ -21,7 +21,7 @@ func TestKeystoreRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	wantPub := id.Key.PublicKey().Bytes()
+	wantPub := []byte(id.PublicKey())
 
 	if err := ks.Save(path); err != nil {
 		t.Fatalf("Save: %v", err)
@@ -35,7 +35,7 @@ func TestKeystoreRoundtrip(t *testing.T) {
 	if len(ids) != 1 || ids[0].Name != "alice" {
 		t.Fatalf("expected [alice], got %v", ids)
 	}
-	if string(ids[0].Key.PublicKey().Bytes()) != string(wantPub) {
+	if string(ids[0].PublicKey()) != string(wantPub) {
 		t.Fatal("public key mismatch after reload")
 	}
 }
@@ -102,7 +102,7 @@ func TestKeystoreChangePassword(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantPub := id.Key.PublicKey().Bytes()
+	wantPub := []byte(id.PublicKey())
 
 	if err := ks.ChangePassword([]byte("new")); err != nil {
 		t.Fatal(err)
@@ -123,7 +123,7 @@ func TestKeystoreChangePassword(t *testing.T) {
 	if len(ids) != 1 || ids[0].Name != "carol" {
 		t.Fatalf("unexpected identities after password change: %v", ids)
 	}
-	if string(ids[0].Key.PublicKey().Bytes()) != string(wantPub) {
+	if string(ids[0].PublicKey()) != string(wantPub) {
 		t.Fatal("key changed after password rotation")
 	}
 }
@@ -167,7 +167,7 @@ func TestKeystoreMultiKeyClient(t *testing.T) {
 
 	for _, id := range []*Identity{id1, id2} {
 		mp := MessagePayload{MsgType: MsgTypeText, FragTotal: 1, Content: []byte("hi " + id.Name)}
-		payload, err := Encrypt(id.Key.PublicKey(), mp)
+		payload, err := Encrypt(id.PublicKey(), mp)
 		if err != nil {
 			t.Fatal(err)
 		}
