@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Sneakernet Relay — Browser Demo</title>
+  <title>Sneakernet — Browser</title>
   <style>
     :root {
       --bg:           #0f1117;
@@ -15,7 +15,8 @@
       --muted:        #8b8fa8;
       --danger:       #e05a5a;
       --ok:           #4caf7d;
-      --mono: 'SF Mono','Fira Code','Cascadia Code',monospace;
+      --mono:         'SF Mono','Fira Code','Cascadia Code',monospace;
+      --sidebar-w:    240px;
     }
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -27,6 +28,7 @@
       display: flex;
       flex-direction: column;
       font-size: 14px;
+      overflow: hidden;
     }
 
     .hidden { display: none !important; }
@@ -46,7 +48,7 @@
     }
     input:focus, textarea:focus, select:focus { outline: none; border-color: var(--accent); }
     select { cursor: pointer; }
-    textarea { resize: vertical; min-height: 90px; line-height: 1.5; }
+    textarea { resize: vertical; min-height: 72px; line-height: 1.5; }
 
     button {
       background: var(--accent);
@@ -67,55 +69,326 @@
       color: var(--text);
     }
     button.ghost:hover { background: var(--surface); }
+    button.sm { padding: 5px 10px; font-size: 12px; }
     button.danger { background: var(--danger); }
     button.danger:hover { background: #c04040; }
-    button.sm { padding: 5px 10px; font-size: 12px; }
+    button.icon { padding: 4px 8px; font-size: 16px; background: transparent; border: none; color: var(--muted); border-radius: 4px; }
+    button.icon:hover { color: var(--text); background: var(--surface); }
 
-    /* ── header + tabs ─────────────────────────────────── */
-    header {
-      background: var(--surface);
-      border-bottom: 1px solid var(--border);
-      padding: 0 16px;
+    /* ── lock screen ─────────────────────────────────────────── */
+    #lock-screen {
+      flex: 1;
       display: flex;
-      align-items: stretch;
-      gap: 0;
-      flex-shrink: 0;
+      align-items: center;
+      justify-content: center;
     }
-    header h1 {
-      font-size: 15px;
-      padding: 12px 16px 12px 0;
-      margin-right: 8px;
-      border-right: 1px solid var(--border);
-      white-space: nowrap;
-      align-self: center;
+    .lock-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 2rem;
+      width: 100%;
+      max-width: 340px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
     }
-    nav.tabs { display: flex; align-items: stretch; }
-    .tab-btn {
-      background: transparent;
-      border: none;
-      border-bottom: 2px solid transparent;
-      color: var(--muted);
-      cursor: pointer;
-      font-size: 13px;
-      font-weight: 500;
-      padding: 12px 14px 10px;
-      transition: color .15s, border-color .15s;
-      border-radius: 0;
-    }
-    .tab-btn:hover { color: var(--text); background: transparent; }
-    .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+    .lock-card h1 { font-size: 20px; margin-bottom: 4px; }
+    .lock-card .sub { color: var(--muted); font-size: 12px; margin-top: -4px; margin-bottom: 6px; }
+    #lock-err { color: var(--danger); font-size: 12px; min-height: 16px; }
 
-    /* ── content ───────────────────────────────────────── */
-    #content {
+    /* ── app shell: two-pane ─────────────────────────────── */
+    #app {
+      flex: 1;
+      display: flex;
+      overflow: hidden;
+    }
+
+    /* ── sidebar ─────────────────────────────────────────────── */
+    #sidebar {
+      width: var(--sidebar-w);
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      overflow: hidden;
+    }
+
+    #sb-header {
+      display: flex;
+      align-items: center;
+      padding: 12px 12px 12px 14px;
+      border-bottom: 1px solid var(--border);
+      gap: 4px;
+    }
+    #sb-header h1 { flex: 1; font-size: 14px; font-weight: 600; }
+    #sb-header .sub { font-size: 10px; color: var(--muted); font-weight: 400; }
+
+    #sb-body {
       flex: 1;
       overflow-y: auto;
-      padding: 20px;
-      max-width: 760px;
-      width: 100%;
-      margin: 0 auto;
     }
 
-    .section {
+    .sb-section { padding: 8px 0; border-bottom: 1px solid var(--border); }
+    .sb-section:last-of-type { border-bottom: none; }
+
+    .sb-section-title {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      color: var(--muted);
+      padding: 4px 14px 2px;
+      display: flex;
+      align-items: center;
+    }
+    .sb-section-title button.icon { margin-left: auto; padding: 1px 6px; font-size: 14px; }
+    .contact-hash { font-family: var(--mono); font-size: 10px; color: var(--muted); margin-left: 3px; }
+
+    #sb-ch-form {
+      padding: 6px 10px 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+    #sb-ch-form input { font-size: 12px; padding: 5px 8px; }
+    #sb-ch-form .row { gap: 5px; }
+    #sb-ch-form .row button { flex: 1; font-size: 12px; padding: 5px 8px; }
+
+    .sb-item {
+      display: flex;
+      align-items: center;
+      padding: 7px 10px 7px 14px;
+      cursor: pointer;
+      border-radius: 0;
+      gap: 6px;
+      color: var(--text);
+      font-size: 13px;
+      transition: background .1s;
+    }
+    .sb-item:hover { background: var(--bg); }
+    .sb-item.active { background: var(--bg); color: var(--accent); }
+    .sb-item .sb-name { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .sb-item .sb-badge {
+      font-size: 10px;
+      background: var(--accent);
+      color: #fff;
+      border-radius: 10px;
+      padding: 1px 6px;
+      flex-shrink: 0;
+    }
+    .sb-hash { color: var(--muted); font-size: 12px; }
+
+    #sb-footer {
+      border-top: 1px solid var(--border);
+      padding: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    #sb-footer button {
+      width: 100%;
+      text-align: left;
+      background: transparent;
+      border: none;
+      color: var(--muted);
+      font-size: 12px;
+      padding: 6px 8px;
+      border-radius: 5px;
+    }
+    #sb-footer button:hover { background: var(--bg); color: var(--text); }
+
+    /* ── main pane ───────────────────────────────────────────── */
+    #main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      background: var(--bg);
+    }
+
+    #conv-header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 49px;
+      flex-shrink: 0;
+    }
+    #conv-header h2 { font-size: 14px; font-weight: 600; flex: 1; }
+    #conv-header .sub { font-size: 11px; color: var(--muted); }
+    #mobile-back { display: none; }
+    #identity-picker {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-left: auto;
+      flex-shrink: 0;
+    }
+    #identity-picker select {
+      width: auto;
+      font-size: 12px;
+      padding: 4px 8px;
+    }
+
+    #conv-messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+    }
+
+    .empty-state {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      color: var(--muted);
+      font-size: 13px;
+      text-align: center;
+      padding: 32px;
+    }
+
+    /* ── causal chain visuals ────────────────────────────────── */
+    .thread-container { display: flex; flex-direction: column; }
+
+    .msg-row {
+      display: flex;
+      gap: 0;
+      padding: 4px 0;
+    }
+
+    .connector-col {
+      width: 20px;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .conn-top {
+      width: 2px;
+      flex: 1;
+      background: var(--border);
+      min-height: 8px;
+    }
+    .conn-bottom {
+      width: 2px;
+      flex: 1;
+      background: var(--border);
+      min-height: 8px;
+    }
+    .conn-none { flex: 1; }
+
+    .bullet {
+      color: var(--accent);
+      font-size: 10px;
+      line-height: 1;
+      flex-shrink: 0;
+      margin: 3px 0;
+    }
+    .bullet.fork-first { color: var(--ok); }
+    .bullet.fork-mid   { color: var(--muted); }
+    .bullet.fork-last  { color: var(--muted); }
+
+    .msg-body-col {
+      flex: 1;
+      min-width: 0;
+      padding: 4px 0 4px 8px;
+    }
+
+    .msg-meta {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--muted);
+      margin-bottom: 3px;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .msg-sender { color: var(--accent); font-weight: 500; }
+    .msg-sender.anon { color: var(--muted); font-style: italic; }
+    .msg-time { color: var(--muted); }
+    .msg-time.delayed { color: #c09050; }
+    .msg-block-id { color: var(--border); font-size: 9px; }
+
+    .msg-content { line-height: 1.55; word-break: break-word; white-space: pre-wrap; }
+    .msg-content.binary { color: var(--muted); font-style: italic; }
+    .msg-content.system { color: var(--muted); font-style: italic; }
+
+    .gap-node {
+      display: flex;
+      gap: 0;
+      padding: 2px 0;
+    }
+    .gap-connector-col {
+      width: 20px;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .gap-line-top, .gap-line-bottom {
+      width: 2px;
+      flex: 1;
+      background: repeating-linear-gradient(
+        to bottom,
+        var(--border) 0px,
+        var(--border) 4px,
+        transparent 4px,
+        transparent 8px
+      );
+      min-height: 6px;
+    }
+    .gap-label {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--muted);
+      padding: 2px 0 2px 8px;
+      flex: 1;
+      opacity: .7;
+    }
+
+    /* ── compose ─────────────────────────────────────────────── */
+    #compose-area {
+      border-top: 1px solid var(--border);
+      padding: 12px 16px;
+      background: var(--surface);
+      flex-shrink: 0;
+    }
+
+    .compose-ctx {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    .compose-ctx .ctx-val { color: var(--accent); }
+
+    .compose-row {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 6px;
+    }
+    .compose-row input, .compose-row select { flex: 1; }
+
+    .compose-bottom {
+      display: flex;
+      gap: 6px;
+      align-items: flex-end;
+    }
+    .compose-bottom textarea { flex: 1; min-height: 60px; }
+
+    /* ── identities / channels panel ─────────────────────── */
+    #panel-view {
+      padding: 20px;
+      overflow-y: auto;
+      flex: 1;
+    }
+
+    .panel-section {
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 10px;
@@ -125,33 +398,38 @@
       flex-direction: column;
       gap: 10px;
     }
-    .section h2 {
-      font-size: 11px;
-      text-transform: uppercase;
-      letter-spacing: .06em;
-      color: var(--muted);
-      margin-bottom: 2px;
-    }
+    .panel-section h2 { font-size: 15px; }
+    .panel-section p.hint { font-size: 12px; color: var(--muted); }
 
-    .row { display: flex; gap: 8px; align-items: flex-start; }
-    .row input, .row select { flex: 1; }
-
-    /* ── messages ──────────────────────────────────────── */
-    .msg-item {
+    .card {
+      background: var(--bg);
       border: 1px solid var(--border);
       border-radius: 8px;
-      padding: 12px;
-      margin-bottom: 10px;
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
     }
-    .msg-meta {
+    .card-header { display: flex; align-items: center; gap: 8px; }
+    .card-name { font-size: 13px; font-weight: 500; flex: 1; }
+    .card-key-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 6px;
+    }
+    .card-key-info { flex: 1; min-width: 0; }
+    .card-key-label { font-size: 10px; color: var(--muted); margin-bottom: 2px; }
+    .card-key {
       font-family: var(--mono);
-      font-size: 11px;
+      font-size: 10px;
       color: var(--muted);
-      margin-bottom: 6px;
+      word-break: break-all;
+      line-height: 1.4;
     }
-    .msg-body { line-height: 1.55; word-break: break-word; white-space: pre-wrap; }
 
-    /* ── channel badge ─────────────────────────────────── */
+    .row { display: flex; gap: 6px; }
+    .row input, .row select { flex: 1; }
+
     .ch-badge {
       display: inline-block;
       font-family: var(--mono);
@@ -161,45 +439,13 @@
       border: 1px solid #3a5080;
       border-radius: 4px;
       padding: 1px 6px;
-      margin-right: 6px;
-      vertical-align: middle;
     }
 
-    /* ── identity / contact cards ──────────────────────── */
-    .card {
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 10px 12px;
-      display: flex;
-      align-items: flex-start;
-      gap: 10px;
-    }
-    .card-info { flex: 1; min-width: 0; }
-    .card-name { font-size: 13px; font-weight: 500; margin-bottom: 3px; }
-    .card-key {
-      font-family: var(--mono);
-      font-size: 10px;
-      color: var(--muted);
-      word-break: break-all;
-      cursor: pointer;
-      line-height: 1.4;
-    }
-    .card-key:hover { color: var(--accent); }
-    .card-actions { display: flex; gap: 6px; flex-shrink: 0; align-items: center; }
-
-    .empty {
-      padding: 32px 0;
-      text-align: center;
-      color: var(--muted);
-      font-size: 13px;
-    }
-
-    /* ── status / toast ────────────────────────────────── */
+    /* ── status bar ──────────────────────────────────────────── */
     #statusbar {
       font-size: 11px;
       color: var(--muted);
-      padding: 5px 16px;
+      padding: 4px 16px;
       background: var(--surface);
       border-top: 1px solid var(--border);
       flex-shrink: 0;
@@ -207,6 +453,7 @@
     #statusbar.ok  { color: var(--ok); }
     #statusbar.err { color: var(--danger); }
 
+    /* ── toast ───────────────────────────────────────────────── */
     #toast {
       position: fixed;
       bottom: 20px;
@@ -221,121 +468,130 @@
       opacity: 0;
       transition: opacity .2s;
       white-space: nowrap;
+      z-index: 100;
     }
     #toast.show { opacity: 1; }
 
-    @media (max-width: 500px) {
-      .tab-btn { padding: 12px 10px 10px; font-size: 12px; }
-      #content { padding: 14px; }
+    /* ── mobile ──────────────────────────────────────────────── */
+    @media (max-width: 600px) {
+      #sidebar {
+        position: fixed;
+        left: 0; top: 0; bottom: 0;
+        z-index: 50;
+        transform: translateX(-100%);
+        transition: transform .2s;
+        width: 80vw;
+        max-width: 300px;
+      }
+      #sidebar.open { transform: translateX(0); box-shadow: 4px 0 20px #0008; }
+      #sidebar-overlay {
+        display: none;
+        position: fixed; inset: 0; background: #0006; z-index: 40;
+      }
+      #sidebar-overlay.show { display: block; }
+      #mobile-back { display: flex; }
+      #main { width: 100%; }
     }
   </style>
 </head>
 <body>
 
-<header>
-  <h1>Sneakernet <span style="font-weight:400;color:var(--muted);font-size:12px;padding-left:6px">Relay — Browser Demo</span></h1>
-  <nav class="tabs">
-    <button class="tab-btn active" data-tab="inbox">Inbox</button>
-    <button class="tab-btn" data-tab="compose">Compose</button>
-    <button class="tab-btn" data-tab="keys">Keys</button>
-    <button class="tab-btn" data-tab="contacts">Contacts</button>
-    <button class="tab-btn" data-tab="channels">Channels</button>
-  </nav>
-</header>
-
-<div id="content">
-
-  <!-- ── Inbox ─────────────────────────────────────────── -->
-  <div id="tab-inbox">
-    <div class="section">
-      <div class="row" style="align-items:center">
-        <h2 style="flex:1;margin:0">Inbox</h2>
-        <span id="inbox-count" style="font-size:11px;color:var(--muted)"></span>
-        <button class="sm" id="scan-btn">Scan blocks</button>
-      </div>
-      <p style="font-size:12px;color:var(--muted)">
-        This is a public relay browser demo. Crypto runs entirely in your browser — keys live in IndexedDB, messages are decrypted client-side and held in memory only (they clear on reload). For persistent storage, use the local node client.
-      </p>
-    </div>
-    <div id="msg-list">
-      <div class="empty">Add a key in the Keys tab, then click Scan.</div>
-    </div>
+<!-- ── lock screen (not shown — no auth required) ────────────────────────── -->
+<div id="lock-screen" class="hidden">
+  <div class="lock-card">
+    <h1>Sneakernet</h1>
+    <p class="sub">Browser — client-side crypto, keys in IndexedDB</p>
+    <input type="password" id="pw" placeholder="Password" autocomplete="current-password">
+    <button id="unlock-btn">Unlock</button>
+    <button class="ghost" id="create-btn">Create new keystore</button>
+    <p id="lock-err"></p>
   </div>
+</div>
 
-  <!-- ── Compose ───────────────────────────────────────── -->
-  <div id="tab-compose" class="hidden">
-    <div class="section">
-      <h2>Compose</h2>
-      <div class="row" style="gap:0;border:1px solid var(--border);border-radius:6px;overflow:hidden">
-        <button id="mode-direct" class="ghost sm" style="flex:1;border-radius:0;border:none;border-right:1px solid var(--border)"
-                data-mode="direct">Direct</button>
-        <button id="mode-channel" class="ghost sm" style="flex:1;border-radius:0;border:none"
-                data-mode="channel">Channel</button>
-      </div>
-      <div id="compose-direct">
-        <div style="margin-bottom:8px">
-          <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px">Recipient</label>
-          <select id="compose-contact">
-            <option value="">— paste a public key below —</option>
-          </select>
+<!-- ── sidebar overlay (mobile) ─────────────────────────────── -->
+<div id="sidebar-overlay"></div>
+
+<!-- ── main app ──────────────────────────────────────────────── -->
+<div id="app" class="hidden">
+
+  <nav id="sidebar">
+    <div id="sb-header">
+      <h1>Sneakernet <span class="sub">Browser</span></h1>
+    </div>
+    <div id="sb-body">
+      <div class="sb-section">
+        <div class="sb-section-title">Channels <button class="icon" id="new-ch-btn" title="Join channel">+</button></div>
+        <div id="sb-ch-form" class="hidden">
+          <input id="new-ch-pass" placeholder="Passphrase" autocomplete="off">
+          <div class="row">
+            <button class="sm ghost" id="sb-ch-cancel">Cancel</button>
+            <button class="sm" id="sb-ch-join">Join</button>
+          </div>
         </div>
-        <input id="compose-key" placeholder="Public key (base64) — or pick a contact above"
-               style="font-family:var(--mono);font-size:11px">
+        <div id="sb-channels"></div>
       </div>
-      <div id="compose-channel" class="hidden">
-        <select id="channel-select">
-          <option value="">— select channel —</option>
+      <div class="sb-section">
+        <div class="sb-section-title">Direct <button class="icon" id="new-msg-btn" title="New message">+</button></div>
+        <div id="sb-directs"></div>
+      </div>
+    </div>
+    <div id="sb-footer">
+      <button id="scrape-btn">⟳  Refresh</button>
+      <button id="identities-btn">⊙  Identities &amp; Channels</button>
+    </div>
+  </nav>
+
+  <div id="main">
+    <div id="conv-header">
+      <button class="icon hidden" id="mobile-back">←</button>
+      <h2 id="conv-title">Select a conversation</h2>
+      <span id="conv-sub" class="sub"></span>
+      <div id="identity-picker">
+        <span class="sub" style="white-space:nowrap">acting as</span>
+        <select id="active-identity">
+          <option value="">— anonymous —</option>
         </select>
       </div>
-      <textarea id="compose-body" placeholder="Message…"></textarea>
-      <button id="send-btn">Encrypt &amp; Send</button>
     </div>
-  </div>
 
-  <!-- ── Keys ─────────────────────────────────────────── -->
-  <div id="tab-keys" class="hidden">
-    <div class="section">
-      <h2>Your keys</h2>
-      <p style="font-size:12px;color:var(--muted)">
-        Keys are generated in your browser and stored in IndexedDB. Share your public key so
-        others can send you messages. These keys are separate from any local node keystore — they exist only in this browser.
-      </p>
-      <div id="key-list"></div>
-      <div class="row">
-        <input id="new-key-name" placeholder="Identity name (e.g. &ldquo;alice&rdquo;)">
-        <button class="sm" id="gen-btn">Generate</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- ── Contacts ──────────────────────────────────────── -->
-  <div id="tab-contacts" class="hidden">
-    <div class="section">
-      <h2>Contacts</h2>
-      <div id="contact-list"></div>
-      <div style="display:flex;flex-direction:column;gap:8px">
-        <div class="row">
-          <input id="new-contact-name" placeholder="Name">
-          <input id="new-contact-key" placeholder="Public key (base64)"
-                 style="font-family:var(--mono);font-size:11px;flex:2">
+    <!-- conversation messages + compose -->
+    <div id="conv-view">
+      <div class="empty-state" id="conv-empty">Select a conversation from the sidebar, or click + to send a new message.</div>
+      <div id="conv-messages"></div>
+      <div id="compose-area" class="hidden">
+        <div class="compose-ctx" id="compose-ctx"></div>
+        <div id="compose-extra"></div>
+        <div class="compose-bottom">
+          <textarea id="compose-body" placeholder="Message…"></textarea>
+          <button id="send-btn">Send</button>
         </div>
-        <button class="sm" style="align-self:flex-end" id="add-contact-btn">Add contact</button>
       </div>
     </div>
-  </div>
 
-  <!-- ── Channels ──────────────────────────────────────── -->
-  <div id="tab-channels" class="hidden">
-    <div class="section">
-      <h2>Channels</h2>
-      <p style="font-size:12px;color:var(--muted)">
-        Channels use a shared symmetric key derived from a passphrase. Anyone with the same passphrase can post and receive anonymously. Channel keys are stored in localStorage.
-      </p>
-      <div id="channel-list"></div>
-      <div class="row">
-        <input id="new-ch-name" placeholder="Channel name">
-        <input id="new-ch-pass" type="password" placeholder="Passphrase">
-        <button class="sm" id="join-ch-btn">Join</button>
+    <!-- identities + channels panel -->
+    <div id="panel-view" class="hidden">
+      <div class="panel-section">
+        <h2>Identities</h2>
+        <p class="hint">Keys generated in your browser, stored in IndexedDB. Share your <strong>encryption key</strong> so others can send you messages, and your <strong>signing key</strong> so others can verify your messages. Keys never leave this browser.</p>
+        <div id="id-list"></div>
+        <div class="row">
+          <input id="new-id-name" placeholder="Identity name">
+          <button class="sm" id="add-id-btn">Add</button>
+        </div>
+      </div>
+      <div class="panel-section">
+        <h2>Channels</h2>
+        <p class="hint">Channels use a symmetric key derived from a shared passphrase. Anyone who knows the passphrase can post and read — it is not a secret password.</p>
+        <div id="ch-list"></div>
+      </div>
+      <div class="panel-section">
+        <h2>Contacts</h2>
+        <p class="hint">Contacts are other people's public credentials. Share your own via the <strong>Share snk:</strong> button on your identity cards. Paste someone else's snk: URI here to add them.</p>
+        <div id="contact-list"></div>
+        <div class="row">
+          <input id="new-contact-uri" placeholder="snk:name/pubkey/signkey" autocomplete="off">
+          <button class="sm" id="add-contact-btn">Add</button>
+        </div>
       </div>
     </div>
   </div>
@@ -350,7 +606,6 @@
 // ═══════════════════════════════════════════════════════════════════════
 //  XChaCha20-Poly1305
 //  Implements RFC 8439 ChaCha20-Poly1305 + draft-irtf-cfrg-xchacha-03.
-//  No external dependencies; Poly1305 uses BigInt for 130-bit arithmetic.
 // ═══════════════════════════════════════════════════════════════════════
 
 const _CC = new Uint32Array([0x61707865, 0x3320646e, 0x79622d32, 0x6b206574]);
@@ -477,10 +732,11 @@ function xchacha20Seal(key, nonce24, plain) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  Web Crypto helpers (X25519 ECDH + SHA-256)
+//  Web Crypto helpers
 // ═══════════════════════════════════════════════════════════════════════
 
-async function genKeypair() {
+// X25519
+async function genX25519Keypair() {
   return crypto.subtle.generateKey({name:'X25519'}, true, ['deriveBits']);
 }
 async function exportPubRaw(key) {
@@ -492,164 +748,223 @@ async function exportPrivJWK(key) {
 async function importPrivJWK(jwk) {
   return crypto.subtle.importKey('jwk', jwk, {name:'X25519'}, true, ['deriveBits']);
 }
-async function importPubRaw(bytes) {
+async function importX25519PubRaw(bytes) {
   return crypto.subtle.importKey('raw', bytes, {name:'X25519'}, false, []);
 }
-async function sha256(data) {
-  return new Uint8Array(await crypto.subtle.digest('SHA-256', data));
-}
 async function ecdh(privKey, theirPubBytes) {
-  const pub = await importPubRaw(theirPubBytes);
+  const pub = await importX25519PubRaw(theirPubBytes);
   const bits = await crypto.subtle.deriveBits({name:'X25519', public:pub}, privKey, 256);
   return new Uint8Array(bits);
 }
 
+// Ed25519
+async function genEd25519Keypair() {
+  return crypto.subtle.generateKey({name:'Ed25519'}, true, ['sign', 'verify']);
+}
+async function exportEd25519PubRaw(key) {
+  return new Uint8Array(await crypto.subtle.exportKey('raw', key));
+}
+async function exportEd25519PrivJWK(key) {
+  return crypto.subtle.exportKey('jwk', key);
+}
+async function importEd25519PrivJWK(jwk) {
+  return crypto.subtle.importKey('jwk', jwk, {name:'Ed25519'}, false, ['sign']);
+}
+
+// SHA-256
+async function sha256(data) {
+  return new Uint8Array(await crypto.subtle.digest('SHA-256', data));
+}
+async function sha256hex(data) {
+  const h = await sha256(data);
+  return Array.from(h).map(b => b.toString(16).padStart(2,'0')).join('');
+}
+
+// base64
 function b64enc(bytes) { return btoa(String.fromCharCode(...bytes)); }
 function b64dec(s)     { return Uint8Array.from(atob(s), c=>c.charCodeAt(0)); }
 
+// hex
+function bytesToHex(bytes) {
+  return Array.from(bytes).map(b => b.toString(16).padStart(2,'0')).join('');
+}
+function hexToBytes(hex) {
+  if (!hex || hex.length % 2 !== 0) return null;
+  const b = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < b.length; i++) b[i] = parseInt(hex.slice(i*2, i*2+2), 16);
+  return b;
+}
+
 // ═══════════════════════════════════════════════════════════════════════
-//  Encrypt / Decrypt (mirrors client/crypto.go + message_format.go)
-//
-//  Block layout (4096 bytes):
-//    [0:32]   ephemeral X25519 public key (direct) or random salt (channel)
-//    [32:56]  XChaCha20 nonce (24 bytes)
-//    [56:]    ciphertext + 16-byte Poly1305 tag
-//
-//  Plaintext layout — v2 (4024 bytes):
-//    [0:4]    magic 'SNK\x02'
-//    [4]      msg_type (0=text)
+//  Message format v2
+//  Plaintext layout (4024 bytes):
+//    [0:4]    magic SNK\x02
+//    [4]      msg_type  (0=text)
 //    [5]      flags
-//    [6:14]   timestamp int64 LE (0=unknown)
-//    [14:46]  sender_ed25519_pub (all-zeros = anonymous)
-//    [46:110] ed25519 signature  (all-zeros = unsigned)
-//    [110:366] thread_refs[8]   (all-zeros = absent)
-//    [366:398] frag_id          (all-zeros = single block)
+//    [6:14]   timestamp int64 LE ms
+//    [14:46]  sender Ed25519 pub (zeros = anonymous)
+//    [46:110] Ed25519 signature  (zeros = unsigned)
+//    [110:366] thread_refs[8] x 32 bytes
+//    [366:398] frag_id
 //    [398:400] frag_index uint16 LE
-//    [400:402] frag_total uint16 LE  (1 = single block)
+//    [400:402] frag_total uint16 LE
 //    [402:404] content_len uint16 LE
-//    [404:]   content + zero padding
-//
-//  v1 backward-compat (2048-byte blocks, still on relay):
-//    [0:4]   magic 'SNK\x01'
-//    [4:6]   content_len uint16 LE
-//    [6:]    content + zero padding
+//    [404:]   content + padding
 // ═══════════════════════════════════════════════════════════════════════
 
 const PLAINTEXT_SIZE = 4024;
-const MAX_CONTENT    = 3620; // PLAINTEXT_SIZE - 404 header bytes
+const MAX_CONTENT    = 3620;
+const ZERO64         = '0'.repeat(64);
 
-function _buildV2Plain(msgText) {
+async function buildV2Plain(msgText, senderEd25519PubBytes, signingPrivKey, threadRefHexes) {
   const msg = new TextEncoder().encode(msgText);
   if (msg.length > MAX_CONTENT) throw new Error(`Message too long (max ${MAX_CONTENT} bytes)`);
   const plain = new Uint8Array(PLAINTEXT_SIZE);
-  plain[0]=0x53; plain[1]=0x4e; plain[2]=0x4b; plain[3]=0x02; // SNK\x02
-  // [4] msg_type=0, [5] flags=0, [6:14] timestamp=0, [14:110] zeros (anon/unsigned)
-  // [110:398] zeros (thread_refs, frag_id, frag_index)
-  plain[400] = 1; plain[401] = 0;                          // frag_total = 1 LE
+
+  plain[0]=0x53; plain[1]=0x4e; plain[2]=0x4b; plain[3]=0x02;
+  // [4]=0 text, [5]=0 flags
+
+  // timestamp ms as int64 LE at [6:14]
+  const tsMs = BigInt(Date.now());
+  for (let i = 0; i < 8; i++) plain[6+i] = Number((tsMs >> BigInt(i*8)) & 0xffn);
+
+  // sender Ed25519 pub at [14:46]
+  if (senderEd25519PubBytes) plain.set(senderEd25519PubBytes, 14);
+  // signature field [46:110] stays zero until signing
+
+  // thread_refs [110:366] — 8 slots x 32 bytes
+  if (threadRefHexes) {
+    for (let i = 0; i < Math.min(8, threadRefHexes.length); i++) {
+      const rb = hexToBytes(threadRefHexes[i]);
+      if (rb && rb.length === 32) plain.set(rb, 110 + i*32);
+    }
+  }
+
+  // frag_total = 1 at [400:402]
+  plain[400] = 1;
+
+  // content_len at [402:404]
   plain[402] = msg.length & 0xff;
   plain[403] = (msg.length >> 8) & 0xff;
   plain.set(msg, 404);
+
+  // sign with signature field zeroed (already 0)
+  if (signingPrivKey && senderEd25519PubBytes) {
+    const sig = new Uint8Array(await crypto.subtle.sign({name:'Ed25519'}, signingPrivKey, plain));
+    plain.set(sig, 46);
+  }
+
   return plain;
 }
 
-function _readV2Plain(plain) {
+function readV2PlainFull(plain) {
   if (plain[0]!==0x53||plain[1]!==0x4e||plain[2]!==0x4b||plain[3]!==0x02) return null;
+  const msgType = plain[4];
+
+  // timestamp LE int64
+  let tsMs = 0n;
+  for (let i = 7; i >= 0; i--) tsMs = (tsMs << 8n) | BigInt(plain[6+i]);
+  const sentAt = tsMs > 0n ? new Date(Number(tsMs)).toISOString() : null;
+
+  // sender Ed25519 pub [14:46]
+  const spb = plain.slice(14, 46);
+  const senderPub = spb.every(b=>b===0) ? '' : b64enc(spb);
+
+  // thread_refs [110:366]
+  const threadRefs = [];
+  for (let i = 0; i < 8; i++) {
+    threadRefs.push(bytesToHex(plain.slice(110 + i*32, 142 + i*32)));
+  }
+
   const msgLen = plain[402] | (plain[403]<<8);
   if (msgLen > MAX_CONTENT) return null;
-  return new TextDecoder().decode(plain.slice(404, 404+msgLen));
+
+  return {msgType, sentAt, senderPub, threadRefs, contentB64: b64enc(plain.slice(404, 404+msgLen))};
 }
 
-function _readV1Plain(plain) {
+function readV1Plain(plain) {
   if (plain[0]!==0x53||plain[1]!==0x4e||plain[2]!==0x4b||plain[3]!==0x01) return null;
   const msgLen = plain[4] | (plain[5]<<8);
   if (msgLen > 1970) return null;
-  return new TextDecoder().decode(plain.slice(6, 6+msgLen));
+  return {
+    msgType: 0, sentAt: null, senderPub: '',
+    threadRefs: Array(8).fill(ZERO64),
+    contentB64: b64enc(plain.slice(6, 6+msgLen)),
+  };
 }
 
-async function encryptMessage(recipientPubBase64, msgText) {
-  const ephKP  = await genKeypair();
+// ═══════════════════════════════════════════════════════════════════════
+//  Block encrypt / decrypt
+//  Block layout (4096 bytes):
+//    [0:32]  ephemeral X25519 pub (direct) or random salt (channel)
+//    [32:56] XChaCha20 nonce
+//    [56:]   ciphertext + 16-byte Poly1305 tag
+// ═══════════════════════════════════════════════════════════════════════
+
+async function encryptDirect(recipientPubBase64, plainBytes) {
+  const ephKP  = await genX25519Keypair();
   const ephPub = await exportPubRaw(ephKP.publicKey);
   const shared = await ecdh(ephKP.privateKey, b64dec(recipientPubBase64));
   const key    = await sha256(shared);
   const nonce  = crypto.getRandomValues(new Uint8Array(24));
-  const plain  = _buildV2Plain(msgText);
-  const sealed = xchacha20Seal(key, nonce, plain);
-
+  const sealed = xchacha20Seal(key, nonce, plainBytes);
   const payload = new Uint8Array(4096);
-  payload.set(ephPub, 0);
-  payload.set(nonce, 32);
-  payload.set(sealed, 56);
+  payload.set(ephPub, 0); payload.set(nonce, 32); payload.set(sealed, 56);
   return payload;
 }
 
-async function tryDecrypt(privKeyJWK, payloadBytes) {
-  try {
-    const priv   = await importPrivJWK(privKeyJWK);
-    const ephPub = payloadBytes.slice(0, 32);
-    const nonce  = payloadBytes.slice(32, 56);
-    const sealed = payloadBytes.slice(56);
-    const shared = await ecdh(priv, ephPub);
-    const key    = await sha256(shared);
-    const plain  = xchacha20Open(key, nonce, sealed);
-
-    const v2 = _readV2Plain(plain);
-    if (v2 !== null) return v2;
-    return _readV1Plain(plain);   // backward compat for old 2048-byte blocks
-  } catch {
-    return null;
-  }
-}
-
-// Channel key derivation: SHA-256(UTF-8(passphrase))  — mirrors server-side
-async function passphraseToKey(passphrase) {
-  return sha256(new TextEncoder().encode(passphrase));
-}
-
-async function encryptChannel(channelKey32, msgText) {
+async function encryptChannelRaw(channelKey32, plainBytes) {
   const salt   = crypto.getRandomValues(new Uint8Array(32));
   const catted = new Uint8Array(64);
   catted.set(channelKey32); catted.set(salt, 32);
   const blockKey = await sha256(catted);
   const nonce    = crypto.getRandomValues(new Uint8Array(24));
-  const plain    = _buildV2Plain(msgText);
-  const sealed   = xchacha20Seal(blockKey, nonce, plain);
-
-  const payload = new Uint8Array(4096);
-  payload.set(salt, 0);
-  payload.set(nonce, 32);
-  payload.set(sealed, 56);
+  const sealed   = xchacha20Seal(blockKey, nonce, plainBytes);
+  const payload  = new Uint8Array(4096);
+  payload.set(salt, 0); payload.set(nonce, 32); payload.set(sealed, 56);
   return payload;
+}
+
+async function tryDecryptDirect(privKeyJWK, payloadBytes) {
+  try {
+    const priv   = await importPrivJWK(privKeyJWK);
+    const shared = await ecdh(priv, payloadBytes.slice(0, 32));
+    const key    = await sha256(shared);
+    return xchacha20Open(key, payloadBytes.slice(32, 56), payloadBytes.slice(56));
+  } catch { return null; }
 }
 
 async function tryDecryptChannel(channelKey32, payloadBytes) {
   try {
     const salt   = payloadBytes.slice(0, 32);
-    const nonce  = payloadBytes.slice(32, 56);
-    const sealed = payloadBytes.slice(56);
     const catted = new Uint8Array(64);
     catted.set(channelKey32); catted.set(salt, 32);
     const blockKey = await sha256(catted);
-    const plain    = xchacha20Open(blockKey, nonce, sealed);
-    return _readV2Plain(plain);
-  } catch {
-    return null;
-  }
+    return xchacha20Open(blockKey, payloadBytes.slice(32, 56), payloadBytes.slice(56));
+  } catch { return null; }
+}
+
+async function passphraseToKey(passphrase) {
+  return sha256(new TextEncoder().encode(passphrase));
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  IndexedDB — identity storage
+//  IndexedDB
 // ═══════════════════════════════════════════════════════════════════════
 
 let _db = null;
 function openDB() {
   if (_db) return Promise.resolve(_db);
   return new Promise((res, rej) => {
-    const req = indexedDB.open('sneakernet', 1);
+    const req = indexedDB.open('sneakernet', 2);
     req.onupgradeneeded = e => {
-      e.target.result.createObjectStore('identities', {keyPath:'name'});
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains('identities')) {
+        db.createObjectStore('identities', {keyPath:'name'});
+      }
     };
     req.onsuccess = e => { _db=e.target.result; res(_db); };
-    req.onerror = e => rej(e.target.error);
+    req.onerror   = e => rej(e.target.error);
   });
 }
 
@@ -658,7 +973,7 @@ async function dbGetAll(store) {
   return new Promise((res, rej) => {
     const req = db.transaction(store,'readonly').objectStore(store).getAll();
     req.onsuccess = e => res(e.target.result);
-    req.onerror = e => rej(e.target.error);
+    req.onerror   = e => rej(e.target.error);
   });
 }
 
@@ -667,7 +982,7 @@ async function dbPut(store, obj) {
   return new Promise((res, rej) => {
     const req = db.transaction(store,'readwrite').objectStore(store).put(obj);
     req.onsuccess = () => res();
-    req.onerror = e => rej(e.target.error);
+    req.onerror   = e => rej(e.target.error);
   });
 }
 
@@ -676,497 +991,1118 @@ async function dbDelete(store, key) {
   return new Promise((res, rej) => {
     const req = db.transaction(store,'readwrite').objectStore(store).delete(key);
     req.onsuccess = () => res();
-    req.onerror = e => rej(e.target.error);
+    req.onerror   = e => rej(e.target.error);
   });
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  Contacts & Channels — localStorage
+//  BrowserBackend
+//
+//  Implements the same interface as ServerBackend but runs all crypto
+//  in-browser. Keys live in IndexedDB. Contacts and channels in
+//  localStorage. Messages are held in memory and cleared on reload.
 // ═══════════════════════════════════════════════════════════════════════
 
-function loadContacts() {
-  try { return JSON.parse(localStorage.getItem('snk_contacts') || '[]'); }
-  catch { return []; }
-}
-function saveContacts(arr) { localStorage.setItem('snk_contacts', JSON.stringify(arr)); }
+class BrowserBackend {
+  constructor() {
+    this._inbox   = [];  // decrypted messages, server-compatible shape
+    this._nextId  = 0;
+    this._lastScan = 0;  // unix seconds cursor for /api/blocks
+  }
 
-// Channels stored as [{name, keyBase64}] — keyBase64 is SHA-256(passphrase)
-function loadChannelStore() {
-  try { return JSON.parse(localStorage.getItem('snk_channels') || '[]'); }
-  catch { return []; }
-}
-function saveChannelStore(arr) { localStorage.setItem('snk_channels', JSON.stringify(arr)); }
+  get requiresAuth() { return false; }
+  async isAuthenticated() { return true; }
+  async createKeystore() {}
+  async unlock() {}
+  async lock() {}
 
-// ═══════════════════════════════════════════════════════════════════════
-//  Application state
-// ═══════════════════════════════════════════════════════════════════════
+  // ── identities ──────────────────────────────────────────────────────
+  // IndexedDB record: {name, pubBase64, privJWK, signingPubBase64, signingPrivJWK}
+  // Returned shape:   {name, public_key, signing_public_key}
 
-let identities   = []; // [{name, pubBase64, privJWK}]
-let contacts     = []; // [{name, publicKey}]
-let channelStore = []; // [{name, keyBase64}]  (derived keys, not passphrases)
-let inbox        = []; // [{blockId, content, channel, receivedAt, identity}]
-let lastScan     = 0;
-let composeMode  = 'direct';
+  async listIdentities() {
+    const ids = await dbGetAll('identities');
+    return ids.map(id => ({
+      name: id.name,
+      public_key: id.pubBase64,
+      signing_public_key: id.signingPubBase64 || '',
+    }));
+  }
 
-// ═══════════════════════════════════════════════════════════════════════
-//  UI helpers
-// ═══════════════════════════════════════════════════════════════════════
+  async addIdentity(name) {
+    const ids = await dbGetAll('identities');
+    if (ids.find(i => i.name === name)) throw new Error('duplicate');
 
-const el = id => document.getElementById(id);
+    const encKP     = await genX25519Keypair();
+    const pubBytes  = await exportPubRaw(encKP.publicKey);
+    const privJWK   = await exportPrivJWK(encKP.privateKey);
 
-function status(msg, cls='') {
-  const s = el('statusbar');
-  s.textContent = msg;
-  s.className = cls;
-}
+    const signKP          = await genEd25519Keypair();
+    const signingPubBytes = await exportEd25519PubRaw(signKP.publicKey);
+    const signingPrivJWK  = await exportEd25519PrivJWK(signKP.privateKey);
 
-let _toastTimer;
-function toast(msg, err=false) {
-  const t = el('toast');
-  t.textContent = msg;
-  t.style.borderColor = err ? 'var(--danger)' : 'var(--border)';
-  t.classList.add('show');
-  clearTimeout(_toastTimer);
-  _toastTimer = setTimeout(() => t.classList.remove('show'), 2800);
-}
-
-function esc(s) {
-  return String(s)
-    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
-}
-
-function fmtTime(iso) {
-  const d = new Date(iso);
-  return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-//  Tab switching
-// ═══════════════════════════════════════════════════════════════════════
-
-document.querySelectorAll('.tab-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
-    btn.classList.add('active');
-    const tab = btn.dataset.tab;
-    ['inbox','compose','keys','contacts','channels'].forEach(t => {
-      el('tab-'+t).classList.toggle('hidden', t!==tab);
+    await dbPut('identities', {
+      name,
+      pubBase64:       b64enc(pubBytes),
+      privJWK,
+      signingPubBase64: b64enc(signingPubBytes),
+      signingPrivJWK,
     });
-    if (tab==='compose') { renderContactDropdown(); renderChannelDropdown(); }
-  });
-});
-
-// ═══════════════════════════════════════════════════════════════════════
-//  Compose mode toggle
-// ═══════════════════════════════════════════════════════════════════════
-
-function setMode(mode) {
-  composeMode = mode;
-  el('compose-direct').classList.toggle('hidden', mode !== 'direct');
-  el('compose-channel').classList.toggle('hidden', mode !== 'channel');
-  el('mode-direct').style.background  = mode === 'direct'  ? 'var(--accent)' : '';
-  el('mode-direct').style.color       = mode === 'direct'  ? '#fff' : '';
-  el('mode-channel').style.background = mode === 'channel' ? 'var(--accent)' : '';
-  el('mode-channel').style.color      = mode === 'channel' ? '#fff' : '';
-}
-
-document.querySelectorAll('[data-mode]').forEach(btn => {
-  btn.addEventListener('click', () => setMode(btn.dataset.mode));
-});
-
-// ═══════════════════════════════════════════════════════════════════════
-//  Keys tab
-// ═══════════════════════════════════════════════════════════════════════
-
-async function generateKey() {
-  const name = el('new-key-name').value.trim();
-  if (!name) { toast('Enter a name for this identity.', true); return; }
-  if (identities.find(i=>i.name===name)) { toast('Name already in use.', true); return; }
-
-  const btn = el('gen-btn');
-  btn.disabled = true;
-  try {
-    const kp = await genKeypair();
-    const pubBytes = await exportPubRaw(kp.publicKey);
-    const privJWK  = await exportPrivJWK(kp.privateKey);
-    const pubBase64 = b64enc(pubBytes);
-
-    const identity = {name, pubBase64, privJWK};
-    await dbPut('identities', identity);
-    identities.push(identity);
-
-    el('new-key-name').value = '';
-    renderKeys();
-    toast(`Key "${name}" generated.`);
-    status('New identity saved to IndexedDB.');
-  } catch(e) {
-    toast('Key generation failed: ' + e.message, true);
-  } finally {
-    btn.disabled = false;
   }
-}
 
-async function deleteKey(name) {
-  if (!confirm(`Delete identity "${name}"? This cannot be undone.`)) return;
-  await dbDelete('identities', name);
-  identities = identities.filter(i=>i.name!==name);
-  renderKeys();
-  toast(`Identity "${name}" deleted.`);
-}
-
-function copyKey(pubBase64) {
-  navigator.clipboard.writeText(pubBase64);
-  toast('Public key copied to clipboard.');
-}
-
-function renderKeys() {
-  const list = el('key-list');
-  if (!identities.length) {
-    list.innerHTML = '<div class="empty">No keys yet — generate one below.</div>';
-    return;
+  async deleteIdentity(name) {
+    await dbDelete('identities', name);
   }
-  list.innerHTML = '';
-  identities.forEach(id => {
-    const div = document.createElement('div');
-    div.className = 'card';
-    div.innerHTML =
-      `<div class="card-info">
-         <div class="card-name">${esc(id.name)}</div>
-         <div class="card-key" title="Click to copy public key">${esc(id.pubBase64)}</div>
-       </div>
-       <div class="card-actions">
-         <button class="sm ghost" title="Copy public key">Copy</button>
-         <button class="sm danger" title="Delete key">Delete</button>
-       </div>`;
-    div.querySelector('.card-key').addEventListener('click', ()=>copyKey(id.pubBase64));
-    div.querySelector('.sm.ghost').addEventListener('click', ()=>copyKey(id.pubBase64));
-    div.querySelector('.sm.danger').addEventListener('click', ()=>deleteKey(id.name));
-    list.appendChild(div);
-  });
-}
 
-// ═══════════════════════════════════════════════════════════════════════
-//  Contacts tab
-// ═══════════════════════════════════════════════════════════════════════
+  // ── contacts ────────────────────────────────────────────────────────
+  // localStorage: [{name, public_key, signing_public_key}]
+  // Old format ({name, publicKey}) is migrated on read.
 
-function addContact() {
-  const name = el('new-contact-name').value.trim();
-  const key  = el('new-contact-key').value.trim();
-  if (!name || !key) { toast('Name and public key required.', true); return; }
-  try { b64dec(key); } catch { toast('Invalid base64 public key.', true); return; }
-  if (b64dec(key).length !== 32) { toast('Public key must be 32 bytes.', true); return; }
-  if (contacts.find(c=>c.name===name)) { toast('Contact name already in use.', true); return; }
-
-  contacts.push({name, publicKey:key});
-  saveContacts(contacts);
-  el('new-contact-name').value = '';
-  el('new-contact-key').value  = '';
-  renderContacts();
-  toast(`Contact "${name}" added.`);
-}
-
-function deleteContact(name) {
-  contacts = contacts.filter(c=>c.name!==name);
-  saveContacts(contacts);
-  renderContacts();
-}
-
-function renderContacts() {
-  const list = el('contact-list');
-  if (!contacts.length) {
-    list.innerHTML = '<div class="empty">No contacts yet.</div>';
-    return;
+  _loadContacts() {
+    try {
+      const raw = JSON.parse(localStorage.getItem('snk_contacts') || '[]');
+      return raw.map(c => ({
+        name: c.name,
+        public_key: c.public_key || c.publicKey || '',
+        signing_public_key: c.signing_public_key || '',
+      }));
+    } catch { return []; }
   }
-  list.innerHTML = '';
-  contacts.forEach(c => {
-    const div = document.createElement('div');
-    div.className = 'card';
-    div.innerHTML =
-      `<div class="card-info">
-         <div class="card-name">${esc(c.name)}</div>
-         <div class="card-key" title="Click to copy">${esc(c.publicKey)}</div>
-       </div>
-       <div class="card-actions">
-         <button class="sm ghost">Copy</button>
-         <button class="sm danger">Delete</button>
-       </div>`;
-    div.querySelector('.card-key').addEventListener('click', ()=>{
-      navigator.clipboard.writeText(c.publicKey); toast('Key copied.');
-    });
-    div.querySelector('.sm.ghost').addEventListener('click', ()=>{
-      navigator.clipboard.writeText(c.publicKey); toast('Key copied.');
-    });
-    div.querySelector('.sm.danger').addEventListener('click', ()=>deleteContact(c.name));
-    list.appendChild(div);
-  });
-}
 
-function renderContactDropdown() {
-  const sel = el('compose-contact');
-  const prev = sel.value;
-  while (sel.options.length > 1) sel.remove(1);
-  contacts.forEach(c => {
-    const opt = new Option(c.name, c.publicKey);
-    sel.appendChild(opt);
-  });
-  sel.value = prev || '';
-}
+  _saveContacts(arr) { localStorage.setItem('snk_contacts', JSON.stringify(arr)); }
 
-el('compose-contact').addEventListener('change', () => {
-  const v = el('compose-contact').value;
-  if (v) el('compose-key').value = v;
-});
+  async listContacts() { return this._loadContacts(); }
 
-// ═══════════════════════════════════════════════════════════════════════
-//  Channels tab
-// ═══════════════════════════════════════════════════════════════════════
-
-async function joinChannel() {
-  const name = el('new-ch-name').value.trim();
-  const pass = el('new-ch-pass').value;
-  if (!name || !pass) { toast('Enter channel name and passphrase.', true); return; }
-  if (channelStore.find(c=>c.name===name)) { toast('Already joined that channel.', true); return; }
-
-  const keyBytes = await passphraseToKey(pass);
-  channelStore.push({name, keyBase64: b64enc(keyBytes)});
-  saveChannelStore(channelStore);
-  el('new-ch-name').value = '';
-  el('new-ch-pass').value = '';
-  renderChannels();
-  renderChannelDropdown();
-  toast(`Joined channel "${name}".`);
-}
-
-function leaveChannel(name) {
-  channelStore = channelStore.filter(c=>c.name!==name);
-  saveChannelStore(channelStore);
-  renderChannels();
-  renderChannelDropdown();
-  toast(`Left channel "${name}".`);
-}
-
-function renderChannels() {
-  const list = el('channel-list');
-  if (!channelStore.length) {
-    list.innerHTML = '<div class="empty">No channels yet — join one below.</div>';
-    return;
+  async addContact(name, public_key, signing_public_key) {
+    const cs = this._loadContacts();
+    if (cs.find(c => c.public_key === public_key)) throw new Error('duplicate');
+    cs.push({name, public_key, signing_public_key});
+    this._saveContacts(cs);
   }
-  list.innerHTML = '';
-  channelStore.forEach(ch => {
-    const div = document.createElement('div');
-    div.className = 'card';
-    div.innerHTML =
-      `<div class="card-info">
-         <div class="card-name"><span class="ch-badge" style="margin-right:4px">#</span>${esc(ch.name)}</div>
-       </div>
-       <div class="card-actions">
-         <button class="sm ghost">Leave</button>
-       </div>`;
-    div.querySelector('.sm.ghost').addEventListener('click', ()=>leaveChannel(ch.name));
-    list.appendChild(div);
-  });
-}
 
-function renderChannelDropdown() {
-  const sel = el('channel-select');
-  const prev = sel.value;
-  sel.innerHTML = '<option value="">— select channel —</option>';
-  channelStore.forEach(ch => {
-    const opt = new Option('#' + ch.name, ch.name);
-    sel.appendChild(opt);
-  });
-  sel.value = prev || '';
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-//  Inbox — scan + decrypt
-// ═══════════════════════════════════════════════════════════════════════
-
-async function scan() {
-  if (!identities.length && !channelStore.length) {
-    toast('Add a key or join a channel first.', true);
-    return;
+  async removeContact(pubKeyB64url) {
+    const pubKey = fromB64url(pubKeyB64url);
+    const cs = this._loadContacts().filter(c => c.public_key !== pubKey);
+    this._saveContacts(cs);
   }
-  const btn = el('scan-btn');
-  btn.disabled = true;
-  btn.textContent = 'Scanning…';
-  status('Fetching blocks…');
 
-  const scanStart = Math.floor(Date.now()/1000);
-  let fetched = 0, found = 0;
+  async renameContact(pubKeyB64url, newName) {
+    const pubKey = fromB64url(pubKeyB64url);
+    const cs = this._loadContacts();
+    const c = cs.find(c => c.public_key === pubKey);
+    if (!c) throw new Error('not found');
+    c.name = newName;
+    this._saveContacts(cs);
+  }
 
-  // Pre-decode channel keys once
-  const channelKeys = channelStore.map(ch => ({
-    name: ch.name,
-    key: b64dec(ch.keyBase64),
-  }));
+  // ── channels ────────────────────────────────────────────────────────
+  // localStorage: [{name, keyBase64}]
 
-  try {
+  _loadChannels() {
+    try { return JSON.parse(localStorage.getItem('snk_channels') || '[]'); }
+    catch { return []; }
+  }
+  _saveChannels(arr) { localStorage.setItem('snk_channels', JSON.stringify(arr)); }
+
+  async listChannels() {
+    return this._loadChannels().map(ch => ({name: ch.name}));
+  }
+
+  async joinChannel(name, passphrase) {
+    const chs = this._loadChannels();
+    if (chs.find(c => c.name === name)) throw new Error('duplicate');
+    const keyBytes = await passphraseToKey(passphrase);
+    chs.push({name, keyBase64: b64enc(keyBytes)});
+    this._saveChannels(chs);
+  }
+
+  async leaveChannel(name) {
+    this._saveChannels(this._loadChannels().filter(c => c.name !== name));
+  }
+
+  // ── scrape ──────────────────────────────────────────────────────────
+  // Fetches raw blocks from /api/blocks, decrypts against all local
+  // identities and channels, stores results in _inbox.
+
+  async scrape() {
+    const ids      = await dbGetAll('identities');
+    const channels = this._loadChannels();
+    const chKeys   = channels.map(ch => ({name: ch.name, key: b64dec(ch.keyBase64)}));
+
+    const seenIds  = new Set(this._inbox.map(m => m.block_id));
+    let found = 0;
     let pageToken = '';
-    do {
-      const params = new URLSearchParams({since: lastScan, limit: 200});
-      if (pageToken) params.set('page_token', pageToken);
 
+    do {
+      const params = new URLSearchParams({since: this._lastScan, limit: 200});
+      if (pageToken) params.set('page_token', pageToken);
       const r = await fetch('/api/blocks?' + params);
-      if (!r.ok) { toast('Scan failed: ' + r.status, true); return; }
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const data = await r.json();
-      const blocks = data.blocks || [];
-      fetched += blocks.length;
       pageToken = data.next_page_token || '';
 
-      status(`Scanning… ${fetched} blocks fetched, ${found} messages found`);
+      for (const blk of (data.blocks || [])) {
+        const payloadBytes = b64dec(blk.payload);
+        const blkId = await sha256hex(payloadBytes);
+        if (seenIds.has(blkId)) continue;
 
-      for (const blk of blocks) {
-        const payload = b64dec(blk.payload);
         let matched = false;
 
         // Try direct identity decryption
-        for (const id of identities) {
-          const msg = await tryDecrypt(id.privJWK, payload);
-          if (msg !== null) {
-            inbox.push({blockId: blk.id, content: msg, channel: null,
-                        receivedAt: new Date().toISOString(), identity: id.name});
-            found++; matched = true; break;
-          }
+        for (const id of ids) {
+          const plain = await tryDecryptDirect(id.privJWK, payloadBytes);
+          if (plain === null) continue;
+          const parsed = readV2PlainFull(plain) || readV1Plain(plain);
+          if (!parsed) continue;
+          this._inbox.push({
+            id:          ++this._nextId,
+            block_id:    blkId,
+            channel:     null,
+            sender_pub:  parsed.senderPub,
+            msg_type:    parsed.msgType,
+            content:     parsed.contentB64,
+            thread_refs: parsed.threadRefs,
+            sent_at:     parsed.sentAt,
+            received_at: new Date().toISOString(),
+          });
+          seenIds.add(blkId);
+          found++; matched = true; break;
         }
 
         // Try channel decryption
         if (!matched) {
-          for (const ch of channelKeys) {
-            const msg = await tryDecryptChannel(ch.key, payload);
-            if (msg !== null) {
-              inbox.push({blockId: blk.id, content: msg, channel: ch.name,
-                          receivedAt: new Date().toISOString(), identity: null});
-              found++; break;
-            }
+          for (const ch of chKeys) {
+            const plain = await tryDecryptChannel(ch.key, payloadBytes);
+            if (plain === null) continue;
+            const parsed = readV2PlainFull(plain) || readV1Plain(plain);
+            if (!parsed) continue;
+            this._inbox.push({
+              id:          ++this._nextId,
+              block_id:    blkId,
+              channel:     ch.name,
+              sender_pub:  parsed.senderPub,
+              msg_type:    parsed.msgType,
+              content:     parsed.contentB64,
+              thread_refs: parsed.threadRefs,
+              sent_at:     parsed.sentAt,
+              received_at: new Date().toISOString(),
+            });
+            seenIds.add(blkId);
+            found++; break;
           }
         }
       }
     } while (pageToken);
 
-    lastScan = scanStart;
-    renderInbox();
-    status(`Scan complete — ${found} new message${found===1?'':'s'} in ${fetched} blocks.`,
-           found>0 ? 'ok' : '');
-    if (found>0) toast(`Found ${found} new message${found===1?'':'s'}.`);
-  } catch(e) {
-    toast('Scan error: ' + e.message, true);
-    status('Scan failed.', 'err');
-  } finally {
-    btn.disabled = false;
-    btn.textContent = 'Scan blocks';
+    this._lastScan = Math.floor(Date.now() / 1000);
+    return {found};
+  }
+
+  async getMessages(afterId) {
+    return this._inbox.filter(m => m.id > afterId);
+  }
+
+  // ── send ────────────────────────────────────────────────────────────
+
+  async _getSenderKeys(senderIdentityName) {
+    if (!senderIdentityName) return {senderPubBytes: null, signingPrivKey: null};
+    const ids = await dbGetAll('identities');
+    const id  = ids.find(i => i.name === senderIdentityName);
+    if (!id || !id.signingPubBase64) return {senderPubBytes: null, signingPrivKey: null};
+    return {
+      senderPubBytes: b64dec(id.signingPubBase64),
+      signingPrivKey: await importEd25519PrivJWK(id.signingPrivJWK),
+    };
+  }
+
+  async _postBlock(payload) {
+    const stamp = new Uint8Array(4); // work_factor 0, 24h TTL
+    const r = await fetch('/api/blocks', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({stamp: b64enc(stamp), payload: b64enc(payload)}),
+    });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      throw new Error(d.error || `HTTP ${r.status}`);
+    }
+  }
+
+  async sendDirect(recipientPublicKey, message, senderIdentity, replyToBlockId) {
+    const {senderPubBytes, signingPrivKey} = await this._getSenderKeys(senderIdentity);
+    const threadRefs = replyToBlockId
+      ? [replyToBlockId, ...Array(7).fill(ZERO64)]
+      : null;
+    const plain   = await buildV2Plain(message, senderPubBytes, signingPrivKey, threadRefs);
+    const payload = await encryptDirect(recipientPublicKey, plain);
+    await this._postBlock(payload);
+  }
+
+  async sendChannel(channelName, message, senderIdentity, replyToBlockId) {
+    const chs = this._loadChannels();
+    const ch  = chs.find(c => c.name === channelName);
+    if (!ch) throw new Error('channel not found');
+    const {senderPubBytes, signingPrivKey} = await this._getSenderKeys(senderIdentity);
+    const threadRefs = replyToBlockId
+      ? [replyToBlockId, ...Array(7).fill(ZERO64)]
+      : null;
+    const plain   = await buildV2Plain(message, senderPubBytes, signingPrivKey, threadRefs);
+    const payload = await encryptChannelRaw(b64dec(ch.keyBase64), plain);
+    await this._postBlock(payload);
   }
 }
 
-function renderInbox() {
-  const list = el('msg-list');
-  list.innerHTML = '';
-  el('inbox-count').textContent = inbox.length ? `${inbox.length} message${inbox.length===1?'':'s'}` : '';
+const backend = new BrowserBackend();
 
-  if (!inbox.length) {
-    list.innerHTML = '<div class="empty">No messages yet. Click Scan to check new blocks.</div>';
+// ═══════════════════════════════════════════════════════════════════════
+//  UI — identical to the local node UI from here down.
+//  The backend object above is the only difference.
+// ═══════════════════════════════════════════════════════════════════════
+
+// ── state ──────────────────────────────────────────────────────────────────
+let allMessages    = [];
+let byBlock        = new Map();
+let identities     = [];
+let channels       = [];
+let contacts       = [];
+let currentView    = null;
+let conversations  = [];
+let activeIdentity = null;
+
+// ── snk: URI helpers ───────────────────────────────────────────────────────
+function toB64url(b64) {
+  return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+}
+function fromB64url(b64url) {
+  const b64 = b64url.replace(/-/g, '+').replace(/_/g, '/');
+  return b64 + '='.repeat((4 - b64.length % 4) % 4);
+}
+function snkUri(name, pubKey, signKey) {
+  return `snk:${encodeURIComponent(name)}/${toB64url(pubKey)}/${toB64url(signKey)}`;
+}
+function parseSnkUri(uri) {
+  if (!uri.startsWith('snk:')) return null;
+  const rest = uri.slice(4);
+  const i1 = rest.indexOf('/');
+  if (i1 < 0) return null;
+  const i2 = rest.indexOf('/', i1 + 1);
+  if (i2 < 0) return null;
+  const name = decodeURIComponent(rest.slice(0, i1));
+  const pubPart  = rest.slice(i1 + 1, i2);
+  const signPart = rest.slice(i2 + 1);
+  if (pubPart.length !== 43 || signPart.length !== 43) return null;
+  return {name, public_key: fromB64url(pubPart), signing_public_key: fromB64url(signPart)};
+}
+async function contactHash(pubKeyB64) {
+  const bytes = Uint8Array.from(atob(pubKeyB64), c => c.charCodeAt(0));
+  const hash = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(hash)).slice(0, 4).map(b => b.toString(16).padStart(2,'0')).join('');
+}
+
+// ── boot ───────────────────────────────────────────────────────────────────
+(async () => {
+  if (backend.requiresAuth) {
+    if (await backend.isAuthenticated()) { showApp(); return; }
+    showLock();
+  } else {
+    showApp();
+  }
+})();
+
+// ── event wiring ───────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  el('unlock-btn').addEventListener('click', unlock);
+  el('create-btn').addEventListener('click', createAndUnlock);
+  el('pw').addEventListener('keydown', e => { if (e.key === 'Enter') unlock(); });
+
+  el('scrape-btn').addEventListener('click', scrape);
+  el('new-msg-btn').addEventListener('click', () => openNewMsg());
+  el('identities-btn').addEventListener('click', () => openPanel());
+  el('mobile-back').addEventListener('click', openSidebar);
+
+  el('send-btn').addEventListener('click', send);
+  el('add-id-btn').addEventListener('click', addIdentity);
+  el('new-id-name').addEventListener('keydown', e => { if (e.key === 'Enter') addIdentity(); });
+  el('new-ch-btn').addEventListener('click', () => {
+    el('sb-ch-form').classList.toggle('hidden');
+    if (!el('sb-ch-form').classList.contains('hidden')) el('new-ch-pass').focus();
+  });
+  el('sb-ch-cancel').addEventListener('click', () => {
+    el('sb-ch-form').classList.add('hidden');
+    el('new-ch-pass').value = '';
+  });
+  el('sb-ch-join').addEventListener('click', addChannel);
+  el('new-ch-pass').addEventListener('keydown', e => { if (e.key === 'Enter') addChannel(); });
+
+  el('add-contact-btn').addEventListener('click', addContact);
+  el('new-contact-uri').addEventListener('keydown', e => { if (e.key === 'Enter') addContact(); });
+
+  el('sidebar-overlay').addEventListener('click', closeSidebar);
+  el('active-identity').addEventListener('change', e => {
+    activeIdentity = identities.find(id => id.name === e.target.value) || null;
+    rebuildConversations();
+    renderSidebar();
+    if (currentView && currentView.kind !== 'panel' && currentView.kind !== 'new') rerenderCurrentView();
+  });
+});
+
+// ── auth ───────────────────────────────────────────────────────────────────
+async function unlock() {
+  const pw = el('pw').value;
+  if (!pw) return;
+  lockErr('');
+  try {
+    await backend.unlock(pw);
+  } catch(e) {
+    if (e.message === 'noKeystore') { lockErr('No keystore found — create one first.'); return; }
+    lockErr('Wrong password or corrupted keystore.');
+    return;
+  }
+  el('pw').value = '';
+  showApp();
+}
+
+async function createAndUnlock() {
+  const pw = el('pw').value;
+  if (!pw) { lockErr('Enter a password first.'); return; }
+  lockErr('');
+  try {
+    await backend.createKeystore(pw);
+  } catch(e) {
+    if (e.message === 'exists') { lockErr('Keystore already exists — just unlock it.'); return; }
+    lockErr('Failed to create keystore.');
+    return;
+  }
+  await unlock();
+}
+
+async function lock() {
+  await backend.lock();
+  allMessages = []; byBlock.clear(); conversations = [];
+  showLock();
+}
+
+// ── scrape ─────────────────────────────────────────────────────────────────
+async function scrape() {
+  const btn = el('scrape-btn');
+  btn.disabled = true;
+  btn.textContent = '⟳  Scanning…';
+  setStatus('Scanning blocks…');
+  try {
+    const {found} = await backend.scrape();
+    setStatus(`Scan complete — ${found} new message${found === 1 ? '' : 's'}.`, found > 0 ? 'ok' : '');
+    if (found > 0) await loadMessages();
+  } catch {
+    setStatus('Scan failed.', 'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '⟳  Refresh';
+  }
+}
+
+// ── message loading & grouping ─────────────────────────────────────────────
+async function loadMessages() {
+  const lastID = allMessages.length ? Math.max(...allMessages.map(m => m.id)) : 0;
+  const msgs = await backend.getMessages(lastID);
+  if (!msgs?.length) return;
+
+  for (const m of msgs) {
+    m.content_text = b64toText(m.content);
+    allMessages.push(m);
+    byBlock.set(m.block_id, m);
+  }
+  rebuildConversations();
+  renderSidebar();
+  if (currentView) rerenderCurrentView();
+}
+
+function rebuildConversations() {
+  const chMap   = new Map();
+  const dirMap  = new Map();
+  const unknown = [];
+
+  const otherSignKeys = activeIdentity
+    ? new Set(identities.filter(id => id.name !== activeIdentity.name).map(id => id.signing_public_key))
+    : new Set();
+
+  for (const m of allMessages) {
+    if (m.channel) {
+      if (!chMap.has(m.channel)) chMap.set(m.channel, []);
+      chMap.get(m.channel).push(m);
+    } else {
+      if (otherSignKeys.has(m.sender_pub)) continue;
+      const name = resolveSender(m.sender_pub);
+      const key  = name === null ? '__unknown__' : (name || m.sender_pub || '__anon__');
+      if (name === null) {
+        unknown.push(m);
+      } else {
+        if (!dirMap.has(key)) dirMap.set(key, {name: name || m.sender_pub?.slice(0,8) + '…', pub: m.sender_pub, messages: []});
+        dirMap.get(key).messages.push(m);
+      }
+    }
+  }
+
+  for (const ch of channels) {
+    if (!chMap.has(ch.name)) chMap.set(ch.name, []);
+  }
+
+  conversations = [];
+  for (const [name, msgs] of chMap) conversations.push({kind:'channel', name, messages:msgs});
+  for (const [, info] of dirMap) conversations.push({kind:'direct', name:info.name, pub:info.pub, messages:info.messages});
+  if (unknown.length) conversations.push({kind:'unknown', name:'Unknown senders', messages:unknown});
+}
+
+function resolveSender(senderPub) {
+  if (!senderPub) return '';
+  for (const id of identities) { if (id.signing_public_key === senderPub) return id.name; }
+  for (const c of contacts)    { if (c.signing_public_key === senderPub)  return c.name; }
+  return null;
+}
+
+function resolveSenderDisplay(senderPub) {
+  if (!senderPub) return null;
+  for (const id of identities) { if (id.signing_public_key === senderPub) return id.name; }
+  for (const c of contacts)    { if (c.signing_public_key === senderPub)  return c.name; }
+  return senderPub.slice(0,8) + '…';
+}
+
+// ── topological sort (Kahn's) ──────────────────────────────────────────────
+function topoSort(msgs) {
+  if (!msgs.length) return [];
+  const ids  = new Set(msgs.map(m => m.block_id));
+  const pred = m => m.thread_refs?.[0] && m.thread_refs[0] !== ZERO64 ? m.thread_refs[0] : null;
+  const inDeg = new Map(msgs.map(m => [m.block_id, 0]));
+  const succs = new Map(msgs.map(m => [m.block_id, []]));
+  for (const m of msgs) {
+    const p = pred(m);
+    if (p && ids.has(p)) {
+      inDeg.set(m.block_id, inDeg.get(m.block_id) + 1);
+      succs.get(p).push(m.block_id);
+    }
+  }
+  const byId = new Map(msgs.map(m => [m.block_id, m]));
+  const queue = msgs.filter(m => inDeg.get(m.block_id) === 0).sort(byReceivedAt);
+  const sorted = [];
+  while (queue.length) {
+    const m = queue.shift();
+    sorted.push(m);
+    for (const sid of succs.get(m.block_id)) {
+      const d = inDeg.get(sid) - 1;
+      inDeg.set(sid, d);
+      if (d === 0) { queue.push(byId.get(sid)); queue.sort(byReceivedAt); }
+    }
+  }
+  const seen = new Set(sorted.map(m => m.block_id));
+  msgs.filter(m => !seen.has(m.block_id)).sort(byReceivedAt).forEach(m => sorted.push(m));
+  return sorted;
+}
+
+function byReceivedAt(a, b) { return new Date(a.received_at) - new Date(b.received_at); }
+
+function causalHead(msgs) {
+  const sorted = topoSort(msgs);
+  return sorted.length ? sorted[sorted.length - 1].block_id : null;
+}
+
+// ── sidebar ────────────────────────────────────────────────────────────────
+function renderSidebar() {
+  const chContainer  = el('sb-channels');
+  const dirContainer = el('sb-directs');
+  chContainer.innerHTML  = '';
+  dirContainer.innerHTML = '';
+
+  const chConvs  = conversations.filter(c => c.kind === 'channel');
+  const dirConvs = conversations.filter(c => c.kind !== 'channel');
+
+  if (!chConvs.length) {
+    chContainer.innerHTML = '<div style="padding:6px 14px;font-size:11px;color:var(--muted)">No channels joined</div>';
+  }
+  for (const conv of chConvs) chContainer.appendChild(makeSbItem(conv));
+
+  if (!dirConvs.length) {
+    dirContainer.innerHTML = '<div style="padding:6px 14px;font-size:11px;color:var(--muted)">No messages yet</div>';
+  }
+  for (const conv of dirConvs) dirContainer.appendChild(makeSbItem(conv));
+}
+
+function makeSbItem(conv) {
+  const div = document.createElement('div');
+  div.className = 'sb-item';
+  if (currentView && currentView.kind === conv.kind && currentView.name === conv.name) div.classList.add('active');
+  const prefix = conv.kind === 'channel' ? '<span class="sb-hash">#</span> ' : '';
+  div.innerHTML = `${prefix}<span class="sb-name">${esc(conv.name)}</span>`;
+  div.addEventListener('click', () => openConversation(conv));
+  return div;
+}
+
+// ── conversation view ──────────────────────────────────────────────────────
+function openConversation(conv) {
+  currentView = conv;
+  closeSidebar();
+  el('panel-view').classList.add('hidden');
+  el('conv-view').classList.remove('hidden');
+  el('conv-title').textContent = conv.kind === 'channel' ? '#' + conv.name : conv.name;
+  el('conv-sub').textContent = conv.kind === 'channel' ? 'channel' : conv.kind === 'unknown' ? 'unknown senders' : 'direct';
+  renderMessages(conv);
+  renderCompose(conv);
+  renderSidebar();
+}
+
+function rerenderCurrentView() {
+  if (!currentView) return;
+  if (currentView.kind === 'panel' || currentView.kind === 'new') return;
+  const conv = conversations.find(c => c.kind === currentView.kind && c.name === currentView.name);
+  if (conv) { currentView = conv; renderMessages(conv); updateComposeHead(conv); }
+}
+
+function renderMessages(conv) {
+  const container = el('conv-messages');
+  el('conv-empty').classList.add('hidden');
+  container.innerHTML = '';
+
+  if (!conv.messages.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.textContent = 'No messages yet.';
+    container.appendChild(empty);
     return;
   }
 
-  [...inbox].reverse().forEach(m => {
-    const badge = m.channel ? `<span class="ch-badge">#${esc(m.channel)}</span>` : '';
-    const to    = m.identity ? `to&nbsp;<strong>${esc(m.identity)}</strong> &nbsp;·&nbsp; ` : '';
-    const div = document.createElement('div');
-    div.className = 'msg-item';
-    div.innerHTML =
-      `<div class="msg-meta">${badge}${esc(fmtTime(m.receivedAt))} &nbsp;·&nbsp; ${to}${esc(m.blockId.slice(0,12))}…</div>` +
-      `<div class="msg-body">${esc(m.content)}</div>`;
-    list.appendChild(div);
-  });
+  const sorted  = topoSort(conv.messages);
+  const convIds = new Set(sorted.map(m => m.block_id));
+  const succMap = new Map();
+  for (const m of sorted) {
+    const p = m.thread_refs?.[0];
+    if (p && p !== ZERO64) {
+      if (!succMap.has(p)) succMap.set(p, []);
+      succMap.get(p).push(m.block_id);
+    }
+  }
+
+  const frag = document.createDocumentFragment();
+  for (let i = 0; i < sorted.length; i++) {
+    const m = sorted[i];
+    const directPred = m.thread_refs?.[0];
+    const hasRef     = directPred && directPred !== ZERO64;
+    const predInConv = hasRef && convIds.has(directPred);
+    const predMissing = hasRef && !predInConv;
+    const siblings   = hasRef ? (succMap.get(directPred) || []) : [];
+    const isFork     = siblings.length > 1;
+    const forkPos    = isFork ? siblings.indexOf(m.block_id) : -1;
+    if (predMissing) frag.appendChild(makeGapNode(directPred));
+    frag.appendChild(makeMsgRow(m, {
+      hasPred: predInConv || predMissing,
+      hasSucc: succMap.has(m.block_id),
+      isFork,
+      forkFirst: forkPos === 0,
+      forkLast:  forkPos === siblings.length - 1,
+    }));
+  }
+  container.appendChild(frag);
+  container.scrollTop = container.scrollHeight;
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-//  Compose — encrypt & send
-// ═══════════════════════════════════════════════════════════════════════
+function makeGapNode(blockId) {
+  const div = document.createElement('div');
+  div.className = 'gap-node';
+  div.innerHTML = `
+    <div class="gap-connector-col">
+      <div class="gap-line-top"></div>
+      <div style="width:6px;height:6px;border-radius:50%;background:var(--border);flex-shrink:0"></div>
+      <div class="gap-line-bottom"></div>
+    </div>
+    <div class="gap-label">╌╌╌ gap — ${blockId.slice(0,12)}… missing</div>`;
+  return div;
+}
 
-async function sendMessage() {
-  const body = el('compose-body').value;
-  if (!body) { toast('Message is empty.', true); return; }
+function makeMsgRow(m, {hasPred, hasSucc, isFork, forkFirst, forkLast}) {
+  const div = document.createElement('div');
+  div.className = 'msg-row';
+  const bulletClass = isFork
+    ? (forkFirst ? 'bullet fork-first' : forkLast ? 'bullet fork-last' : 'bullet fork-mid')
+    : 'bullet';
+  div.innerHTML = `
+    <div class="connector-col">
+      ${hasPred ? '<div class="conn-top"></div>' : '<div class="conn-none"></div>'}
+      <div class="${bulletClass}">●</div>
+      ${hasSucc ? '<div class="conn-bottom"></div>' : '<div class="conn-none"></div>'}
+    </div>
+    <div class="msg-body-col">
+      <div class="msg-meta">
+        ${renderSenderMeta(m)}
+        ${renderTimeMeta(m)}
+        <span class="msg-block-id">${m.block_id.slice(0,12)}…</span>
+      </div>
+      <div class="msg-content ${m.msg_type === 1 ? 'binary' : m.msg_type === 2 ? 'system' : ''}">${renderContent(m)}</div>
+    </div>`;
+  return div;
+}
 
-  const btn = el('send-btn');
+function renderSenderMeta(m) {
+  if (!m.sender_pub) return '<span class="msg-sender anon">anon</span>';
+  return `<span class="msg-sender">${esc(resolveSenderDisplay(m.sender_pub))}</span>`;
+}
+
+function renderTimeMeta(m) {
+  const ref    = m.sent_at || m.received_at;
+  const sentD  = m.sent_at ? new Date(m.sent_at) : null;
+  const recvD  = new Date(m.received_at);
+  const delayed = sentD && (recvD - sentD) > 5 * 60 * 1000;
+  if (delayed) {
+    return `<span class="msg-time delayed" title="Sneakernet delay">sent ${fmtTime(m.sent_at)} · recv ${fmtTime(m.received_at)}</span>`;
+  }
+  return `<span class="msg-time">${fmtTime(ref)}</span>`;
+}
+
+function renderContent(m) {
+  if (m.msg_type === 1) return `[binary, ${b64byteLen(m.content)} bytes]`;
+  return esc(m.content_text);
+}
+
+// ── compose ────────────────────────────────────────────────────────────────
+function renderCompose(conv) {
+  el('compose-area').classList.remove('hidden');
+  el('compose-extra').innerHTML = '';
+  el('compose-body').value = '';
+  if (conv.kind === 'channel') renderComposeChannel(conv);
+  else renderComposeDirect(conv);
+}
+
+function renderComposeChannel(conv) {
+  const head = causalHead(conv.messages);
+  const asSuffix = activeIdentity ? ` · as <span class="ctx-val">${esc(activeIdentity.name)}</span>` : '';
+  el('compose-ctx').innerHTML = (head
+    ? `composing after: <span class="ctx-val">${head.slice(0,12)}…</span>`
+    : 'starting new thread in <span class="ctx-val">#' + esc(conv.name) + '</span>')
+    + asSuffix;
+  el('compose-extra').innerHTML = '';
+  el('send-btn').dataset.mode = 'channel';
+}
+
+function renderComposeDirect(conv) {
+  const recipKey = conv.pub || '';
+  const head = causalHead(conv.messages);
+  const asSuffix = activeIdentity ? ` · as <span class="ctx-val">${esc(activeIdentity.name)}</span>` : '';
+  el('compose-ctx').innerHTML = `replying to <span class="ctx-val">${esc(conv.name)}</span>`
+    + (head ? ` after <span class="ctx-val">${head.slice(0,12)}…</span>` : '')
+    + asSuffix;
+  el('compose-extra').innerHTML = '';
+  el('send-btn').dataset.mode = 'direct';
+  el('send-btn').dataset.recipKey = recipKey;
+}
+
+function updateComposeHead(conv) {
+  if (!currentView || currentView.kind !== conv.kind || currentView.name !== conv.name) return;
+  const head = causalHead(conv.messages);
+  if (!head) return;
+  const ctx = el('compose-ctx');
+  if (!ctx) return;
+  if (conv.kind === 'channel') {
+    const asSuffix = activeIdentity ? ` · as <span class="ctx-val">${esc(activeIdentity.name)}</span>` : '';
+    ctx.innerHTML = `composing after: <span class="ctx-val">${head.slice(0,12)}…</span>${asSuffix}`;
+  }
+}
+
+function openNewMsg() {
+  currentView = {kind: 'new'};
+  closeSidebar();
+  el('panel-view').classList.add('hidden');
+  el('conv-view').classList.remove('hidden');
+  el('conv-title').textContent = 'New Message';
+  el('conv-sub').textContent = '';
+  el('conv-messages').innerHTML = '';
+  el('conv-empty').classList.remove('hidden');
+  el('conv-empty').textContent = 'Your message will appear here after sending and scanning.';
+  const asSuffix = activeIdentity ? `as ${activeIdentity.name}` : '';
+  el('compose-ctx').textContent = asSuffix;
+  const contactOpts = contacts.map(c =>
+    `<option value="${esc(c.public_key)}">${esc(c.name)}</option>`
+  ).join('');
+  el('compose-extra').innerHTML = `
+    ${contacts.length ? `<div class="compose-row">
+      <select id="new-recipient-contact" style="font-size:12px">
+        <option value="">— pick a contact —</option>
+        ${contactOpts}
+      </select>
+    </div>` : ''}
+    <div class="compose-row">
+      <input id="new-recipient" placeholder="Or paste encryption key (base64 X25519)" style="font-family:var(--mono);font-size:11px">
+    </div>`;
+  if (contacts.length) {
+    el('new-recipient-contact').addEventListener('change', e => {
+      if (e.target.value) el('new-recipient').value = e.target.value;
+    });
+  }
+  el('compose-area').classList.remove('hidden');
+  el('compose-body').value = '';
+  el('send-btn').dataset.mode = 'new';
+  renderSidebar();
+}
+
+// ── send ───────────────────────────────────────────────────────────────────
+async function send() {
+  const body = el('compose-body').value.trim();
+  if (!body) { toast('Enter a message.'); return; }
+
+  const mode = el('send-btn').dataset.mode;
+  const btn  = el('send-btn');
   btn.disabled = true;
-  status('Encrypting…');
 
   try {
-    let payload;
+    const senderName = activeIdentity?.name || null;
 
-    if (composeMode === 'direct') {
-      const recipKey = el('compose-key').value.trim();
-      if (!recipKey) { toast('Enter or select a recipient public key.', true); return; }
-      let pubBytes;
-      try { pubBytes = b64dec(recipKey); } catch { toast('Invalid base64 key.', true); return; }
-      if (pubBytes.length !== 32) { toast('Public key must be 32 bytes.', true); return; }
-      payload = await encryptMessage(recipKey, body);
-    } else {
-      const chName = el('channel-select').value;
-      if (!chName) { toast('Select a channel.', true); return; }
-      const ch = channelStore.find(c=>c.name===chName);
-      if (!ch) { toast('Channel not found.', true); return; }
-      payload = await encryptChannel(b64dec(ch.keyBase64), body);
-    }
+    if (mode === 'channel') {
+      const conv = currentView;
+      const head = causalHead(conv.messages);
+      await backend.sendChannel(conv.name, body, senderName, head || null);
 
-    const stamp = new Uint8Array(4); // zero stamp → work_factor 0, 24h TTL
-    const r = await fetch('/api/blocks', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({stamp: b64enc(stamp), payload: b64enc(payload)}),
-    });
+    } else if (mode === 'direct') {
+      const conv = currentView;
+      const head = causalHead(conv.messages);
+      const recipKey = btn.dataset.recipKey;
+      if (!recipKey) { toast('No recipient key available.', true); return; }
+      await backend.sendDirect(recipKey, body, senderName, head || null);
 
-    if (!r.ok) {
-      const d = await r.json().catch(()=>({}));
-      toast('Send failed: ' + (d.error || r.status), true);
-      return;
+    } else { // new
+      const recipKey = el('new-recipient')?.value.trim();
+      if (!recipKey) { toast('Enter recipient key.', true); return; }
+      await backend.sendDirect(recipKey, body, senderName, null);
     }
 
     el('compose-body').value = '';
-    toast('Message encrypted and sent.');
-    status('Block stored (24h TTL, work_factor 0).', 'ok');
+    toast('Message sent.');
+    setStatus('Block stored on relay.');
   } catch(e) {
-    toast('Error: ' + e.message, true);
-    status('Send failed.', 'err');
+    toast('Send failed: ' + e.message, true);
   } finally {
     btn.disabled = false;
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-//  Boot
-// ═══════════════════════════════════════════════════════════════════════
+// ── identities & channels panel ────────────────────────────────────────────
+async function openPanel() {
+  currentView = {kind: 'panel'};
+  closeSidebar();
+  el('conv-view').classList.add('hidden');
+  el('panel-view').classList.remove('hidden');
+  el('conv-title').textContent = 'Identities, Channels & Contacts';
+  el('conv-sub').textContent = '';
+  renderIdentities();
+  renderChannelList();
+  await renderContacts();
+  renderSidebar();
+}
 
-async function init() {
-  try {
-    identities   = await dbGetAll('identities') || [];
-    contacts     = loadContacts();
-    channelStore = loadChannelStore();
-    renderKeys();
-    renderContacts();
-    renderChannels();
-    renderInbox();
-    setMode('direct');
-    status('Ready — ' + identities.length + ' key' + (identities.length===1?'':'s') + ' loaded.');
-  } catch(e) {
-    status('IndexedDB unavailable: ' + e.message, 'err');
+async function loadIdentities() {
+  identities = await backend.listIdentities();
+  populateActiveIdentityDropdown();
+}
+
+function populateActiveIdentityDropdown() {
+  const sel = el('active-identity');
+  if (!sel) return;
+  const prev = sel.value;
+  while (sel.options.length > 1) sel.remove(1);
+  for (const id of identities) sel.appendChild(new Option(id.name, id.name));
+  if (prev && identities.find(id => id.name === prev)) {
+    sel.value = prev;
+  } else {
+    sel.value = '';
+    activeIdentity = null;
   }
 }
 
-el('gen-btn').addEventListener('click', generateKey);
-el('scan-btn').addEventListener('click', scan);
-el('send-btn').addEventListener('click', sendMessage);
-el('add-contact-btn').addEventListener('click', addContact);
-el('join-ch-btn').addEventListener('click', joinChannel);
-el('new-key-name').addEventListener('keydown', e => { if(e.key==='Enter') generateKey(); });
-el('new-contact-name').addEventListener('keydown', e => { if(e.key==='Enter') el('new-contact-key').focus(); });
-el('new-contact-key').addEventListener('keydown', e => { if(e.key==='Enter') addContact(); });
-el('new-ch-name').addEventListener('keydown', e => { if(e.key==='Enter') el('new-ch-pass').focus(); });
-el('new-ch-pass').addEventListener('keydown', e => { if(e.key==='Enter') joinChannel(); });
+function renderIdentities() {
+  const list = el('id-list');
+  list.innerHTML = '';
+  if (!identities.length) {
+    list.innerHTML = '<div style="font-size:12px;color:var(--muted)">No identities yet — add one to receive and sign messages.</div>';
+    return;
+  }
+  for (const id of identities) {
+    const div = document.createElement('div');
+    div.className = 'card';
+    div.innerHTML = `
+      <div class="card-header">
+        <span class="card-name">${esc(id.name)}</span>
+        <div style="display:flex;gap:4px">
+          <button class="sm ghost" data-share>Share snk:</button>
+          <button class="sm danger" data-name="${esc(id.name)}">Delete</button>
+        </div>
+      </div>
+      <div class="card-key-row">
+        <div class="card-key-info">
+          <div class="card-key-label">Encryption key (X25519) — share so others can send you messages</div>
+          <div class="card-key">${esc(id.public_key)}</div>
+        </div>
+        <button class="sm ghost" data-copy="${esc(id.public_key)}" title="Copy encryption key">Copy</button>
+      </div>
+      <div class="card-key-row">
+        <div class="card-key-info">
+          <div class="card-key-label">Signing key (Ed25519) — share so others can verify you sent it</div>
+          <div class="card-key">${esc(id.signing_public_key)}</div>
+        </div>
+        <button class="sm ghost" data-copy="${esc(id.signing_public_key)}" title="Copy signing key">Copy</button>
+      </div>`;
+    div.querySelector('[data-share]').addEventListener('click', () => {
+      copyKey(snkUri(id.name, id.public_key, id.signing_public_key));
+      toast('snk: URI copied — share it with contacts.');
+    });
+    div.querySelector('.sm.danger').addEventListener('click', () => deleteIdentity(id.name));
+    div.querySelectorAll('[data-copy]').forEach(btn => {
+      btn.addEventListener('click', () => copyKey(btn.dataset.copy));
+    });
+    list.appendChild(div);
+  }
+}
 
-init();
+async function addIdentity() {
+  const name = el('new-id-name').value.trim();
+  if (!name) return;
+  try {
+    await backend.addIdentity(name);
+  } catch(e) {
+    toast(e.message === 'duplicate' ? 'That name is already taken.' : 'Failed to add identity.', true);
+    return;
+  }
+  el('new-id-name').value = '';
+  await loadIdentities();
+  renderIdentities();
+  rebuildConversations();
+  renderSidebar();
+  toast(`Identity "${name}" created.`);
+}
+
+async function deleteIdentity(name) {
+  if (!confirm(`Delete identity "${name}"? This cannot be undone.`)) return;
+  try {
+    await backend.deleteIdentity(name);
+  } catch {
+    toast('Failed to delete identity.', true); return;
+  }
+  await loadIdentities();
+  renderIdentities();
+  rebuildConversations();
+  renderSidebar();
+  toast(`Identity "${name}" deleted.`);
+}
+
+// ── contacts ────────────────────────────────────────────────────────────────
+async function loadContacts() {
+  contacts = await backend.listContacts();
+}
+
+async function renderContacts() {
+  const list = el('contact-list');
+  if (!list) return;
+  list.innerHTML = '';
+  if (!contacts.length) {
+    list.innerHTML = '<div style="font-size:12px;color:var(--muted)">No contacts yet.</div>';
+    return;
+  }
+  for (const c of contacts) {
+    const hash = await contactHash(c.public_key);
+    const div = document.createElement('div');
+    div.className = 'card';
+    div.innerHTML = `
+      <div class="card-header">
+        <span class="card-name contact-label-${hash}">${esc(c.name)}<span class="contact-hash">#${hash}</span></span>
+        <div style="display:flex;gap:4px">
+          <button class="sm ghost" data-action="rename">Rename</button>
+          <button class="sm ghost" data-action="copy-snk">Copy snk:</button>
+          <button class="sm danger" data-action="remove">Remove</button>
+        </div>
+      </div>`;
+    div.querySelector('[data-action="rename"]').addEventListener('click', () => startRenameContact(c, hash, div));
+    div.querySelector('[data-action="copy-snk"]').addEventListener('click', () => {
+      copyKey(snkUri(c.name, c.public_key, c.signing_public_key));
+      toast('snk: URI copied.');
+    });
+    div.querySelector('[data-action="remove"]').addEventListener('click', () => removeContact(c));
+    list.appendChild(div);
+  }
+}
+
+function startRenameContact(c, hash, card) {
+  const label = card.querySelector(`.contact-label-${hash}`);
+  const current = c.name;
+  label.innerHTML = `<input style="font-size:13px;padding:2px 6px" value="${esc(current)}">`;
+  const input = label.querySelector('input');
+  input.focus(); input.select();
+  let committed = false;
+  const commit = async () => {
+    if (committed) return; committed = true;
+    const newName = input.value.trim();
+    if (!newName || newName === current) { await renderContacts(); return; }
+    try {
+      await backend.renameContact(toB64url(c.public_key), newName);
+      toast(`Renamed to "${newName}".`);
+    } catch {
+      toast('Rename failed.', true);
+    }
+    await loadContacts(); await renderContacts();
+  };
+  input.addEventListener('blur', commit);
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+    if (e.key === 'Escape') { committed = true; renderContacts(); }
+  });
+}
+
+async function addContact() {
+  const uri = el('new-contact-uri').value.trim();
+  if (!uri) { toast('Paste a snk: URI.', true); return; }
+  const parsed = parseSnkUri(uri);
+  if (!parsed) { toast('Invalid snk: URI — expected snk:name/pubkey/signkey.', true); return; }
+  try {
+    await backend.addContact(parsed.name, parsed.public_key, parsed.signing_public_key);
+  } catch(e) {
+    toast(e.message === 'duplicate' ? 'That contact already exists.' : 'Failed to add contact.', true);
+    return;
+  }
+  el('new-contact-uri').value = '';
+  await loadContacts(); await renderContacts();
+  rebuildConversations(); renderSidebar();
+  toast(`Added "${parsed.name}".`);
+}
+
+async function removeContact(c) {
+  try {
+    await backend.removeContact(toB64url(c.public_key));
+  } catch {
+    toast('Failed to remove contact.', true); return;
+  }
+  await loadContacts(); await renderContacts();
+  rebuildConversations(); renderSidebar();
+  toast('Contact removed.');
+}
+
+async function loadChannels() {
+  channels = await backend.listChannels();
+}
+
+function renderChannelList() {
+  const list = el('ch-list');
+  list.innerHTML = '';
+  if (!channels.length) {
+    list.innerHTML = '<div style="font-size:12px;color:var(--muted)">No channels joined yet.</div>';
+    return;
+  }
+  for (const ch of channels) {
+    const div = document.createElement('div');
+    div.className = 'card';
+    div.style.flexDirection = 'row';
+    div.style.alignItems = 'center';
+    div.innerHTML = `
+      <span class="ch-badge">#</span>
+      <span style="flex:1;font-size:13px;font-weight:500;margin-left:6px">${esc(ch.name)}</span>
+      <button class="sm ghost" data-name="${esc(ch.name)}">Leave</button>`;
+    div.querySelector('.sm.ghost').addEventListener('click', () => removeChannel(ch.name));
+    list.appendChild(div);
+  }
+}
+
+async function addChannel() {
+  const pass = el('new-ch-pass').value.trim();
+  if (!pass) { toast('Enter a passphrase.', true); return; }
+  try {
+    await backend.joinChannel(pass, pass);
+  } catch(e) {
+    toast(e.message === 'duplicate' ? 'Already joined that channel.' : 'Failed to join channel.', true);
+    return;
+  }
+  el('new-ch-pass').value = '';
+  el('sb-ch-form').classList.add('hidden');
+  await loadChannels();
+  rebuildConversations();
+  renderChannelList();
+  renderSidebar();
+  toast(`Joined channel "${pass}".`);
+}
+
+async function removeChannel(name) {
+  try {
+    await backend.leaveChannel(name);
+  } catch {
+    toast('Failed to leave channel.', true); return;
+  }
+  await loadChannels();
+  rebuildConversations();
+  renderChannelList();
+  renderSidebar();
+  toast(`Left channel "${name}".`);
+}
+
+async function copyKey(key) {
+  await navigator.clipboard.writeText(key);
+  toast('Copied to clipboard.');
+}
+
+// ── view transitions ───────────────────────────────────────────────────────
+function showLock() {
+  el('lock-screen').classList.remove('hidden');
+  el('app').classList.add('hidden');
+  el('pw').focus();
+}
+
+async function showApp() {
+  el('lock-screen').classList.add('hidden');
+  el('app').classList.remove('hidden');
+  await Promise.all([loadMessages(), loadIdentities(), loadChannels(), loadContacts()]);
+  rebuildConversations();
+  renderSidebar();
+  setStatus('Ready');
+}
+
+function openSidebar()  { el('sidebar').classList.add('open'); el('sidebar-overlay').classList.add('show'); }
+function closeSidebar() { el('sidebar').classList.remove('open'); el('sidebar-overlay').classList.remove('show'); }
+
+// ── helpers ────────────────────────────────────────────────────────────────
+const el = id => document.getElementById(id);
+
+function lockErr(msg) { el('lock-err').textContent = msg; }
+
+function setStatus(msg, cls = '') {
+  const s = el('statusbar');
+  s.textContent = msg;
+  s.className = cls;
+}
+
+let toastTimer;
+function toast(msg, err = false) {
+  const t = el('toast');
+  t.textContent = msg;
+  t.style.borderColor = err ? 'var(--danger)' : 'var(--border)';
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 2800);
+}
+
+function fmtTime(iso) {
+  const d = new Date(iso);
+  return d.toLocaleDateString([], {month:'short', day:'numeric'})
+    + ' ' + d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+}
+
+function esc(s) {
+  return String(s ?? '')
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+function b64toText(b64) {
+  try {
+    const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+    return new TextDecoder('utf-8', {fatal:true}).decode(bytes);
+  } catch {
+    return '[binary content]';
+  }
+}
+
+function b64byteLen(b64) {
+  const s = b64.replace(/=+$/, '');
+  return Math.floor(s.length * 3 / 4);
+}
 </script>
 </body>
 </html>
