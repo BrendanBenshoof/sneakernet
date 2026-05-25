@@ -121,7 +121,7 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 // rebuildScraper recreates the Client from the current keystore identities and channels.
 // Caller must hold s.mu write lock.
 func (s *Server) rebuildScraper() {
-	s.scraper = client.New(s.blocks, s.msgs, s.ks.Keys(), s.ks.Channels())
+	s.scraper = client.New(s.blocks, s.msgs, s.ks.Identities(), s.ks.Channels())
 }
 
 func newToken() (string, error) {

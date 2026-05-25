@@ -2,7 +2,6 @@ package client
 
 import (
 	"context"
-	"crypto/ecdh"
 	"time"
 
 	"github.com/brendanbenshoof/sneakernet/blockstore"
@@ -12,15 +11,15 @@ const scrapePageSize = 100
 
 // Client scrapes a blockstore for messages addressed to any of its held keys.
 type Client struct {
-	blocks   blockstore.Store
-	messages *MessageStore
-	privKeys []*ecdh.PrivateKey
-	channels []Channel
+	blocks     blockstore.Store
+	messages   *MessageStore
+	identities []*Identity
+	channels   []Channel
 }
 
 // New creates a Client. All identity and channel keys are tried on every block.
-func New(blocks blockstore.Store, messages *MessageStore, privKeys []*ecdh.PrivateKey, channels []Channel) *Client {
-	return &Client{blocks: blocks, messages: messages, privKeys: privKeys, channels: channels}
+func New(blocks blockstore.Store, messages *MessageStore, identities []*Identity, channels []Channel) *Client {
+	return &Client{blocks: blocks, messages: messages, identities: identities, channels: channels}
 }
 
 // Scrape pages through all blocks added since the last checkpoint, attempts
@@ -53,10 +52,11 @@ func (c *Client) Scrape(ctx context.Context) (int, error) {
 			if err != nil {
 				continue // block expired between list and get
 			}
-			mp, ok := c.tryAllKeys(payload)
+			mp, identityName, ok := c.tryAllKeys(payload)
 			if !ok {
 				continue
 			}
+			mp.DecryptedBy = identityName
 
 			var inserted bool
 			if mp.IsFragment() {
@@ -82,19 +82,19 @@ func (c *Client) Scrape(ctx context.Context) (int, error) {
 }
 
 // tryAllKeys attempts decryption with each held private key and channel key.
-// Returns the MessagePayload and true on the first success. mp.Channel is set
-// to the channel name for channel messages, empty for direct messages.
-func (c *Client) tryAllKeys(payload blockstore.Payload) (MessagePayload, bool) {
-	for _, key := range c.privKeys {
-		if mp, err := tryDecrypt(key, payload); err == nil {
-			return mp, true
+// Returns the MessagePayload, the identity name that decrypted it (empty for
+// channel messages), and true on the first success.
+func (c *Client) tryAllKeys(payload blockstore.Payload) (MessagePayload, string, bool) {
+	for _, id := range c.identities {
+		if mp, err := tryDecrypt(id.Key, payload); err == nil {
+			return mp, id.Name, true
 		}
 	}
 	for _, ch := range c.channels {
 		if mp, err := tryDecryptChannel(ch.Key, payload); err == nil {
 			mp.Channel = ch.Name
-			return mp, true
+			return mp, "", true
 		}
 	}
-	return MessagePayload{}, false
+	return MessagePayload{}, "", false
 }

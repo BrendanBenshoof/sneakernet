@@ -174,15 +174,17 @@ func (s *Server) handleRemoveIdentity(w http.ResponseWriter, r *http.Request) {
 }
 
 type msgResp struct {
-	ID         int64    `json:"id"`
-	BlockID    string   `json:"block_id"`
-	SenderPub  string   `json:"sender_pub"`
-	ThreadRefs []string `json:"thread_refs"`
-	SentAt     string   `json:"sent_at,omitempty"`
-	MsgType    uint8    `json:"msg_type"`
-	Content    string   `json:"content"`
-	Channel    string   `json:"channel,omitempty"`
-	ReceivedAt string   `json:"received_at"`
+	ID          int64    `json:"id"`
+	BlockID     string   `json:"block_id"`
+	SenderPub   string   `json:"sender_pub"`
+	ThreadRefs  []string `json:"thread_refs"`
+	SentAt      string   `json:"sent_at,omitempty"`
+	MsgType     uint8    `json:"msg_type"`
+	Content     string   `json:"content"`
+	Channel     string   `json:"channel,omitempty"`
+	ReceivedAt  string   `json:"received_at"`
+	SentTo      string   `json:"sent_to,omitempty"`      // base64 X25519 pub of recipient; set for sent messages
+	DecryptedBy string   `json:"decrypted_by,omitempty"` // local identity name that decrypted or sent the message
 }
 
 func buildMsgResp(m client.Message) msgResp {
@@ -215,6 +217,10 @@ func buildMsgResp(m client.Message) msgResp {
 		refs = []string{}
 	}
 	resp.ThreadRefs = refs
+	if len(m.SentTo) > 0 {
+		resp.SentTo = base64.StdEncoding.EncodeToString(m.SentTo)
+	}
+	resp.DecryptedBy = m.DecryptedBy
 	return resp
 }
 
@@ -381,6 +387,12 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "failed to store block")
 			return
 		}
+
+		// Immediately persist plaintext so it appears without waiting for a scrape.
+		mp.SentTo = pubBytes
+		mp.DecryptedBy = req.SenderIdentity
+		_, _ = s.msgs.SaveMessage(id, mp)
+
 		writeJSON(w, http.StatusCreated, map[string]any{
 			"block_ids": []string{hex.EncodeToString(id[:])},
 			"frag_id":   "",
@@ -406,6 +418,8 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		fmp.FragID = fragID
 		fmp.FragIndex = uint16(i)
 		fmp.FragTotal = total
+		fmp.SentTo = pubBytes
+		fmp.DecryptedBy = req.SenderIdentity
 
 		var payload blockstore.Payload
 		if signerID != nil {
@@ -422,6 +436,7 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "failed to store fragment block")
 			return
 		}
+		_, _ = s.msgs.SaveFragment(id, fmp)
 		blockIDs = append(blockIDs, hex.EncodeToString(id[:]))
 	}
 

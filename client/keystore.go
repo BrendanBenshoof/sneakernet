@@ -340,6 +340,14 @@ func (k *Keystore) Keys() []*ecdh.PrivateKey {
 	return keys
 }
 
+// Identities returns all stored identities. Prefer this over Keys() when the
+// identity name is needed (e.g. to set decrypted_by on saved messages).
+func (k *Keystore) Identities() []*Identity {
+	ids := make([]*Identity, len(k.identities))
+	copy(ids, k.identities)
+	return ids
+}
+
 // AddChannel derives a 32-byte channel key from passphrase and stores it under name.
 // Returns an error if name is already taken.
 func (k *Keystore) AddChannel(name, passphrase string) (*Channel, error) {

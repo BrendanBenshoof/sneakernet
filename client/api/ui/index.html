@@ -925,10 +925,14 @@ function rebuildConversations() {
       if (!chMap.has(m.channel)) chMap.set(m.channel, []);
       chMap.get(m.channel).push(m);
     } else {
-      // Group by the sender's X25519 encryption key so that replies use the
-      // correct key type. resolveEncKey maps Ed25519 signing key → X25519 key.
-      const otherEncKey = resolveEncKey(m.sender_pub) || '';
-      const otherName   = resolveSender(m.sender_pub);
+      // Group by the "other" person's X25519 key so that sent and received
+      // messages land in the same conversation.
+      // sent_to (present on sent messages) tells us the recipient.
+      // For received messages, resolveEncKey maps sender's Ed25519 → X25519.
+      const otherEncKey = m.sent_to || resolveEncKey(m.sender_pub) || '';
+      const otherName = m.sent_to
+        ? (resolveByEncKey(m.sent_to) || m.sent_to.slice(0,8) + '…')
+        : resolveSender(m.sender_pub);
       if (otherName === null && !otherEncKey) {
         unknown.push(m);
       } else {

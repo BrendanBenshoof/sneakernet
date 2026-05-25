@@ -13,15 +13,17 @@ import (
 
 // Message is a successfully decrypted and (for fragments) fully reassembled message.
 type Message struct {
-	ID         int64
-	BlockID    blockstore.ID // first block seen; for reassembled fragments, the first fragment's block
-	SenderPub  [32]byte      // Ed25519 public key; all-zeros = anonymous
-	ThreadRefs [8][32]byte   // skip list; ThreadRefs[0] is direct reply target; all-zeros = absent
-	SentAt     time.Time     // sender-claimed send time; zero = unknown
-	MsgType    uint8
-	Content    []byte
-	Channel    string // empty for direct messages; channel name for channel messages
-	ReceivedAt time.Time
+	ID          int64
+	BlockID     blockstore.ID // first block seen; for reassembled fragments, the first fragment's block
+	SenderPub   [32]byte      // Ed25519 public key; all-zeros = anonymous
+	ThreadRefs  [8][32]byte   // skip list; ThreadRefs[0] is direct reply target; all-zeros = absent
+	SentAt      time.Time     // sender-claimed send time; zero = unknown
+	MsgType     uint8
+	Content     []byte
+	Channel     string // empty for direct messages; channel name for channel messages
+	ReceivedAt  time.Time
+	SentTo      []byte // raw X25519 pub of recipient; set for sent messages, nil for received
+	DecryptedBy string // local identity name that decrypted (or sent) the message; empty = channel or anonymous
 }
 
 // MessageStore persists received messages and the scrape checkpoint.
@@ -68,6 +70,8 @@ func (s *MessageStore) migrate() error {
 		{"msg_type", "INTEGER NOT NULL DEFAULT 0"},
 		{"frag_id", "BLOB DEFAULT NULL"},
 		{"channel", "TEXT NOT NULL DEFAULT ''"},
+		{"sent_to", "BLOB DEFAULT NULL"},
+		{"decrypted_by", "TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, col := range addCols {
 		var count int
@@ -129,8 +133,8 @@ func (s *MessageStore) SetCheckpoint(t time.Time) error {
 func (s *MessageStore) SaveMessage(blockID blockstore.ID, mp MessagePayload) (bool, error) {
 	result, err := s.db.Exec(
 		`INSERT OR IGNORE INTO messages
-			(block_id, content, received_at, sender_pub, thread_refs, sent_at, msg_type, channel)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			(block_id, content, received_at, sender_pub, thread_refs, sent_at, msg_type, channel, sent_to, decrypted_by)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		blockID[:],
 		mp.Content,
 		time.Now().Unix(),
@@ -139,6 +143,8 @@ func (s *MessageStore) SaveMessage(blockID blockstore.ID, mp MessagePayload) (bo
 		zeroInt64(mp.Timestamp),
 		mp.MsgType,
 		mp.Channel,
+		zeroToNil(mp.SentTo),
+		mp.DecryptedBy,
 	)
 	if err != nil {
 		return false, fmt.Errorf("client: save message: %w", err)
@@ -215,8 +221,8 @@ func (s *MessageStore) SaveFragment(blockID blockstore.ID, mp MessagePayload) (b
 
 	res, err := tx.Exec(
 		`INSERT OR IGNORE INTO messages
-			(block_id, content, received_at, sender_pub, thread_refs, sent_at, msg_type, channel, frag_id)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			(block_id, content, received_at, sender_pub, thread_refs, sent_at, msg_type, channel, frag_id, sent_to, decrypted_by)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		firstBlockID[:],
 		buf.Bytes(),
 		time.Now().Unix(),
@@ -226,6 +232,8 @@ func (s *MessageStore) SaveFragment(blockID blockstore.ID, mp MessagePayload) (b
 		mp.MsgType,
 		mp.Channel,
 		mp.FragID[:],
+		zeroToNil(mp.SentTo),
+		mp.DecryptedBy,
 	)
 	if err != nil {
 		return false, fmt.Errorf("client: save fragment: insert message: %w", err)
@@ -243,7 +251,7 @@ func (s *MessageStore) SaveFragment(blockID blockstore.ID, mp MessagePayload) (b
 // GetMessage looks up a single message by block ID. Returns (Message{}, false, nil) if not found.
 func (s *MessageStore) GetMessage(blockID blockstore.ID) (Message, bool, error) {
 	row := s.db.QueryRow(
-		`SELECT id, block_id, content, received_at, sender_pub, thread_refs, sent_at, msg_type, channel
+		`SELECT id, block_id, content, received_at, sender_pub, thread_refs, sent_at, msg_type, channel, sent_to, decrypted_by
 		 FROM messages WHERE block_id = ?`,
 		blockID[:],
 	)
@@ -265,7 +273,7 @@ func (s *MessageStore) ListMessages() ([]Message, error) {
 // ListMessagesAfter returns messages with id > afterID, ordered by receipt time.
 func (s *MessageStore) ListMessagesAfter(afterID int64) ([]Message, error) {
 	rows, err := s.db.Query(
-		`SELECT id, block_id, content, received_at, sender_pub, thread_refs, sent_at, msg_type, channel
+		`SELECT id, block_id, content, received_at, sender_pub, thread_refs, sent_at, msg_type, channel, sent_to, decrypted_by
 		 FROM messages WHERE id > ? ORDER BY received_at ASC`,
 		afterID,
 	)
@@ -306,7 +314,8 @@ func scanMessage(s scanner) (Message, error) {
 	var msgType int
 
 	err := s.Scan(&m.ID, &blockBytes, &m.Content, &unix,
-		&senderPub, &threadRefsBlob, &sentAt, &msgType, &m.Channel)
+		&senderPub, &threadRefsBlob, &sentAt, &msgType, &m.Channel,
+		&m.SentTo, &m.DecryptedBy)
 	if err != nil {
 		return Message{}, err
 	}

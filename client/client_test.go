@@ -2,7 +2,6 @@ package client
 
 import (
 	"context"
-	"crypto/ecdh"
 	"testing"
 	"time"
 
@@ -56,7 +55,7 @@ func TestScrape(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c := New(bs, ms, []*ecdh.PrivateKey{recipientKey}, nil)
+	c := New(bs, ms, []*Identity{{Name: "test", Key: recipientKey}}, nil)
 	found, err := c.Scrape(context.Background())
 	if err != nil {
 		t.Fatalf("Scrape: %v", err)
@@ -162,7 +161,7 @@ func TestCheckpointAdvances(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c := New(bs, ms, []*ecdh.PrivateKey{key}, nil)
+	c := New(bs, ms, []*Identity{{Name: "test", Key: key}}, nil)
 
 	putBlock := func(text string) {
 		t.Helper()
@@ -237,7 +236,7 @@ func TestFragmentReassembly(t *testing.T) {
 		}
 	}
 
-	c := New(bs, ms, []*ecdh.PrivateKey{key}, nil)
+	c := New(bs, ms, []*Identity{{Name: "test", Key: key}}, nil)
 	found, err := c.Scrape(context.Background())
 	if err != nil {
 		t.Fatalf("Scrape: %v", err)
