@@ -172,6 +172,7 @@ func (s *SQLiteStore) ListBlocks(pageToken string, limit int, powFloor int, sinc
 		var ref BlockRef
 		copy(ref.ID[:], idBytes)
 		ref.WorkFactor = wf
+		ref.CreatedAt = createdAt
 		refs = append(refs, ref)
 		last.createdAt = createdAt
 		last.id = ref.ID

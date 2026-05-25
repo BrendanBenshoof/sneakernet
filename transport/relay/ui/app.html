@@ -1028,7 +1028,7 @@ class BrowserBackend {
   constructor() {
     this._inbox   = [];  // decrypted messages, server-compatible shape
     this._nextId  = 0;
-    this._lastScan = 0;  // unix seconds cursor for /api/blocks
+    this._resumeToken = localStorage.getItem('snk_resume_token') || '';
     this._loadSentIntoInbox();  // hydrate sent messages before first getMessages() call
   }
 
@@ -1157,14 +1157,16 @@ class BrowserBackend {
     // Sent-log entries must not block decryption of those same blocks by recipient identities.
     const seenIds  = new Set(this._inbox.filter(m => !m.sent_to).map(m => m.block_id));
     let found = 0;
-    let pageToken = '';
+    let pageToken = this._resumeToken;
+    let latestResumeToken = this._resumeToken;
 
     do {
-      const params = new URLSearchParams({since: this._lastScan, limit: 200});
+      const params = new URLSearchParams({limit: 200});
       if (pageToken) params.set('page_token', pageToken);
       const r = await fetch('/api/blocks?' + params);
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const data = await r.json();
+      if (data.resume_token) latestResumeToken = data.resume_token;
       pageToken = data.next_page_token || '';
 
       for (const blk of (data.blocks || [])) {
@@ -1229,7 +1231,8 @@ class BrowserBackend {
       }
     } while (pageToken);
 
-    this._lastScan = Math.floor(Date.now() / 1000);
+    this._resumeToken = latestResumeToken;
+    if (latestResumeToken) localStorage.setItem('snk_resume_token', latestResumeToken);
     return {found};
   }
 
