@@ -1532,6 +1532,7 @@ async function createAndUnlock() {
 }
 
 async function lock() {
+  clearTimeout(autoScrapeTimer);
   await backend.lock();
   allMessages = []; byBlock.clear(); conversations = [];
   showLock();
@@ -1552,7 +1553,10 @@ async function onboardCreate() {
 }
 
 // ── scrape ─────────────────────────────────────────────────────────────────
+let autoScrapeTimer = null;
+
 async function scrape() {
+  clearTimeout(autoScrapeTimer);
   const btn = el('scrape-btn');
   btn.disabled = true;
   btn.textContent = '⟳  Scanning…';
@@ -1566,6 +1570,7 @@ async function scrape() {
   } finally {
     btn.disabled = false;
     btn.textContent = '⟳  Refresh';
+    autoScrapeTimer = setTimeout(scrape, 5000);
   }
 }
 
@@ -2293,6 +2298,7 @@ async function showApp() {
   rebuildConversations();
   renderSidebar();
   setStatus('Ready');
+  scrape();
 }
 
 function openSidebar()  { el('sidebar').classList.add('open'); el('sidebar-overlay').classList.add('show'); }
