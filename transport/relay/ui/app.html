@@ -603,6 +603,9 @@
 
 <script>
 'use strict';
+const el = id => document.getElementById(id);
+function lockErr(msg) { el('lock-err').textContent = msg; }
+function setStatus(msg, cls = '') { const s = el('statusbar'); s.textContent = msg; s.className = cls; }
 // ═══════════════════════════════════════════════════════════════════════
 //  XChaCha20-Poly1305
 //  Implements RFC 8439 ChaCha20-Poly1305 + draft-irtf-cfrg-xchacha-03.
@@ -1008,6 +1011,7 @@ class BrowserBackend {
     this._inbox   = [];  // decrypted messages, server-compatible shape
     this._nextId  = 0;
     this._lastScan = 0;  // unix seconds cursor for /api/blocks
+    this._loadSentIntoInbox();  // hydrate sent messages before first getMessages() call
   }
 
   get requiresAuth() { return false; }
@@ -1125,11 +1129,15 @@ class BrowserBackend {
   // identities and channels, stores results in _inbox.
 
   async scrape() {
+    this._loadSentIntoInbox();
+
     const ids      = await dbGetAll('identities');
     const channels = this._loadChannels();
     const chKeys   = channels.map(ch => ({name: ch.name, key: b64dec(ch.keyBase64)}));
 
-    const seenIds  = new Set(this._inbox.map(m => m.block_id));
+    // Only seed seenIds from received blocks, not sent-log entries.
+    // Sent-log entries must not block decryption of those same blocks by recipient identities.
+    const seenIds  = new Set(this._inbox.filter(m => !m.sent_to).map(m => m.block_id));
     let found = 0;
     let pageToken = '';
 
@@ -1154,19 +1162,28 @@ class BrowserBackend {
           if (plain === null) continue;
           const parsed = readV2PlainFull(plain) || readV1Plain(plain);
           if (!parsed) continue;
-          this._inbox.push({
-            id:          ++this._nextId,
-            block_id:    blkId,
-            channel:     null,
-            sender_pub:  parsed.senderPub,
-            msg_type:    parsed.msgType,
-            content:     parsed.contentB64,
-            thread_refs: parsed.threadRefs,
-            sent_at:     parsed.sentAt,
-            received_at: new Date().toISOString(),
-          });
+          // For a self-send (same identity sent and receives), the sent-log entry is
+          // sufficient — skip adding a duplicate received entry.
+          const alreadySent = this._inbox.some(
+            m => m.block_id === blkId && m.sent_to && m.decrypted_by === id.name
+          );
+          if (!alreadySent) {
+            this._inbox.push({
+              id:           ++this._nextId,
+              block_id:     blkId,
+              channel:      null,
+              sender_pub:   parsed.senderPub,
+              msg_type:     parsed.msgType,
+              content:      parsed.contentB64,
+              thread_refs:  parsed.threadRefs,
+              sent_at:      parsed.sentAt,
+              received_at:  new Date().toISOString(),
+              decrypted_by: id.name,
+            });
+            found++;
+          }
           seenIds.add(blkId);
-          found++; matched = true; break;
+          matched = true; break;
         }
 
         // Try channel decryption
@@ -1228,6 +1245,40 @@ class BrowserBackend {
     }
   }
 
+  // ── sent log (localStorage) ─────────────────────────────────────────
+  _loadSentLog() {
+    try { return JSON.parse(localStorage.getItem('snk_sent') || '[]'); } catch { return []; }
+  }
+  _saveSentLog(log) { localStorage.setItem('snk_sent', JSON.stringify(log)); }
+
+  _addSentRecord(rec) {
+    const log = this._loadSentLog();
+    log.push(rec);
+    this._saveSentLog(log);
+  }
+
+  // Hydrate inbox from the persisted sent log (called at start of scrape).
+  _loadSentIntoInbox() {
+    const seenIds = new Set(this._inbox.map(m => m.block_id));
+    for (const r of this._loadSentLog()) {
+      if (seenIds.has(r.blockId)) continue;
+      this._inbox.push({
+        id:           ++this._nextId,
+        block_id:     r.blockId,
+        channel:      null,
+        sender_pub:   r.senderSignPub || '',
+        msg_type:     0,
+        content:      b64enc(new TextEncoder().encode(r.content)),
+        thread_refs:  r.threadRefs || Array(8).fill(ZERO64),
+        sent_at:      r.sentAt,
+        received_at:  r.sentAt,
+        sent_to:      r.recipientPub,
+        decrypted_by: r.senderIdentity || '',
+      });
+      seenIds.add(r.blockId);
+    }
+  }
+
   async sendDirect(recipientPublicKey, message, senderIdentity, replyToBlockId) {
     const {senderPubBytes, signingPrivKey} = await this._getSenderKeys(senderIdentity);
     const threadRefs = replyToBlockId
@@ -1235,7 +1286,33 @@ class BrowserBackend {
       : null;
     const plain   = await buildV2Plain(message, senderPubBytes, signingPrivKey, threadRefs);
     const payload = await encryptDirect(recipientPublicKey, plain);
+    const blockId = await sha256hex(payload);
     await this._postBlock(payload);
+
+    const sentAt = new Date().toISOString();
+    const rec = {
+      blockId,
+      recipientPub:   recipientPublicKey,
+      senderSignPub:  senderPubBytes ? b64enc(senderPubBytes) : '',
+      senderIdentity: senderIdentity || '',
+      content:        message,
+      sentAt,
+      threadRefs:     threadRefs || null,
+    };
+    this._addSentRecord(rec);
+    this._inbox.push({
+      id:           ++this._nextId,
+      block_id:     blockId,
+      channel:      null,
+      sender_pub:   rec.senderSignPub,
+      msg_type:     0,
+      content:      b64enc(new TextEncoder().encode(message)),
+      thread_refs:  threadRefs || Array(8).fill(ZERO64),
+      sent_at:      sentAt,
+      received_at:  sentAt,
+      sent_to:      recipientPublicKey,
+      decrypted_by: senderIdentity || '',
+    });
   }
 
   async sendChannel(channelName, message, senderIdentity, replyToBlockId) {
@@ -1391,7 +1468,7 @@ async function scrape() {
   try {
     const {found} = await backend.scrape();
     setStatus(`Scan complete — ${found} new message${found === 1 ? '' : 's'}.`, found > 0 ? 'ok' : '');
-    if (found > 0) await loadMessages();
+    await loadMessages();
   } catch {
     setStatus('Scan failed.', 'err');
   } finally {
@@ -1421,22 +1498,31 @@ function rebuildConversations() {
   const dirMap  = new Map();
   const unknown = [];
 
-  const otherSignKeys = activeIdentity
-    ? new Set(identities.filter(id => id.name !== activeIdentity.name).map(id => id.signing_public_key))
-    : new Set();
+  // Only show messages relevant to the active identity.
+  // A message is relevant if it was decrypted by the active identity's key
+  // (received), or was sent by the active identity (sent_to is set).
+  const relevant = activeIdentity
+    ? allMessages.filter(m => m.decrypted_by === activeIdentity.name || !m.decrypted_by)
+    : allMessages;
 
-  for (const m of allMessages) {
+  for (const m of relevant) {
     if (m.channel) {
       if (!chMap.has(m.channel)) chMap.set(m.channel, []);
       chMap.get(m.channel).push(m);
     } else {
-      if (otherSignKeys.has(m.sender_pub)) continue;
-      const name = resolveSender(m.sender_pub);
-      const key  = name === null ? '__unknown__' : (name || m.sender_pub || '__anon__');
-      if (name === null) {
+      // Group by the OTHER person's X25519 encryption key so that sent and
+      // received messages with the same person land in one conversation.
+      const otherEncKey = m.sent_to || resolveEncKey(m.sender_pub) || '';
+      const otherName   = m.sent_to
+        ? (resolveByEncKey(m.sent_to) || m.sent_to.slice(0,8) + '…')
+        : resolveSender(m.sender_pub);
+
+      if (otherName === null && !otherEncKey) {
         unknown.push(m);
       } else {
-        if (!dirMap.has(key)) dirMap.set(key, {name: name || m.sender_pub?.slice(0,8) + '…', pub: m.sender_pub, messages: []});
+        const key = otherEncKey || otherName || '__anon__';
+        const displayName = otherName || otherEncKey.slice(0,8) + '…';
+        if (!dirMap.has(key)) dirMap.set(key, {name: displayName, pub: otherEncKey, messages: []});
         dirMap.get(key).messages.push(m);
       }
     }
@@ -1450,6 +1536,22 @@ function rebuildConversations() {
   for (const [name, msgs] of chMap) conversations.push({kind:'channel', name, messages:msgs});
   for (const [, info] of dirMap) conversations.push({kind:'direct', name:info.name, pub:info.pub, messages:info.messages});
   if (unknown.length) conversations.push({kind:'unknown', name:'Unknown senders', messages:unknown});
+}
+
+// Returns the X25519 encryption public_key for a given Ed25519 signing key.
+function resolveEncKey(signingPub) {
+  if (!signingPub) return '';
+  for (const id of identities) { if (id.signing_public_key === signingPub) return id.public_key; }
+  for (const c of contacts)    { if (c.signing_public_key === signingPub)  return c.public_key; }
+  return '';
+}
+
+// Returns a display name for a given X25519 encryption key.
+function resolveByEncKey(encPub) {
+  if (!encPub) return null;
+  for (const id of identities) { if (id.public_key === encPub) return id.name; }
+  for (const c of contacts)    { if (c.public_key === encPub)  return c.name; }
+  return null;
 }
 
 function resolveSender(senderPub) {
@@ -1715,20 +1817,26 @@ function openNewMsg() {
   el('conv-empty').textContent = 'Your message will appear here after sending and scanning.';
   const asSuffix = activeIdentity ? `as ${activeIdentity.name}` : '';
   el('compose-ctx').textContent = asSuffix;
+  const selfOpts = identities.map(id =>
+    `<option value="${esc(id.public_key)}">${esc(id.name)} (me)</option>`
+  ).join('');
   const contactOpts = contacts.map(c =>
     `<option value="${esc(c.public_key)}">${esc(c.name)}</option>`
   ).join('');
+  const hasRecipients = identities.length || contacts.length;
   el('compose-extra').innerHTML = `
-    ${contacts.length ? `<div class="compose-row">
+    ${hasRecipients ? `<div class="compose-row">
       <select id="new-recipient-contact" style="font-size:12px">
-        <option value="">— pick a contact —</option>
+        <option value="">— pick a recipient —</option>
+        ${selfOpts}
+        ${contacts.length && identities.length ? '<option disabled>──────────</option>' : ''}
         ${contactOpts}
       </select>
     </div>` : ''}
     <div class="compose-row">
       <input id="new-recipient" placeholder="Or paste encryption key (base64 X25519)" style="font-family:var(--mono);font-size:11px">
     </div>`;
-  if (contacts.length) {
+  if (hasRecipients) {
     el('new-recipient-contact').addEventListener('change', e => {
       if (e.target.value) el('new-recipient').value = e.target.value;
     });
@@ -1755,6 +1863,7 @@ async function send() {
       const conv = currentView;
       const head = causalHead(conv.messages);
       await backend.sendChannel(conv.name, body, senderName, head || null);
+      el('compose-body').value = '';
 
     } else if (mode === 'direct') {
       const conv = currentView;
@@ -1762,14 +1871,19 @@ async function send() {
       const recipKey = btn.dataset.recipKey;
       if (!recipKey) { toast('No recipient key available.', true); return; }
       await backend.sendDirect(recipKey, body, senderName, head || null);
+      el('compose-body').value = '';
+      await loadMessages();
 
     } else { // new
       const recipKey = el('new-recipient')?.value.trim();
       if (!recipKey) { toast('Enter recipient key.', true); return; }
       await backend.sendDirect(recipKey, body, senderName, null);
+      el('compose-body').value = '';
+      await loadMessages();
+      const conv = conversations.find(c => c.kind !== 'channel' && c.pub === recipKey);
+      if (conv) { openConversation(conv); toast('Message sent.'); setStatus('Block stored on relay.'); return; }
     }
 
-    el('compose-body').value = '';
     toast('Message sent.');
     setStatus('Block stored on relay.');
   } catch(e) {
@@ -2056,17 +2170,6 @@ async function showApp() {
 
 function openSidebar()  { el('sidebar').classList.add('open'); el('sidebar-overlay').classList.add('show'); }
 function closeSidebar() { el('sidebar').classList.remove('open'); el('sidebar-overlay').classList.remove('show'); }
-
-// ── helpers ────────────────────────────────────────────────────────────────
-const el = id => document.getElementById(id);
-
-function lockErr(msg) { el('lock-err').textContent = msg; }
-
-function setStatus(msg, cls = '') {
-  const s = el('statusbar');
-  s.textContent = msg;
-  s.className = cls;
-}
 
 let toastTimer;
 function toast(msg, err = false) {
