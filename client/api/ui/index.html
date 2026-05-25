@@ -97,6 +97,15 @@
     .lock-card .sub { color: var(--muted); font-size: 12px; margin-top: -4px; margin-bottom: 6px; }
     #lock-err { color: var(--danger); font-size: 12px; min-height: 16px; }
 
+    /* ── onboarding screen ───────────────────────────────────────────── */
+    #onboarding {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #onboard-err { color: var(--danger); font-size: 12px; min-height: 16px; }
+
     /* ── app shell: two-pane ─────────────────────────────── */
     #app {
       flex: 1;
@@ -508,6 +517,17 @@
   </div>
 </div>
 
+<!-- ── onboarding (first-time identity setup) ────────────────── -->
+<div id="onboarding" class="hidden">
+  <div class="lock-card">
+    <h1>Create your identity</h1>
+    <p class="sub">You need an identity to send and receive messages. Choose a name to get started.</p>
+    <input type="text" id="onboard-name" placeholder="Identity name (e.g., Alice)" autocomplete="off">
+    <button id="onboard-btn">Create &amp; continue</button>
+    <p id="onboard-err"></p>
+  </div>
+</div>
+
 <!-- ── sidebar overlay (mobile) ─────────────────────────────── -->
 <div id="sidebar-overlay"></div>
 
@@ -549,9 +569,7 @@
       <span id="conv-sub" class="sub"></span>
       <div id="identity-picker">
         <span class="sub" style="white-space:nowrap">acting as</span>
-        <select id="active-identity">
-          <option value="">— anonymous —</option>
-        </select>
+        <select id="active-identity"></select>
       </div>
     </div>
 
@@ -813,6 +831,9 @@ document.addEventListener('DOMContentLoaded', () => {
   el('create-btn').addEventListener('click', createAndUnlock);
   el('pw').addEventListener('keydown', e => { if (e.key === 'Enter') unlock(); });
 
+  el('onboard-btn').addEventListener('click', onboardCreate);
+  el('onboard-name').addEventListener('keydown', e => { if (e.key === 'Enter') onboardCreate(); });
+
   el('scrape-btn').addEventListener('click', scrape);
   el('lock-btn').addEventListener('click', lock);
   el('new-msg-btn').addEventListener('click', () => openNewMsg());
@@ -879,6 +900,20 @@ async function lock() {
   await backend.lock();
   allMessages = []; byBlock.clear(); conversations = [];
   showLock();
+}
+
+async function onboardCreate() {
+  const name = el('onboard-name').value.trim();
+  if (!name) { el('onboard-err').textContent = 'Enter a name.'; return; }
+  el('onboard-err').textContent = '';
+  try {
+    await backend.addIdentity(name);
+  } catch(e) {
+    el('onboard-err').textContent = e.message === 'duplicate' ? 'That name is already taken.' : 'Failed to create identity.';
+    return;
+  }
+  el('onboard-name').value = '';
+  await showApp();
 }
 
 // ── scrape ─────────────────────────────────────────────────────────────────
@@ -1404,12 +1439,14 @@ function populateActiveIdentityDropdown() {
   const sel = el('active-identity');
   if (!sel) return;
   const prev = sel.value;
-  while (sel.options.length > 1) sel.remove(1);
-  for (const id of identities) {
-    sel.appendChild(new Option(id.name, id.name));
-  }
+  while (sel.options.length) sel.remove(0);
+  for (const id of identities) sel.appendChild(new Option(id.name, id.name));
+  sel.appendChild(new Option('— anonymous —', ''));
   if (prev && identities.find(id => id.name === prev)) {
     sel.value = prev;
+  } else if (identities.length) {
+    sel.value = identities[0].name;
+    activeIdentity = identities[0];
   } else {
     sel.value = '';
     activeIdentity = null;
@@ -1651,8 +1688,16 @@ function showLock() {
 
 async function showApp() {
   el('lock-screen').classList.add('hidden');
+  el('onboarding').classList.add('hidden');
+  identities = await backend.listIdentities();
+  populateActiveIdentityDropdown();
+  if (!identities.length) {
+    el('onboarding').classList.remove('hidden');
+    el('onboard-name').focus();
+    return;
+  }
   el('app').classList.remove('hidden');
-  await Promise.all([loadMessages(), loadIdentities(), loadChannels(), loadContacts()]);
+  await Promise.all([loadMessages(), loadChannels(), loadContacts()]);
   rebuildConversations();
   renderSidebar();
   setStatus('Ready');

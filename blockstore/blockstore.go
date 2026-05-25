@@ -27,6 +27,13 @@ type Payload = [PayloadSize]byte
 type BlockRef struct {
 	WorkFactor int
 	ID         ID
+	CreatedAt  int64 // unix seconds
+}
+
+// Token returns an opaque cursor that can be passed as pageToken to
+// ListBlocks to resume after this block.
+func (r BlockRef) Token() string {
+	return encodeCursor(cursor{createdAt: r.CreatedAt, id: r.ID})
 }
 
 // Store is the interface every blockstore backend must satisfy.

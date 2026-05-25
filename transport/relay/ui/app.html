@@ -97,6 +97,15 @@
     .lock-card .sub { color: var(--muted); font-size: 12px; margin-top: -4px; margin-bottom: 6px; }
     #lock-err { color: var(--danger); font-size: 12px; min-height: 16px; }
 
+    /* ── onboarding screen ───────────────────────────────────────────── */
+    #onboarding {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #onboard-err { color: var(--danger); font-size: 12px; min-height: 16px; }
+
     /* ── app shell: two-pane ─────────────────────────────── */
     #app {
       flex: 1;
@@ -508,6 +517,17 @@
   </div>
 </div>
 
+<!-- ── onboarding (first-time identity setup) ────────────────── -->
+<div id="onboarding" class="hidden">
+  <div class="lock-card">
+    <h1>Create your identity</h1>
+    <p class="sub">You need an identity to send and receive messages. Choose a name to get started.</p>
+    <input type="text" id="onboard-name" placeholder="Identity name (e.g., Alice)" autocomplete="off">
+    <button id="onboard-btn">Create &amp; continue</button>
+    <p id="onboard-err"></p>
+  </div>
+</div>
+
 <!-- ── sidebar overlay (mobile) ─────────────────────────────── -->
 <div id="sidebar-overlay"></div>
 
@@ -548,9 +568,7 @@
       <span id="conv-sub" class="sub"></span>
       <div id="identity-picker">
         <span class="sub" style="white-space:nowrap">acting as</span>
-        <select id="active-identity">
-          <option value="">— anonymous —</option>
-        </select>
+        <select id="active-identity"></select>
       </div>
     </div>
 
@@ -1010,7 +1028,7 @@ class BrowserBackend {
   constructor() {
     this._inbox   = [];  // decrypted messages, server-compatible shape
     this._nextId  = 0;
-    this._lastScan = 0;  // unix seconds cursor for /api/blocks
+    this._resumeToken = localStorage.getItem('snk_resume_token') || '';
     this._loadSentIntoInbox();  // hydrate sent messages before first getMessages() call
   }
 
@@ -1139,14 +1157,21 @@ class BrowserBackend {
     // Sent-log entries must not block decryption of those same blocks by recipient identities.
     const seenIds  = new Set(this._inbox.filter(m => !m.sent_to).map(m => m.block_id));
     let found = 0;
-    let pageToken = '';
+    let pageToken = this._resumeToken;
+    let latestResumeToken = this._resumeToken;
+    const defaultSince = Math.floor(Date.now() / 1000) - 7 * 24 * 3600;
 
     do {
-      const params = new URLSearchParams({since: this._lastScan, limit: 200});
-      if (pageToken) params.set('page_token', pageToken);
+      const params = new URLSearchParams({limit: 200});
+      if (pageToken) {
+        params.set('page_token', pageToken);
+      } else {
+        params.set('since', defaultSince);
+      }
       const r = await fetch('/api/blocks?' + params);
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const data = await r.json();
+      if (data.resume_token) latestResumeToken = data.resume_token;
       pageToken = data.next_page_token || '';
 
       for (const blk of (data.blocks || [])) {
@@ -1211,7 +1236,8 @@ class BrowserBackend {
       }
     } while (pageToken);
 
-    this._lastScan = Math.floor(Date.now() / 1000);
+    this._resumeToken = latestResumeToken;
+    if (latestResumeToken) localStorage.setItem('snk_resume_token', latestResumeToken);
     return {found};
   }
 
@@ -1392,6 +1418,9 @@ document.addEventListener('DOMContentLoaded', () => {
   el('create-btn').addEventListener('click', createAndUnlock);
   el('pw').addEventListener('keydown', e => { if (e.key === 'Enter') unlock(); });
 
+  el('onboard-btn').addEventListener('click', onboardCreate);
+  el('onboard-name').addEventListener('keydown', e => { if (e.key === 'Enter') onboardCreate(); });
+
   el('scrape-btn').addEventListener('click', scrape);
   el('new-msg-btn').addEventListener('click', () => openNewMsg());
   el('identities-btn').addEventListener('click', () => openPanel());
@@ -1457,6 +1486,20 @@ async function lock() {
   await backend.lock();
   allMessages = []; byBlock.clear(); conversations = [];
   showLock();
+}
+
+async function onboardCreate() {
+  const name = el('onboard-name').value.trim();
+  if (!name) { el('onboard-err').textContent = 'Enter a name.'; return; }
+  el('onboard-err').textContent = '';
+  try {
+    await backend.addIdentity(name);
+  } catch(e) {
+    el('onboard-err').textContent = e.message === 'duplicate' ? 'That name is already taken.' : 'Failed to create identity.';
+    return;
+  }
+  el('onboard-name').value = '';
+  await showApp();
 }
 
 // ── scrape ─────────────────────────────────────────────────────────────────
@@ -1916,10 +1959,14 @@ function populateActiveIdentityDropdown() {
   const sel = el('active-identity');
   if (!sel) return;
   const prev = sel.value;
-  while (sel.options.length > 1) sel.remove(1);
+  while (sel.options.length) sel.remove(0);
   for (const id of identities) sel.appendChild(new Option(id.name, id.name));
+  sel.appendChild(new Option('— anonymous —', ''));
   if (prev && identities.find(id => id.name === prev)) {
     sel.value = prev;
+  } else if (identities.length) {
+    sel.value = identities[0].name;
+    activeIdentity = identities[0];
   } else {
     sel.value = '';
     activeIdentity = null;
@@ -2161,8 +2208,16 @@ function showLock() {
 
 async function showApp() {
   el('lock-screen').classList.add('hidden');
+  el('onboarding').classList.add('hidden');
+  identities = await backend.listIdentities();
+  populateActiveIdentityDropdown();
+  if (!identities.length) {
+    el('onboarding').classList.remove('hidden');
+    el('onboard-name').focus();
+    return;
+  }
   el('app').classList.remove('hidden');
-  await Promise.all([loadMessages(), loadIdentities(), loadChannels(), loadContacts()]);
+  await Promise.all([loadMessages(), loadChannels(), loadContacts()]);
   rebuildConversations();
   renderSidebar();
   setStatus('Ready');

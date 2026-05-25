@@ -52,11 +52,13 @@ func (s *Server) handleListBlocks(w http.ResponseWriter, r *http.Request) {
 	type blockItem struct {
 		ID         string `json:"id"`
 		WorkFactor int    `json:"work_factor"`
+		CreatedAt  int64  `json:"created_at"`
 		Stamp      string `json:"stamp"`
 		Payload    string `json:"payload"`
 	}
 
 	items := make([]blockItem, 0, len(refs))
+	var resumeToken string
 	for _, ref := range refs {
 		stamp, payload, err := s.store.Get(ref.ID)
 		if err != nil {
@@ -65,16 +67,19 @@ func (s *Server) handleListBlocks(w http.ResponseWriter, r *http.Request) {
 		items = append(items, blockItem{
 			ID:         hex.EncodeToString(ref.ID[:]),
 			WorkFactor: ref.WorkFactor,
+			CreatedAt:  ref.CreatedAt,
 			Stamp:      base64.StdEncoding.EncodeToString(stamp[:]),
 			Payload:    base64.StdEncoding.EncodeToString(payload[:]),
 		})
+		resumeToken = ref.Token()
 	}
 
 	type listResp struct {
 		Blocks        []blockItem `json:"blocks"`
 		NextPageToken string      `json:"next_page_token,omitempty"`
+		ResumeToken   string      `json:"resume_token,omitempty"`
 	}
-	writeJSON(w, http.StatusOK, listResp{Blocks: items, NextPageToken: nextToken})
+	writeJSON(w, http.StatusOK, listResp{Blocks: items, NextPageToken: nextToken, ResumeToken: resumeToken})
 }
 
 // GET /api/blocks/{id} — fetch a single block by hex-encoded ID.
