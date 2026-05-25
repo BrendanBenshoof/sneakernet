@@ -603,8 +603,161 @@
 <div id="toast"></div>
 
 <script>
+// ── ServerBackend ──────────────────────────────────────────────────────────
+// Wraps the local node REST API. Swap for BrowserBackend to run all crypto
+// in-browser with no local node (see transport/relay/ui/app.html).
+class ServerBackend {
+  constructor() {
+    this._token = sessionStorage.getItem('snk_token');
+  }
+
+  get requiresAuth() { return true; }
+
+  _hdrs(withBody = false) {
+    const h = {};
+    if (this._token) h['Authorization'] = 'Bearer ' + this._token;
+    if (withBody) h['Content-Type'] = 'application/json';
+    return h;
+  }
+
+  async _req(method, path, body) {
+    const r = await fetch(path, {
+      method,
+      headers: this._hdrs(body !== undefined),
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+    if (r.status === 401) {
+      this._token = null;
+      sessionStorage.removeItem('snk_token');
+      showLock();
+      lockErr('Session expired — please unlock again.');
+      return null;
+    }
+    return r;
+  }
+
+  async isAuthenticated() {
+    if (!this._token) return false;
+    const r = await fetch('/api/identities', {headers: this._hdrs()});
+    return r.ok;
+  }
+
+  async createKeystore(password) {
+    const r = await this._req('POST', '/api/keystore/create', {password});
+    if (!r) throw new Error('failed');
+    if (r.status === 409) throw new Error('exists');
+    if (!r.ok) throw new Error('failed');
+  }
+
+  async unlock(password) {
+    const r = await this._req('POST', '/api/unlock', {password});
+    if (!r) throw new Error('failed');
+    if (r.status === 404) throw new Error('noKeystore');
+    if (!r.ok) throw new Error('wrongPassword');
+    const data = await r.json();
+    this._token = data.token;
+    sessionStorage.setItem('snk_token', this._token);
+  }
+
+  async lock() {
+    await this._req('POST', '/api/lock');
+    this._token = null;
+    sessionStorage.removeItem('snk_token');
+  }
+
+  async listIdentities() {
+    const r = await this._req('GET', '/api/identities');
+    if (!r || !r.ok) return [];
+    return await r.json() || [];
+  }
+
+  async addIdentity(name) {
+    const r = await this._req('POST', '/api/identities', {name});
+    if (!r) throw new Error('failed');
+    if (r.status === 409) throw new Error('duplicate');
+    if (!r.ok) throw new Error('failed');
+  }
+
+  async deleteIdentity(name) {
+    const r = await this._req('DELETE', `/api/identities/${encodeURIComponent(name)}`);
+    if (!r || !r.ok) throw new Error('failed');
+  }
+
+  async listContacts() {
+    const r = await this._req('GET', '/api/contacts');
+    if (!r || !r.ok) return [];
+    return await r.json() || [];
+  }
+
+  async addContact(name, public_key, signing_public_key) {
+    const r = await this._req('POST', '/api/contacts', {name, public_key, signing_public_key});
+    if (!r) throw new Error('failed');
+    if (r.status === 409) throw new Error('duplicate');
+    if (!r.ok) throw new Error('failed');
+  }
+
+  async removeContact(pubKeyB64url) {
+    const r = await this._req('DELETE', `/api/contacts/${encodeURIComponent(pubKeyB64url)}`);
+    if (!r || !r.ok) throw new Error('failed');
+  }
+
+  async renameContact(pubKeyB64url, newName) {
+    const r = await this._req('PATCH', `/api/contacts/${encodeURIComponent(pubKeyB64url)}`, {name: newName});
+    if (!r || !r.ok) throw new Error('failed');
+  }
+
+  async listChannels() {
+    const r = await this._req('GET', '/api/channels');
+    if (!r || !r.ok) return [];
+    return await r.json() || [];
+  }
+
+  async joinChannel(name, passphrase) {
+    const r = await this._req('POST', '/api/channels', {name, passphrase});
+    if (!r) throw new Error('failed');
+    if (r.status === 409) throw new Error('duplicate');
+    if (!r.ok) throw new Error('failed');
+  }
+
+  async leaveChannel(name) {
+    const r = await this._req('DELETE', `/api/channels/${encodeURIComponent(name)}`);
+    if (!r || !r.ok) throw new Error('failed');
+  }
+
+  async scrape() {
+    const r = await this._req('POST', '/api/scrape');
+    if (!r || !r.ok) throw new Error('failed');
+    return await r.json(); // {found: N}
+  }
+
+  async getMessages(afterId) {
+    const r = await this._req('GET', `/api/messages?after_id=${afterId}`);
+    if (!r || !r.ok) return [];
+    return await r.json() || [];
+  }
+
+  async sendDirect(recipientPublicKey, message, senderIdentity, replyToBlockId) {
+    const payload = {recipient_public_key: recipientPublicKey, message};
+    if (senderIdentity) payload.sender_identity = senderIdentity;
+    if (replyToBlockId) payload.reply_to_block_id = replyToBlockId;
+    const r = await this._req('POST', '/api/send', payload);
+    if (!r) throw new Error('failed');
+    if (!r.ok) { const d = await r.json(); throw new Error(d.error || 'failed'); }
+  }
+
+  async sendChannel(channelName, message, senderIdentity, replyToBlockId) {
+    const payload = {channel_name: channelName, message};
+    if (senderIdentity) payload.sender_identity = senderIdentity;
+    if (replyToBlockId) payload.reply_to_block_id = replyToBlockId;
+    const r = await this._req('POST', '/api/send-channel', payload);
+    if (!r) throw new Error('failed');
+    if (!r.ok) { const d = await r.json(); throw new Error(d.error || 'failed'); }
+  }
+}
+
+const backend = new ServerBackend();
+
 // ── state ──────────────────────────────────────────────────────────────────
-let token          = sessionStorage.getItem('snk_token');
 let allMessages    = [];
 let byBlock        = new Map();
 let identities     = [];
@@ -646,13 +799,12 @@ async function contactHash(pubKeyB64) {
 
 // ── boot ───────────────────────────────────────────────────────────────────
 (async () => {
-  if (token) {
-    const r = await fetch('/api/identities', {headers: hdrs()});
-    if (r.ok) { showApp(); return; }
+  if (backend.requiresAuth) {
+    if (await backend.isAuthenticated()) { showApp(); return; }
+    showLock();
+  } else {
+    showApp();
   }
-  token = null;
-  sessionStorage.removeItem('snk_token');
-  showLock();
 })();
 
 // ── event wiring ───────────────────────────────────────────────────────────
@@ -693,41 +845,18 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 });
 
-// ── api helpers ────────────────────────────────────────────────────────────
-function hdrs(withBody = false) {
-  const h = {};
-  if (token) h['Authorization'] = 'Bearer ' + token;
-  if (withBody) h['Content-Type'] = 'application/json';
-  return h;
-}
-
-async function api(method, path, body) {
-  const r = await fetch(path, {
-    method,
-    headers: hdrs(body !== undefined),
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
-  if (r.status === 401) {
-    token = null;
-    sessionStorage.removeItem('snk_token');
-    showLock();
-    lockErr('Session expired — please unlock again.');
-    return null;
-  }
-  return r;
-}
-
 // ── auth ───────────────────────────────────────────────────────────────────
 async function unlock() {
   const pw = el('pw').value;
   if (!pw) return;
   lockErr('');
-  const r = await api('POST', '/api/unlock', {password: pw});
-  if (!r) return;
-  if (r.status === 404) { lockErr('No keystore found — create one first.'); return; }
-  if (!r.ok)            { lockErr('Wrong password or corrupted keystore.'); return; }
-  token = (await r.json()).token;
-  sessionStorage.setItem('snk_token', token);
+  try {
+    await backend.unlock(pw);
+  } catch(e) {
+    if (e.message === 'noKeystore') { lockErr('No keystore found — create one first.'); return; }
+    lockErr('Wrong password or corrupted keystore.');
+    return;
+  }
   el('pw').value = '';
   showApp();
 }
@@ -736,17 +865,18 @@ async function createAndUnlock() {
   const pw = el('pw').value;
   if (!pw) { lockErr('Enter a password first.'); return; }
   lockErr('');
-  const r = await api('POST', '/api/keystore/create', {password: pw});
-  if (!r) return;
-  if (r.status === 409) { lockErr('Keystore already exists — just unlock it.'); return; }
-  if (!r.ok)            { lockErr('Failed to create keystore.'); return; }
+  try {
+    await backend.createKeystore(pw);
+  } catch(e) {
+    if (e.message === 'exists') { lockErr('Keystore already exists — just unlock it.'); return; }
+    lockErr('Failed to create keystore.');
+    return;
+  }
   await unlock();
 }
 
 async function lock() {
-  await api('POST', '/api/lock');
-  token = null;
-  sessionStorage.removeItem('snk_token');
+  await backend.lock();
   allMessages = []; byBlock.clear(); conversations = [];
   showLock();
 }
@@ -758,11 +888,11 @@ async function scrape() {
   btn.textContent = '⟳  Scanning…';
   setStatus('Scanning blocks…');
   try {
-    const r = await api('POST', '/api/scrape');
-    if (!r) return;
-    const {found} = await r.json();
+    const {found} = await backend.scrape();
     setStatus(`Scan complete — ${found} new message${found === 1 ? '' : 's'}.`, found > 0 ? 'ok' : '');
     if (found > 0) await loadMessages();
+  } catch {
+    setStatus('Scan failed.', 'err');
   } finally {
     btn.disabled = false;
     btn.textContent = '⟳  Refresh';
@@ -772,9 +902,7 @@ async function scrape() {
 // ── message loading & grouping ─────────────────────────────────────────────
 async function loadMessages() {
   const lastID = allMessages.length ? Math.max(...allMessages.map(m => m.id)) : 0;
-  const r = await api('GET', `/api/messages?after_id=${lastID}`);
-  if (!r || !r.ok) return;
-  const msgs = await r.json();
+  const msgs = await backend.getMessages(lastID);
   if (!msgs?.length) return;
 
   for (const m of msgs) {
@@ -1203,38 +1331,31 @@ async function send() {
   btn.disabled = true;
 
   try {
-    let r;
+    const senderName = activeIdentity?.name || null;
+
     if (mode === 'channel') {
       const conv = currentView;
       const head = causalHead(conv.messages);
-      const payload = {channel_name: conv.name, message: body};
-      if (activeIdentity) payload.sender_identity = activeIdentity.name;
-      if (head) payload.reply_to_block_id = head;
-      r = await api('POST', '/api/send-channel', payload);
+      await backend.sendChannel(conv.name, body, senderName, head || null);
 
     } else if (mode === 'direct') {
       const conv = currentView;
       const head = causalHead(conv.messages);
       const recipKey = btn.dataset.recipKey;
       if (!recipKey) { toast('No recipient key available.', true); return; }
-      const payload = {recipient_public_key: recipKey, message: body};
-      if (activeIdentity) payload.sender_identity = activeIdentity.name;
-      if (head) payload.reply_to_block_id = head;
-      r = await api('POST', '/api/send', payload);
+      await backend.sendDirect(recipKey, body, senderName, head || null);
 
     } else { // new
       const recipKey = el('new-recipient')?.value.trim();
       if (!recipKey) { toast('Enter recipient key.', true); return; }
-      const payload = {recipient_public_key: recipKey, message: body};
-      if (activeIdentity) payload.sender_identity = activeIdentity.name;
-      r = await api('POST', '/api/send', payload);
+      await backend.sendDirect(recipKey, body, senderName, null);
     }
 
-    if (!r) return;
-    if (!r.ok) { const d = await r.json(); toast('Send failed: ' + d.error, true); return; }
     el('compose-body').value = '';
     toast('Message sent.');
     setStatus('Message stored in blockstore.');
+  } catch(e) {
+    toast('Send failed: ' + e.message, true);
   } finally {
     btn.disabled = false;
   }
@@ -1255,9 +1376,7 @@ async function openPanel() {
 }
 
 async function loadIdentities() {
-  const r = await api('GET', '/api/identities');
-  if (!r || !r.ok) return;
-  identities = await r.json() || [];
+  identities = await backend.listIdentities();
   populateActiveIdentityDropdown();
 }
 
@@ -1324,10 +1443,12 @@ function renderIdentities() {
 async function addIdentity() {
   const name = el('new-id-name').value.trim();
   if (!name) return;
-  const r = await api('POST', '/api/identities', {name});
-  if (!r) return;
-  if (r.status === 409) { toast('That name is already taken.', true); return; }
-  if (!r.ok)            { toast('Failed to add identity.', true); return; }
+  try {
+    await backend.addIdentity(name);
+  } catch(e) {
+    toast(e.message === 'duplicate' ? 'That name is already taken.' : 'Failed to add identity.', true);
+    return;
+  }
   el('new-id-name').value = '';
   await loadIdentities();
   renderIdentities();
@@ -1338,8 +1459,11 @@ async function addIdentity() {
 
 async function deleteIdentity(name) {
   if (!confirm(`Delete identity "${name}"? This cannot be undone.`)) return;
-  const r = await api('DELETE', `/api/identities/${encodeURIComponent(name)}`);
-  if (!r || !r.ok) { toast('Failed to delete identity.', true); return; }
+  try {
+    await backend.deleteIdentity(name);
+  } catch {
+    toast('Failed to delete identity.', true); return;
+  }
   await loadIdentities();
   renderIdentities();
   rebuildConversations();
@@ -1349,9 +1473,7 @@ async function deleteIdentity(name) {
 
 // ── contacts ────────────────────────────────────────────────────────────────
 async function loadContacts() {
-  const r = await api('GET', '/api/contacts');
-  if (!r || !r.ok) return;
-  contacts = await r.json() || [];
+  contacts = await backend.listContacts();
 }
 
 async function renderContacts() {
@@ -1396,9 +1518,12 @@ function startRenameContact(c, hash, card) {
     if (committed) return; committed = true;
     const newName = input.value.trim();
     if (!newName || newName === current) { await renderContacts(); return; }
-    const r = await api('PATCH', `/api/contacts/${encodeURIComponent(toB64url(c.public_key))}`, {name: newName});
-    if (!r || !r.ok) { toast('Rename failed.', true); }
-    else { toast(`Renamed to "${newName}".`); }
+    try {
+      await backend.renameContact(toB64url(c.public_key), newName);
+      toast(`Renamed to "${newName}".`);
+    } catch {
+      toast('Rename failed.', true);
+    }
     await loadContacts(); await renderContacts();
   };
   input.addEventListener('blur', commit);
@@ -1413,10 +1538,12 @@ async function addContact() {
   if (!uri) { toast('Paste a snk: URI.', true); return; }
   const parsed = parseSnkUri(uri);
   if (!parsed) { toast('Invalid snk: URI — expected snk:name/pubkey/signkey.', true); return; }
-  const r = await api('POST', '/api/contacts', parsed);
-  if (!r) return;
-  if (r.status === 409) { toast('That contact already exists.', true); return; }
-  if (!r.ok) { toast('Failed to add contact.', true); return; }
+  try {
+    await backend.addContact(parsed.name, parsed.public_key, parsed.signing_public_key);
+  } catch(e) {
+    toast(e.message === 'duplicate' ? 'That contact already exists.' : 'Failed to add contact.', true);
+    return;
+  }
   el('new-contact-uri').value = '';
   await loadContacts(); await renderContacts();
   rebuildConversations(); renderSidebar();
@@ -1424,17 +1551,18 @@ async function addContact() {
 }
 
 async function removeContact(c) {
-  const r = await api('DELETE', `/api/contacts/${encodeURIComponent(toB64url(c.public_key))}`);
-  if (!r || !r.ok) { toast('Failed to remove contact.', true); return; }
+  try {
+    await backend.removeContact(toB64url(c.public_key));
+  } catch {
+    toast('Failed to remove contact.', true); return;
+  }
   await loadContacts(); await renderContacts();
   rebuildConversations(); renderSidebar();
   toast('Contact removed.');
 }
 
 async function loadChannels() {
-  const r = await api('GET', '/api/channels');
-  if (!r || !r.ok) return;
-  channels = await r.json() || [];
+  channels = await backend.listChannels();
 }
 
 function renderChannelList() {
@@ -1461,10 +1589,12 @@ function renderChannelList() {
 async function addChannel() {
   const pass = el('new-ch-pass').value.trim();
   if (!pass) { toast('Enter a passphrase.', true); return; }
-  const r = await api('POST', '/api/channels', {name: pass, passphrase: pass});
-  if (!r) return;
-  if (r.status === 409) { toast('Already joined that channel.', true); return; }
-  if (!r.ok)            { toast('Failed to join channel.', true); return; }
+  try {
+    await backend.joinChannel(pass, pass);
+  } catch(e) {
+    toast(e.message === 'duplicate' ? 'Already joined that channel.' : 'Failed to join channel.', true);
+    return;
+  }
   el('new-ch-pass').value = '';
   el('sb-ch-form').classList.add('hidden');
   await loadChannels();
@@ -1475,8 +1605,11 @@ async function addChannel() {
 }
 
 async function removeChannel(name) {
-  const r = await api('DELETE', `/api/channels/${encodeURIComponent(name)}`);
-  if (!r || !r.ok) { toast('Failed to leave channel.', true); return; }
+  try {
+    await backend.leaveChannel(name);
+  } catch {
+    toast('Failed to leave channel.', true); return;
+  }
   await loadChannels();
   rebuildConversations();
   renderChannelList();
