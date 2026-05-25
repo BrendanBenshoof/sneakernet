@@ -890,7 +890,7 @@ async function scrape() {
   try {
     const {found} = await backend.scrape();
     setStatus(`Scan complete — ${found} new message${found === 1 ? '' : 's'}.`, found > 0 ? 'ok' : '');
-    if (found > 0) await loadMessages();
+    await loadMessages();
   } catch {
     setStatus('Scan failed.', 'err');
   } finally {
@@ -920,24 +920,25 @@ function rebuildConversations() {
   const dirMap  = new Map();
   const unknown = [];
 
-  // When acting as a specific identity, hide direct messages sent by other
-  // local identities — they're not relevant to the current persona.
-  const otherSignKeys = activeIdentity
-    ? new Set(identities.filter(id => id.name !== activeIdentity.name).map(id => id.signing_public_key))
-    : new Set();
-
   for (const m of allMessages) {
     if (m.channel) {
       if (!chMap.has(m.channel)) chMap.set(m.channel, []);
       chMap.get(m.channel).push(m);
     } else {
-      if (otherSignKeys.has(m.sender_pub)) continue;
-      const name = resolveSender(m.sender_pub);
-      const key  = name === null ? '__unknown__' : (name || m.sender_pub || '__anon__');
-      if (name === null) {
+      // Group by the "other" person's X25519 key so that sent and received
+      // messages land in the same conversation.
+      // sent_to (present on sent messages) tells us the recipient.
+      // For received messages, resolveEncKey maps sender's Ed25519 → X25519.
+      const otherEncKey = m.sent_to || resolveEncKey(m.sender_pub) || '';
+      const otherName = m.sent_to
+        ? (resolveByEncKey(m.sent_to) || m.sent_to.slice(0,8) + '…')
+        : resolveSender(m.sender_pub);
+      if (otherName === null && !otherEncKey) {
         unknown.push(m);
       } else {
-        if (!dirMap.has(key)) dirMap.set(key, {name: name || m.sender_pub?.slice(0,8) + '…', pub: m.sender_pub, messages: []});
+        const key = otherEncKey || otherName || '__anon__';
+        const displayName = otherName || (otherEncKey ? otherEncKey.slice(0,8) + '…' : '?');
+        if (!dirMap.has(key)) dirMap.set(key, {name: displayName, pub: otherEncKey, messages: []});
         dirMap.get(key).messages.push(m);
       }
     }
@@ -950,18 +951,9 @@ function rebuildConversations() {
   }
 
   conversations = [];
-
-  for (const [name, msgs] of chMap) {
-    conversations.push({kind: 'channel', name, messages: msgs});
-  }
-
-  for (const [, info] of dirMap) {
-    conversations.push({kind: 'direct', name: info.name, pub: info.pub, messages: info.messages});
-  }
-
-  if (unknown.length) {
-    conversations.push({kind: 'unknown', name: 'Unknown senders', messages: unknown});
-  }
+  for (const [name, msgs] of chMap) conversations.push({kind: 'channel', name, messages: msgs});
+  for (const [, info] of dirMap) conversations.push({kind: 'direct', name: info.name, pub: info.pub, messages: info.messages});
+  if (unknown.length) conversations.push({kind: 'unknown', name: 'Unknown senders', messages: unknown});
 }
 
 // Returns display name for a sender_pub (base64 Ed25519):
@@ -978,6 +970,22 @@ function resolveSender(senderPub) {
     if (c.signing_public_key === senderPub) return c.name;
   }
   return null; // unknown pub — goes to unknown pool
+}
+
+// Returns the X25519 encryption public_key for a given Ed25519 signing key.
+function resolveEncKey(signingPub) {
+  if (!signingPub) return '';
+  for (const id of identities) { if (id.signing_public_key === signingPub) return id.public_key; }
+  for (const c of contacts)    { if (c.signing_public_key === signingPub)  return c.public_key; }
+  return '';
+}
+
+// Returns a display name for a given X25519 encryption key.
+function resolveByEncKey(encPub) {
+  if (!encPub) return null;
+  for (const id of identities) { if (id.public_key === encPub) return id.name; }
+  for (const c of contacts)    { if (c.public_key === encPub)  return c.name; }
+  return null;
 }
 
 function resolveSenderDisplay(senderPub) {
@@ -1297,20 +1305,26 @@ function openNewMsg() {
 
   const asSuffix = activeIdentity ? `as ${activeIdentity.name}` : '';
   el('compose-ctx').textContent = asSuffix;
+  const selfOpts = identities.map(id =>
+    `<option value="${esc(id.public_key)}">${esc(id.name)} (me)</option>`
+  ).join('');
   const contactOpts = contacts.map(c =>
     `<option value="${esc(c.public_key)}">${esc(c.name)}</option>`
   ).join('');
+  const hasRecipients = identities.length || contacts.length;
   el('compose-extra').innerHTML = `
-    ${contacts.length ? `<div class="compose-row">
+    ${hasRecipients ? `<div class="compose-row">
       <select id="new-recipient-contact" style="font-size:12px">
-        <option value="">— pick a contact —</option>
+        <option value="">— pick a recipient —</option>
+        ${selfOpts}
+        ${contacts.length && identities.length ? '<option disabled>──────────</option>' : ''}
         ${contactOpts}
       </select>
     </div>` : ''}
     <div class="compose-row">
       <input id="new-recipient" placeholder="Or paste encryption key (base64 X25519)" style="font-family:var(--mono);font-size:11px">
     </div>`;
-  if (contacts.length) {
+  if (hasRecipients) {
     el('new-recipient-contact').addEventListener('change', e => {
       if (e.target.value) el('new-recipient').value = e.target.value;
     });
@@ -1337,6 +1351,7 @@ async function send() {
       const conv = currentView;
       const head = causalHead(conv.messages);
       await backend.sendChannel(conv.name, body, senderName, head || null);
+      el('compose-body').value = '';
 
     } else if (mode === 'direct') {
       const conv = currentView;
@@ -1344,14 +1359,19 @@ async function send() {
       const recipKey = btn.dataset.recipKey;
       if (!recipKey) { toast('No recipient key available.', true); return; }
       await backend.sendDirect(recipKey, body, senderName, head || null);
+      el('compose-body').value = '';
+      await loadMessages();
 
     } else { // new
       const recipKey = el('new-recipient')?.value.trim();
       if (!recipKey) { toast('Enter recipient key.', true); return; }
       await backend.sendDirect(recipKey, body, senderName, null);
+      el('compose-body').value = '';
+      await loadMessages();
+      const conv = conversations.find(c => c.kind !== 'channel' && c.pub === recipKey);
+      if (conv) { openConversation(conv); toast('Message sent.'); setStatus('Message stored in blockstore.'); return; }
     }
 
-    el('compose-body').value = '';
     toast('Message sent.');
     setStatus('Message stored in blockstore.');
   } catch(e) {

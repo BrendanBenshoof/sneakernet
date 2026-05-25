@@ -57,6 +57,16 @@ type MessagePayload struct {
 	// Channel is set by tryAllKeys to the channel name used to decrypt this
 	// payload. Empty for direct messages. Not part of the wire format.
 	Channel string
+
+	// SentTo is the raw X25519 public key of the recipient. Set by handleSend
+	// when storing a sent message immediately, so it appears without a scrape.
+	// Not part of the wire format.
+	SentTo []byte
+
+	// DecryptedBy is the local identity name that decrypted (or sent) this
+	// message. Set by Scrape (from tryAllKeys) and by handleSend. Not part of
+	// the wire format.
+	DecryptedBy string
 }
 
 // IsFragment reports whether the FlagIsFragment bit is set.

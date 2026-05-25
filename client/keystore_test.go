@@ -177,7 +177,7 @@ func TestKeystoreMultiKeyClient(t *testing.T) {
 		}
 	}
 
-	c := New(bs, ms, ks.Keys(), nil)
+	c := New(bs, ms, ks.Identities(), nil)
 	found, err := c.Scrape(t.Context())
 	if err != nil {
 		t.Fatal(err)

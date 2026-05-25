@@ -216,23 +216,18 @@ func TestSendAndScrape(t *testing.T) {
 		t.Fatal("expected block_ids in send response")
 	}
 
-	// Scrape should find it.
-	w = post(t, srv, "/api/scrape", nil, tok)
-	if w.Code != http.StatusOK {
-		t.Fatalf("scrape: got %d (body: %s)", w.Code, w.Body.String())
-	}
-	var scrapeResp map[string]int
-	mustJSON(t, w, &scrapeResp)
-	if scrapeResp["found"] != 1 {
-		t.Fatalf("scrape found %d, want 1", scrapeResp["found"])
-	}
-
-	// Message should appear in inbox.
+	// Message should appear immediately (handleSend stores it without waiting for scrape).
 	w = get(t, srv, "/api/messages", tok)
 	var msgs []map[string]any
 	mustJSON(t, w, &msgs)
 	if len(msgs) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(msgs))
+		t.Fatalf("expected 1 message before scrape, got %d", len(msgs))
+	}
+
+	// Scrape should succeed; found=0 is correct since the block was already stored by send.
+	w = post(t, srv, "/api/scrape", nil, tok)
+	if w.Code != http.StatusOK {
+		t.Fatalf("scrape: got %d (body: %s)", w.Code, w.Body.String())
 	}
 }
 
