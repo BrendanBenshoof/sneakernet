@@ -67,7 +67,7 @@ func New(blocks blockstore.Store, msgs *client.MessageStore, keystorePath string
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if origin := r.Header.Get("Origin"); isLocalOrigin(origin) {
 		w.Header().Set("Access-Control-Allow-Origin", origin)
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, PATCH, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
 	}
 	if r.Method == http.MethodOptions {
@@ -97,6 +97,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/scrape", s.auth(s.handleScrape))
 	s.mux.HandleFunc("POST /api/send", s.auth(s.handleSend))
 	s.mux.HandleFunc("POST /api/send-channel", s.auth(s.handleSendChannel))
+	s.mux.HandleFunc("GET /api/contacts", s.auth(s.handleListContacts))
+	s.mux.HandleFunc("POST /api/contacts", s.auth(s.handleAddContact))
+	s.mux.HandleFunc("DELETE /api/contacts/{pub_key}", s.auth(s.handleRemoveContact))
+	s.mux.HandleFunc("PATCH /api/contacts/{pub_key}", s.auth(s.handleRenameContact))
 }
 
 // auth wraps a handler requiring a valid Bearer token.
