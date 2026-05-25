@@ -33,6 +33,8 @@ func main() {
 	switch os.Args[1] {
 	case "relay":
 		cmdRelay(os.Args[2:])
+	case "mass-storage":
+		cmdMassStorage(os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown subcommand %q\n\n", os.Args[1])
 		usage()
@@ -41,7 +43,101 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, "usage: snk <subcommand> [flags]\n\nsubcommands:\n  relay   run a sneakernet relay node\n")
+	fmt.Fprintf(os.Stderr, "usage: snk <subcommand> [flags]\n\nsubcommands:\n  relay          run a sneakernet relay node\n  mass-storage   sync blocks to/from a flat-file mass storage volume\n")
+}
+
+func cmdMassStorage(args []string) {
+	fs := flag.NewFlagSet("mass-storage", flag.ExitOnError)
+	srcSQLite  := fs.String("from-sqlite", "", "source SQLite blockstore path (blocks.db)")
+	srcBadger  := fs.String("from-badger", "", "source BadgerDB blockstore directory")
+	targetDir  := fs.String("to", "", "target flat-file mass storage directory (required)")
+	reindex    := fs.Bool("reindex", false, "rebuild index only, do not sync blocks")
+	fs.Parse(args)
+
+	if *targetDir == "" {
+		fmt.Fprintln(os.Stderr, "mass-storage: -to <dir> is required")
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	target, err := blockstore.OpenFlatFile(*targetDir)
+	if err != nil {
+		log.Fatalf("open flat-file store: %v", err)
+	}
+	defer target.Close()
+
+	if !*reindex {
+		var src blockstore.Store
+		switch {
+		case *srcSQLite != "":
+			s, err := blockstore.OpenSQLite(*srcSQLite)
+			if err != nil {
+				log.Fatalf("open sqlite source: %v", err)
+			}
+			defer s.Close()
+			src = s
+		case *srcBadger != "":
+			s, err := blockstore.OpenBadger(*srcBadger)
+			if err != nil {
+				log.Fatalf("open badger source: %v", err)
+			}
+			defer s.Close()
+			src = s
+		default:
+			fmt.Fprintln(os.Stderr, "mass-storage: one of -from-sqlite or -from-badger is required unless -reindex is set")
+			fs.Usage()
+			os.Exit(1)
+		}
+
+		if err := syncToFlatFile(src, target); err != nil {
+			log.Fatalf("sync: %v", err)
+		}
+	}
+
+	log.Println("building index...")
+	if err := blockstore.BuildIndex(*targetDir); err != nil {
+		log.Fatalf("build index: %v", err)
+	}
+	log.Println("done")
+}
+
+func syncToFlatFile(src blockstore.Store, dst *blockstore.FlatFileStore) error {
+	token := ""
+	copied, skipped, errs := 0, 0, 0
+	for {
+		next, refs, err := src.ListBlocks(token, 500, 0, time.Time{})
+		if err != nil {
+			return fmt.Errorf("list blocks: %w", err)
+		}
+		for _, ref := range refs {
+			stamp, payload, err := src.Get(ref.ID)
+			if err != nil {
+				errs++
+				continue
+			}
+			already, err := dst.Has(ref.ID)
+			if err != nil {
+				errs++
+				continue
+			}
+			if already {
+				skipped++
+				continue
+			}
+			if _, err := dst.Put(stamp, payload); err != nil {
+				errs++
+				continue
+			}
+			copied++
+		}
+		if next == "" {
+			break
+		}
+		token = next
+		log.Printf("synced %d blocks so far...", copied)
+	}
+	log.Printf("sync complete: %d copied, %d already present, %d errors", copied, skipped, errs)
+	return nil
 }
 
 func cmdRelay(args []string) {
@@ -49,7 +145,7 @@ func cmdRelay(args []string) {
 	addr          := fs.String("addr", "127.0.0.1:8080", "user API listen address")
 	relayAddr     := fs.String("relay-addr", "0.0.0.0:8081", "relay listen address")
 	advertiseAddr := fs.String("advertise-addr", "", "host:port to advertise to peers via DHT (overrides relay-addr; use when behind a proxy)")
-	blocksDB      := fs.String("blocks", "blocks.db", "blockstore SQLite path")
+	blocksDir     := fs.String("blocks", "blocks.db", "blockstore directory path")
 	messagesDB    := fs.String("messages", "messages.db", "message store SQLite path")
 	keystoreFile  := fs.String("keystore", "keystore.json", "keystore file path")
 	powFloor      := fs.Int("pow-floor", 0, "minimum proof-of-work for relay block acceptance")
@@ -88,7 +184,7 @@ func cmdRelay(args []string) {
 		}
 	}
 
-	bs, err := blockstore.OpenSQLite(*blocksDB)
+	bs, err := blockstore.OpenBadger(*blocksDir)
 	if err != nil {
 		log.Fatalf("open blockstore: %v", err)
 	}
