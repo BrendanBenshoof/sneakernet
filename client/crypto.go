@@ -5,9 +5,11 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/binary"
 	"errors"
 
+	"filippo.io/edwards25519"
 	"golang.org/x/crypto/chacha20poly1305"
 
 	"github.com/brendanbenshoof/sneakernet/blockstore"
@@ -33,19 +35,39 @@ const (
 )
 
 // channelSaltSize is the per-block random salt prepended to channel payloads.
-// It occupies the same first 32 bytes as the ephemeral pubkey in direct messages.
 const channelSaltSize = pubKeySize // 32
 
 // ErrNotOurMessage is returned by tryDecrypt when a block is not addressed to us.
 var ErrNotOurMessage = errors.New("client: not our message")
 
-// GenerateKey creates a new X25519 private key.
-func GenerateKey() (*ecdh.PrivateKey, error) {
-	return ecdh.X25519().GenerateKey(rand.Reader)
+// EdPubToX25519 converts an Ed25519 public key to the equivalent X25519 public key
+// via the birational map between the Edwards and Montgomery forms of Curve25519.
+func EdPubToX25519(edPub ed25519.PublicKey) (*ecdh.PublicKey, error) {
+	p, err := new(edwards25519.Point).SetBytes(edPub)
+	if err != nil {
+		return nil, err
+	}
+	return ecdh.X25519().NewPublicKey(p.BytesMontgomery())
 }
 
-// Encrypt encodes mp and encrypts it for recipientPub (anonymous — no signature).
-func Encrypt(recipientPub *ecdh.PublicKey, mp MessagePayload) (blockstore.Payload, error) {
+// edPrivToX25519 derives the X25519 private key from an Ed25519 private key.
+// Both algorithms hash the same 32-byte seed with SHA-512; the first 32 bytes
+// (after clamping) are the scalar used for Diffie-Hellman.
+func edPrivToX25519(edPriv ed25519.PrivateKey) (*ecdh.PrivateKey, error) {
+	h := sha512.Sum512(edPriv.Seed())
+	scalar := h[:32]
+	scalar[0] &= 248
+	scalar[31] &= 127
+	scalar[31] |= 64
+	return ecdh.X25519().NewPrivateKey(scalar)
+}
+
+// Encrypt encodes mp and encrypts it for recipientEdPub (anonymous — no signature).
+func Encrypt(recipientEdPub ed25519.PublicKey, mp MessagePayload) (blockstore.Payload, error) {
+	recipientPub, err := EdPubToX25519(recipientEdPub)
+	if err != nil {
+		return blockstore.Payload{}, err
+	}
 	plain, err := EncodePayload(mp)
 	if err != nil {
 		return blockstore.Payload{}, err
@@ -53,9 +75,13 @@ func Encrypt(recipientPub *ecdh.PublicKey, mp MessagePayload) (blockstore.Payloa
 	return encryptPlain(recipientPub, plain)
 }
 
-// EncryptSigned encodes mp, signs the plaintext with sigKey, then encrypts.
+// EncryptSigned encodes mp, signs the plaintext with sigKey, then encrypts for recipientEdPub.
 // mp.SenderPub must already be set to the Ed25519 public key corresponding to sigKey.
-func EncryptSigned(recipientPub *ecdh.PublicKey, mp MessagePayload, sigKey ed25519.PrivateKey) (blockstore.Payload, error) {
+func EncryptSigned(recipientEdPub ed25519.PublicKey, mp MessagePayload, sigKey ed25519.PrivateKey) (blockstore.Payload, error) {
+	recipientPub, err := EdPubToX25519(recipientEdPub)
+	if err != nil {
+		return blockstore.Payload{}, err
+	}
 	plain, err := EncodePayload(mp)
 	if err != nil {
 		return blockstore.Payload{}, err
@@ -171,10 +197,15 @@ func tryDecryptChannel(channelKey [32]byte, payload blockstore.Payload) (Message
 	return mp, nil
 }
 
-// tryDecrypt attempts to decrypt payload using privKey.
+// tryDecrypt attempts to decrypt payload using the X25519 key derived from edPriv.
 // Returns ErrNotOurMessage if the block was not addressed to us or is malformed.
 // Handles both v1 (magic 0x01) and v2 (magic 0x02) formats.
-func tryDecrypt(privKey *ecdh.PrivateKey, payload blockstore.Payload) (MessagePayload, error) {
+func tryDecrypt(edPriv ed25519.PrivateKey, payload blockstore.Payload) (MessagePayload, error) {
+	privKey, err := edPrivToX25519(edPriv)
+	if err != nil {
+		return MessagePayload{}, ErrNotOurMessage
+	}
+
 	ephPub, err := ecdh.X25519().NewPublicKey(payload[:pubKeySize])
 	if err != nil {
 		return MessagePayload{}, ErrNotOurMessage

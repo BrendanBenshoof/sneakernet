@@ -86,7 +86,7 @@ func (c *Client) Scrape(ctx context.Context) (int, error) {
 // channel messages), and true on the first success.
 func (c *Client) tryAllKeys(payload blockstore.Payload) (MessagePayload, string, bool) {
 	for _, id := range c.identities {
-		if mp, err := tryDecrypt(id.Key, payload); err == nil {
+		if mp, err := tryDecrypt(id.SignKey, payload); err == nil {
 			return mp, id.Name, true
 		}
 	}

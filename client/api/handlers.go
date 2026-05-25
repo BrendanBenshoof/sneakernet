@@ -1,7 +1,6 @@
 package api
 
 import (
-	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
@@ -95,23 +94,22 @@ func (s *Server) handleLock(w http.ResponseWriter, r *http.Request) {
 }
 
 // GET /api/identities
-// Returns all stored identities with their public keys.
+// Returns all stored identities with their Ed25519 public key (used for both
+// message verification and encryption address).
 func (s *Server) handleListIdentities(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	ids := s.ks.List()
 	s.mu.RUnlock()
 
 	type identityResp struct {
-		Name            string `json:"name"`
-		PublicKey       string `json:"public_key"`
-		SigningPublicKey string `json:"signing_public_key"`
+		Name      string `json:"name"`
+		PublicKey string `json:"public_key"`
 	}
 	out := make([]identityResp, len(ids))
 	for i, id := range ids {
 		out[i] = identityResp{
-			Name:            id.Name,
-			PublicKey:       base64.StdEncoding.EncodeToString(id.Key.PublicKey().Bytes()),
-			SigningPublicKey: base64.StdEncoding.EncodeToString(id.SignKey.Public().(ed25519.PublicKey)),
+			Name:      id.Name,
+			PublicKey: base64.StdEncoding.EncodeToString(id.PublicKey()),
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -146,9 +144,8 @@ func (s *Server) handleAddIdentity(w http.ResponseWriter, r *http.Request) {
 	s.rebuildScraper()
 
 	writeJSON(w, http.StatusCreated, map[string]string{
-		"name":               req.Name,
-		"public_key":         base64.StdEncoding.EncodeToString(id.Key.PublicKey().Bytes()),
-		"signing_public_key": base64.StdEncoding.EncodeToString(id.SignKey.Public().(ed25519.PublicKey)),
+		"name":       req.Name,
+		"public_key": base64.StdEncoding.EncodeToString(id.PublicKey()),
 	})
 }
 
@@ -183,7 +180,7 @@ type msgResp struct {
 	Content     string   `json:"content"`
 	Channel     string   `json:"channel,omitempty"`
 	ReceivedAt  string   `json:"received_at"`
-	SentTo      string   `json:"sent_to,omitempty"`      // base64 X25519 pub of recipient; set for sent messages
+	SentTo      string   `json:"sent_to,omitempty"`      // base64 Ed25519 pub of recipient; set for sent messages
 	DecryptedBy string   `json:"decrypted_by,omitempty"` // local identity name that decrypted or sent the message
 }
 
@@ -286,7 +283,7 @@ func (s *Server) handleScrape(w http.ResponseWriter, r *http.Request) {
 // POST /api/send
 //
 //	{
-//	  "recipient_public_key": "<base64 X25519>",
+//	  "recipient_public_key": "<base64 Ed25519>",
 //	  "message": "<text>",
 //	  "sender_identity": "<name>",          // optional; omit = anonymous
 //	  "reply_to_block_id": "<hex block ID>" // optional; omit = new thread
@@ -312,16 +309,12 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pubBytes, err := base64.StdEncoding.DecodeString(req.RecipientPublicKey)
-	if err != nil {
+	recipientEdPubBytes, err := base64.StdEncoding.DecodeString(req.RecipientPublicKey)
+	if err != nil || len(recipientEdPubBytes) != 32 {
 		writeError(w, http.StatusBadRequest, "invalid recipient_public_key encoding")
 		return
 	}
-	recipientPub, err := ecdh.X25519().NewPublicKey(pubBytes)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid recipient public key")
-		return
-	}
+	recipientEdPub := ed25519.PublicKey(recipientEdPubBytes)
 
 	// Resolve optional sender identity.
 	s.mu.RLock()
@@ -339,8 +332,7 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "sender_identity not found")
 			return
 		}
-		pubKeyBytes := []byte(signerID.SignKey.Public().(ed25519.PublicKey))
-		copy(mp.SenderPub[:], pubKeyBytes)
+		copy(mp.SenderPub[:], signerID.PublicKey())
 	}
 
 	// Resolve optional thread refs from the replied-to message.
@@ -372,9 +364,9 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 
 		var payload blockstore.Payload
 		if signerID != nil {
-			payload, err = client.EncryptSigned(recipientPub, mp, signerID.SignKey)
+			payload, err = client.EncryptSigned(recipientEdPub, mp, signerID.SignKey)
 		} else {
-			payload, err = client.Encrypt(recipientPub, mp)
+			payload, err = client.Encrypt(recipientEdPub, mp)
 		}
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
@@ -389,7 +381,7 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Immediately persist plaintext so it appears without waiting for a scrape.
-		mp.SentTo = pubBytes
+		mp.SentTo = recipientEdPubBytes
 		mp.DecryptedBy = req.SenderIdentity
 		_, _ = s.msgs.SaveMessage(id, mp)
 
@@ -418,14 +410,14 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		fmp.FragID = fragID
 		fmp.FragIndex = uint16(i)
 		fmp.FragTotal = total
-		fmp.SentTo = pubBytes
+		fmp.SentTo = recipientEdPubBytes
 		fmp.DecryptedBy = req.SenderIdentity
 
 		var payload blockstore.Payload
 		if signerID != nil {
-			payload, err = client.EncryptSigned(recipientPub, fmp, signerID.SignKey)
+			payload, err = client.EncryptSigned(recipientEdPub, fmp, signerID.SignKey)
 		} else {
-			payload, err = client.Encrypt(recipientPub, fmp)
+			payload, err = client.Encrypt(recipientEdPub, fmp)
 		}
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to encrypt fragment")
@@ -600,8 +592,7 @@ func (s *Server) handleSendChannel(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "sender_identity not found")
 			return
 		}
-		pubKeyBytes := []byte(signerID.SignKey.Public().(ed25519.PublicKey))
-		copy(mp.SenderPub[:], pubKeyBytes)
+		copy(mp.SenderPub[:], signerID.PublicKey())
 	}
 
 	if req.ReplyToBlockID != "" {
@@ -653,27 +644,24 @@ func (s *Server) handleListContacts(w http.ResponseWriter, r *http.Request) {
 	s.mu.RUnlock()
 
 	type contactResp struct {
-		Name            string `json:"name"`
-		PublicKey       string `json:"public_key"`
-		SigningPublicKey string `json:"signing_public_key"`
+		Name      string `json:"name"`
+		PublicKey string `json:"public_key"`
 	}
 	out := make([]contactResp, len(cs))
 	for i, c := range cs {
 		out[i] = contactResp{
-			Name:            c.Name,
-			PublicKey:       base64.StdEncoding.EncodeToString(c.PublicKey),
-			SigningPublicKey: base64.StdEncoding.EncodeToString(c.SigningPublicKey),
+			Name:      c.Name,
+			PublicKey: base64.StdEncoding.EncodeToString(c.PublicKey),
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
 }
 
-// POST /api/contacts  {"name":"...","public_key":"<base64>","signing_public_key":"<base64>"}
+// POST /api/contacts  {"name":"...","public_key":"<base64 Ed25519>"}
 func (s *Server) handleAddContact(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name            string `json:"name"`
-		PublicKey       string `json:"public_key"`
-		SigningPublicKey string `json:"signing_public_key"`
+		Name      string `json:"name"`
+		PublicKey string `json:"public_key"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -683,16 +671,11 @@ func (s *Server) handleAddContact(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid public_key encoding")
 		return
 	}
-	signBytes, err := base64.StdEncoding.DecodeString(req.SigningPublicKey)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid signing_public_key encoding")
-		return
-	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	c, err := s.ks.AddContact(req.Name, pubBytes, signBytes)
+	c, err := s.ks.AddContact(req.Name, pubBytes)
 	if err != nil {
 		writeError(w, http.StatusConflict, err.Error())
 		return
@@ -702,9 +685,8 @@ func (s *Server) handleAddContact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]string{
-		"name":               c.Name,
-		"public_key":         base64.StdEncoding.EncodeToString(c.PublicKey),
-		"signing_public_key": base64.StdEncoding.EncodeToString(c.SigningPublicKey),
+		"name":       c.Name,
+		"public_key": base64.StdEncoding.EncodeToString(c.PublicKey),
 	})
 }
 

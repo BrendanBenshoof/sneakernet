@@ -2,7 +2,6 @@ package client
 
 import (
 	"bytes"
-	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
@@ -17,21 +16,27 @@ import (
 )
 
 const (
-	kdfSaltSize     = 32
-	kdfTime    uint32 = 2
-	kdfMemory  uint32 = 64 * 1024 // 64 MB
-	kdfThreads uint8  = 4
-	kdfKeyLen  uint32 = 32
+	kdfSaltSize        = 32
+	kdfTime    uint32  = 2
+	kdfMemory  uint32  = 64 * 1024 // 64 MB
+	kdfThreads uint8   = 4
+	kdfKeyLen  uint32  = 32
 
-	keystoreVersion = 1
+	keystoreVersion = 2
 )
 
 // Identity is a named key pair held in a Keystore.
-// Key is the X25519 encryption key; SignKey is the Ed25519 signing key.
+// SignKey is the Ed25519 private key; the X25519 key for encryption is derived
+// from it on demand via EdPubToX25519 / edPrivToX25519.
 type Identity struct {
 	Name    string
-	Key     *ecdh.PrivateKey
 	SignKey ed25519.PrivateKey
+}
+
+// PublicKey returns the Ed25519 public key for this identity.
+// This is the single key shared with contacts for both verification and encryption.
+func (id *Identity) PublicKey() ed25519.PublicKey {
+	return id.SignKey.Public().(ed25519.PublicKey)
 }
 
 // Channel is a named symmetric channel key. Anyone who knows the passphrase
@@ -41,12 +46,13 @@ type Channel struct {
 	Key  [32]byte
 }
 
-// Contact is a named remote identity — public keys only, no private key.
+// Contact is a named remote identity — public key only, no private key.
+// PublicKey is the Ed25519 public key, which serves as both the encryption
+// address (via EdPubToX25519) and the signing verification key.
 // Contacts are stored plaintext in the keystore file because they are not secrets.
 type Contact struct {
-	Name            string
-	PublicKey       []byte // raw 32-byte X25519 public key
-	SigningPublicKey []byte // raw 32-byte Ed25519 public key
+	Name      string
+	PublicKey []byte // raw 32-byte Ed25519 public key
 }
 
 // validateName enforces shared name rules for identities and contacts:
@@ -98,8 +104,8 @@ func NewKeystore(password []byte) (*Keystore, error) {
 
 // LoadKeystore reads and decrypts a keystore file at path using password.
 // Returns an error immediately if the password is wrong or the file is corrupted.
-// If any identity is missing a signing key (old keystore), a fresh Ed25519 key
-// is generated and the file is updated in-place.
+// Version 1 keystores are migrated automatically: the Ed25519 signing key is kept
+// as the unified identity key, and the separate X25519 key is discarded.
 func LoadKeystore(path string, password []byte) (*Keystore, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -110,7 +116,7 @@ func LoadKeystore(path string, password []byte) (*Keystore, error) {
 	if err := json.Unmarshal(data, &f); err != nil {
 		return nil, fmt.Errorf("client: load keystore: %w", err)
 	}
-	if f.Version != keystoreVersion {
+	if f.Version != 1 && f.Version != keystoreVersion {
 		return nil, fmt.Errorf("client: unsupported keystore version %d", f.Version)
 	}
 
@@ -134,38 +140,31 @@ func LoadKeystore(path string, password []byte) (*Keystore, error) {
 		kdfThreads: f.KDFThreads,
 	}
 
-	migrated := false
+	needsSave := f.Version < keystoreVersion
 	for _, rec := range f.Identities {
-		privBytes, err := ksDecrypt(masterKey, rec.Nonce, rec.Ciphertext)
-		if err != nil {
-			return nil, fmt.Errorf("client: load keystore: wrong password or corrupted data")
-		}
-		privKey, err := ecdh.X25519().NewPrivateKey(privBytes)
-		if err != nil {
-			return nil, fmt.Errorf("client: load keystore: invalid key %q: %w", rec.Name, err)
-		}
-
 		var signKey ed25519.PrivateKey
 		if len(rec.SignNonce) > 0 && len(rec.SignCiphertext) > 0 {
+			// v1 identity with a signing key, or v2 identity: use it directly.
 			signBytes, err := ksDecrypt(masterKey, rec.SignNonce, rec.SignCiphertext)
 			if err != nil {
 				return nil, fmt.Errorf("client: load keystore: wrong password or corrupted data")
 			}
 			signKey = ed25519.PrivateKey(signBytes)
 		} else {
+			// v1 identity without a signing key: generate a fresh one.
+			// The old X25519 key is discarded; contacts must re-exchange keys.
 			_, signKey, err = ed25519.GenerateKey(rand.Reader)
 			if err != nil {
 				return nil, fmt.Errorf("client: load keystore: generate sign key: %w", err)
 			}
-			migrated = true
+			needsSave = true
 		}
-
-		k.identities = append(k.identities, &Identity{Name: rec.Name, Key: privKey, SignKey: signKey})
+		k.identities = append(k.identities, &Identity{Name: rec.Name, SignKey: signKey})
 	}
 
-	if migrated {
+	if needsSave {
 		if err := k.Save(path); err != nil {
-			return nil, fmt.Errorf("client: load keystore: persist migrated sign keys: %w", err)
+			return nil, fmt.Errorf("client: load keystore: persist migration: %w", err)
 		}
 	}
 
@@ -183,13 +182,19 @@ func LoadKeystore(path string, password []byte) (*Keystore, error) {
 	}
 
 	for _, rec := range f.Contacts {
-		if len(rec.PublicKey) != 32 || len(rec.SigningPublicKey) != 32 {
-			continue // skip malformed entries from future versions
+		// v1 contacts stored PublicKey (X25519) + SigningPublicKey (Ed25519).
+		// Migrate by using SigningPublicKey as the unified PublicKey.
+		// v2 contacts store only PublicKey (Ed25519).
+		pub := rec.PublicKey
+		if len(rec.SigningPublicKey) == 32 {
+			pub = rec.SigningPublicKey
+		}
+		if len(pub) != 32 {
+			continue // skip malformed entries
 		}
 		k.contacts = append(k.contacts, &Contact{
-			Name:            rec.Name,
-			PublicKey:       rec.PublicKey,
-			SigningPublicKey: rec.SigningPublicKey,
+			Name:      rec.Name,
+			PublicKey: pub,
 		})
 	}
 
@@ -214,24 +219,17 @@ func (k *Keystore) Save(path string) error {
 	}
 
 	for _, id := range k.identities {
-		nonce, ct, err := ksEncrypt(k.masterKey, id.Key.Bytes())
+		// Store the Ed25519 private key in the sign_nonce/sign_ciphertext fields.
+		// The nonce/ciphertext fields are left empty in v2 (no separate X25519 key).
+		sNonce, sCT, err := ksEncrypt(k.masterKey, id.SignKey)
 		if err != nil {
 			return fmt.Errorf("client: save keystore: encrypt %q: %w", id.Name, err)
 		}
-		rec := identityRecord{
-			Name:       id.Name,
-			Nonce:      nonce,
-			Ciphertext: ct,
-		}
-		if len(id.SignKey) > 0 {
-			sNonce, sCT, err := ksEncrypt(k.masterKey, id.SignKey)
-			if err != nil {
-				return fmt.Errorf("client: save keystore: encrypt sign key %q: %w", id.Name, err)
-			}
-			rec.SignNonce = sNonce
-			rec.SignCiphertext = sCT
-		}
-		f.Identities = append(f.Identities, rec)
+		f.Identities = append(f.Identities, identityRecord{
+			Name:           id.Name,
+			SignNonce:      sNonce,
+			SignCiphertext: sCT,
+		})
 	}
 
 	for _, ch := range k.channels {
@@ -248,9 +246,8 @@ func (k *Keystore) Save(path string) error {
 
 	for _, c := range k.contacts {
 		f.Contacts = append(f.Contacts, contactRecord{
-			Name:            c.Name,
-			PublicKey:       c.PublicKey,
-			SigningPublicKey: c.SigningPublicKey,
+			Name:      c.Name,
+			PublicKey: c.PublicKey,
 		})
 	}
 
@@ -270,7 +267,7 @@ func (k *Keystore) Save(path string) error {
 	return nil
 }
 
-// Add generates a fresh identity under name and returns it.
+// Add generates a fresh Ed25519 identity under name and returns it.
 // Returns an error if the name is invalid or already taken.
 func (k *Keystore) Add(name string) (*Identity, error) {
 	if err := validateName(name); err != nil {
@@ -279,31 +276,13 @@ func (k *Keystore) Add(name string) (*Identity, error) {
 	if k.get(name) != nil {
 		return nil, fmt.Errorf("client: identity %q already exists", name)
 	}
-	privKey, err := GenerateKey()
-	if err != nil {
-		return nil, err
-	}
 	_, signKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, err
 	}
-	id := &Identity{Name: name, Key: privKey, SignKey: signKey}
+	id := &Identity{Name: name, SignKey: signKey}
 	k.identities = append(k.identities, id)
 	return id, nil
-}
-
-// Import stores an existing private key under name.
-// Returns an error if name is already taken.
-func (k *Keystore) Import(name string, privKey *ecdh.PrivateKey) error {
-	if k.get(name) != nil {
-		return fmt.Errorf("client: identity %q already exists", name)
-	}
-	_, signKey, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		return err
-	}
-	k.identities = append(k.identities, &Identity{Name: name, Key: privKey, SignKey: signKey})
-	return nil
 }
 
 // Remove deletes the identity with the given name.
@@ -330,15 +309,6 @@ func (k *Keystore) GetIdentity(name string) *Identity {
 	return k.get(name)
 }
 
-// Keys returns the X25519 private key for every stored identity, suitable for
-// passing to client.New for multi-identity scraping.
-func (k *Keystore) Keys() []*ecdh.PrivateKey {
-	keys := make([]*ecdh.PrivateKey, len(k.identities))
-	for i, id := range k.identities {
-		keys[i] = id.Key
-	}
-	return keys
-}
 
 // Identities returns all stored identities. Prefer this over Keys() when the
 // identity name is needed (e.g. to set decrypted_by on saved messages).
@@ -390,16 +360,14 @@ func (k *Keystore) Channels() []Channel {
 	return out
 }
 
-// AddContact stores a new contact. Names may repeat; public keys must be unique.
-func (k *Keystore) AddContact(name string, pubKey, signKey []byte) (*Contact, error) {
+// AddContact stores a new contact by their Ed25519 public key.
+// Names may repeat; public keys must be unique.
+func (k *Keystore) AddContact(name string, pubKey []byte) (*Contact, error) {
 	if err := validateName(name); err != nil {
 		return nil, err
 	}
 	if len(pubKey) != 32 {
 		return nil, fmt.Errorf("client: invalid public key length")
-	}
-	if len(signKey) != 32 {
-		return nil, fmt.Errorf("client: invalid signing key length")
 	}
 	for _, c := range k.contacts {
 		if bytes.Equal(c.PublicKey, pubKey) {
@@ -407,9 +375,8 @@ func (k *Keystore) AddContact(name string, pubKey, signKey []byte) (*Contact, er
 		}
 	}
 	c := &Contact{
-		Name:            name,
-		PublicKey:       append([]byte(nil), pubKey...),
-		SigningPublicKey: append([]byte(nil), signKey...),
+		Name:      name,
+		PublicKey: append([]byte(nil), pubKey...),
 	}
 	k.contacts = append(k.contacts, c)
 	return c, nil
@@ -500,8 +467,10 @@ type keystoreFile struct {
 
 type identityRecord struct {
 	Name           string `json:"name"`
-	Nonce          []byte `json:"nonce"`
-	Ciphertext     []byte `json:"ciphertext"`
+	// Nonce/Ciphertext held the v1 X25519 key; unused in v2 but kept for migration reads.
+	Nonce          []byte `json:"nonce,omitempty"`
+	Ciphertext     []byte `json:"ciphertext,omitempty"`
+	// SignNonce/SignCiphertext hold the Ed25519 private key (v1 and v2).
 	SignNonce      []byte `json:"sign_nonce,omitempty"`
 	SignCiphertext []byte `json:"sign_ciphertext,omitempty"`
 }
@@ -515,7 +484,8 @@ type channelRecord struct {
 type contactRecord struct {
 	Name            string `json:"name"`
 	PublicKey       []byte `json:"public_key"`
-	SigningPublicKey []byte `json:"signing_public_key"`
+	// SigningPublicKey is present in v1 contacts only; used for migration.
+	SigningPublicKey []byte `json:"signing_public_key,omitempty"`
 }
 
 // --- crypto helpers ---
