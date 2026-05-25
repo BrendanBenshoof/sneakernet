@@ -631,6 +631,123 @@ func (s *Server) handleSendChannel(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]string{"block_id": hex.EncodeToString(id[:])})
 }
 
+// GET /api/contacts
+func (s *Server) handleListContacts(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	cs := s.ks.ListContacts()
+	s.mu.RUnlock()
+
+	type contactResp struct {
+		Name            string `json:"name"`
+		PublicKey       string `json:"public_key"`
+		SigningPublicKey string `json:"signing_public_key"`
+	}
+	out := make([]contactResp, len(cs))
+	for i, c := range cs {
+		out[i] = contactResp{
+			Name:            c.Name,
+			PublicKey:       base64.StdEncoding.EncodeToString(c.PublicKey),
+			SigningPublicKey: base64.StdEncoding.EncodeToString(c.SigningPublicKey),
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// POST /api/contacts  {"name":"...","public_key":"<base64>","signing_public_key":"<base64>"}
+func (s *Server) handleAddContact(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name            string `json:"name"`
+		PublicKey       string `json:"public_key"`
+		SigningPublicKey string `json:"signing_public_key"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	pubBytes, err := base64.StdEncoding.DecodeString(req.PublicKey)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid public_key encoding")
+		return
+	}
+	signBytes, err := base64.StdEncoding.DecodeString(req.SigningPublicKey)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid signing_public_key encoding")
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	c, err := s.ks.AddContact(req.Name, pubBytes, signBytes)
+	if err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	if err := s.ks.Save(s.ksPath); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to save keystore")
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]string{
+		"name":               c.Name,
+		"public_key":         base64.StdEncoding.EncodeToString(c.PublicKey),
+		"signing_public_key": base64.StdEncoding.EncodeToString(c.SigningPublicKey),
+	})
+}
+
+// DELETE /api/contacts/{pub_key}  (pub_key is base64url no-padding)
+func (s *Server) handleRemoveContact(w http.ResponseWriter, r *http.Request) {
+	pubBytes, err := base64.RawURLEncoding.DecodeString(r.PathValue("pub_key"))
+	if err != nil || len(pubBytes) != 32 {
+		writeError(w, http.StatusBadRequest, "invalid pub_key")
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.ks.RemoveContact(pubBytes) {
+		writeError(w, http.StatusNotFound, "contact not found")
+		return
+	}
+	if err := s.ks.Save(s.ksPath); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to save keystore")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// PATCH /api/contacts/{pub_key}  {"name":"new name"}  (pub_key is base64url no-padding)
+func (s *Server) handleRenameContact(w http.ResponseWriter, r *http.Request) {
+	pubBytes, err := base64.RawURLEncoding.DecodeString(r.PathValue("pub_key"))
+	if err != nil || len(pubBytes) != 32 {
+		writeError(w, http.StatusBadRequest, "invalid pub_key")
+		return
+	}
+	var req struct {
+		Name string `json:"name"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	found, err := s.ks.RenameContact(pubBytes, req.Name)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if !found {
+		writeError(w, http.StatusNotFound, "contact not found")
+		return
+	}
+	if err := s.ks.Save(s.ksPath); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to save keystore")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // --- helpers ---
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

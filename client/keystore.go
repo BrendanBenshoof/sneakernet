@@ -1,6 +1,7 @@
 package client
 
 import (
+	"bytes"
 	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -9,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"unicode"
 
 	"golang.org/x/crypto/argon2"
 	"golang.org/x/crypto/chacha20poly1305"
@@ -39,8 +41,34 @@ type Channel struct {
 	Key  [32]byte
 }
 
-// Keystore is a password-protected collection of named identities and channel keys.
-// Load it once at startup; all keys are decrypted into memory.
+// Contact is a named remote identity — public keys only, no private key.
+// Contacts are stored plaintext in the keystore file because they are not secrets.
+type Contact struct {
+	Name            string
+	PublicKey       []byte // raw 32-byte X25519 public key
+	SigningPublicKey []byte // raw 32-byte Ed25519 public key
+}
+
+// validateName enforces shared name rules for identities and contacts:
+// 1–64 Unicode characters, no '/' (URI delimiter), no control characters.
+func validateName(name string) error {
+	runes := []rune(name)
+	if len(runes) == 0 {
+		return fmt.Errorf("client: name must not be empty")
+	}
+	if len(runes) > 64 {
+		return fmt.Errorf("client: name must not exceed 64 characters")
+	}
+	for _, r := range runes {
+		if r == '/' || unicode.IsControl(r) {
+			return fmt.Errorf("client: name contains invalid character")
+		}
+	}
+	return nil
+}
+
+// Keystore is a password-protected collection of named identities, channel keys,
+// and contacts. Load it once at startup; all private keys are decrypted into memory.
 type Keystore struct {
 	masterKey  [kdfKeyLen]byte
 	salt       []byte
@@ -49,6 +77,7 @@ type Keystore struct {
 	kdfThreads uint8
 	identities []*Identity
 	channels   []*Channel
+	contacts   []*Contact
 }
 
 // NewKeystore creates an empty Keystore protected by password.
@@ -153,6 +182,17 @@ func LoadKeystore(path string, password []byte) (*Keystore, error) {
 		k.channels = append(k.channels, ch)
 	}
 
+	for _, rec := range f.Contacts {
+		if len(rec.PublicKey) != 32 || len(rec.SigningPublicKey) != 32 {
+			continue // skip malformed entries from future versions
+		}
+		k.contacts = append(k.contacts, &Contact{
+			Name:            rec.Name,
+			PublicKey:       rec.PublicKey,
+			SigningPublicKey: rec.SigningPublicKey,
+		})
+	}
+
 	return k, nil
 }
 
@@ -206,6 +246,14 @@ func (k *Keystore) Save(path string) error {
 		})
 	}
 
+	for _, c := range k.contacts {
+		f.Contacts = append(f.Contacts, contactRecord{
+			Name:            c.Name,
+			PublicKey:       c.PublicKey,
+			SigningPublicKey: c.SigningPublicKey,
+		})
+	}
+
 	data, err := json.MarshalIndent(f, "", "  ")
 	if err != nil {
 		return fmt.Errorf("client: save keystore: %w", err)
@@ -223,8 +271,11 @@ func (k *Keystore) Save(path string) error {
 }
 
 // Add generates a fresh identity under name and returns it.
-// Returns an error if name is already taken.
+// Returns an error if the name is invalid or already taken.
 func (k *Keystore) Add(name string) (*Identity, error) {
+	if err := validateName(name); err != nil {
+		return nil, err
+	}
 	if k.get(name) != nil {
 		return nil, fmt.Errorf("client: identity %q already exists", name)
 	}
@@ -331,6 +382,64 @@ func (k *Keystore) Channels() []Channel {
 	return out
 }
 
+// AddContact stores a new contact. Names may repeat; public keys must be unique.
+func (k *Keystore) AddContact(name string, pubKey, signKey []byte) (*Contact, error) {
+	if err := validateName(name); err != nil {
+		return nil, err
+	}
+	if len(pubKey) != 32 {
+		return nil, fmt.Errorf("client: invalid public key length")
+	}
+	if len(signKey) != 32 {
+		return nil, fmt.Errorf("client: invalid signing key length")
+	}
+	for _, c := range k.contacts {
+		if bytes.Equal(c.PublicKey, pubKey) {
+			return nil, fmt.Errorf("client: contact with that public key already exists")
+		}
+	}
+	c := &Contact{
+		Name:            name,
+		PublicKey:       append([]byte(nil), pubKey...),
+		SigningPublicKey: append([]byte(nil), signKey...),
+	}
+	k.contacts = append(k.contacts, c)
+	return c, nil
+}
+
+// RemoveContact removes the contact with the matching public key.
+func (k *Keystore) RemoveContact(pubKey []byte) bool {
+	for i, c := range k.contacts {
+		if bytes.Equal(c.PublicKey, pubKey) {
+			k.contacts = append(k.contacts[:i], k.contacts[i+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
+// RenameContact updates the display name of the contact identified by pubKey.
+// Returns (true, nil) on success, (false, nil) if not found, (false, err) on invalid name.
+func (k *Keystore) RenameContact(pubKey []byte, newName string) (bool, error) {
+	if err := validateName(newName); err != nil {
+		return false, err
+	}
+	for _, c := range k.contacts {
+		if bytes.Equal(c.PublicKey, pubKey) {
+			c.Name = newName
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// ListContacts returns a copy of all stored contacts.
+func (k *Keystore) ListContacts() []*Contact {
+	out := make([]*Contact, len(k.contacts))
+	copy(out, k.contacts)
+	return out
+}
+
 func (k *Keystore) getChannel(name string) *Channel {
 	for _, ch := range k.channels {
 		if ch.Name == name {
@@ -377,6 +486,8 @@ type keystoreFile struct {
 	Verify     []byte           `json:"verify"`
 	Identities []identityRecord `json:"identities"`
 	Channels   []channelRecord  `json:"channels,omitempty"`
+	// Contacts are public-key-only records; stored plaintext (not encrypted).
+	Contacts   []contactRecord  `json:"contacts,omitempty"`
 }
 
 type identityRecord struct {
@@ -391,6 +502,12 @@ type channelRecord struct {
 	Name       string `json:"name"`
 	Nonce      []byte `json:"nonce"`
 	Ciphertext []byte `json:"ciphertext"`
+}
+
+type contactRecord struct {
+	Name            string `json:"name"`
+	PublicKey       []byte `json:"public_key"`
+	SigningPublicKey []byte `json:"signing_public_key"`
 }
 
 // --- crypto helpers ---

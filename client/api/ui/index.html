@@ -140,7 +140,21 @@
       text-transform: uppercase;
       color: var(--muted);
       padding: 4px 14px 2px;
+      display: flex;
+      align-items: center;
     }
+    .sb-section-title button.icon { margin-left: auto; padding: 1px 6px; font-size: 14px; }
+    .contact-hash { font-family: var(--mono); font-size: 10px; color: var(--muted); margin-left: 3px; }
+
+    #sb-ch-form {
+      padding: 6px 10px 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+    #sb-ch-form input { font-size: 12px; padding: 5px 8px; }
+    #sb-ch-form .row { gap: 5px; }
+    #sb-ch-form .row button { flex: 1; font-size: 12px; padding: 5px 8px; }
 
     .sb-item {
       display: flex;
@@ -503,15 +517,21 @@
   <nav id="sidebar">
     <div id="sb-header">
       <h1>Sneakernet <span class="sub">Local Node</span></h1>
-      <button class="icon" id="new-msg-btn" title="New message">+</button>
     </div>
     <div id="sb-body">
       <div class="sb-section">
-        <div class="sb-section-title">Channels</div>
+        <div class="sb-section-title">Channels <button class="icon" id="new-ch-btn" title="Join channel">+</button></div>
+        <div id="sb-ch-form" class="hidden">
+          <input id="new-ch-pass" placeholder="Passphrase" autocomplete="off">
+          <div class="row">
+            <button class="sm ghost" id="sb-ch-cancel">Cancel</button>
+            <button class="sm" id="sb-ch-join">Join</button>
+          </div>
+        </div>
         <div id="sb-channels"></div>
       </div>
       <div class="sb-section">
-        <div class="sb-section-title">Direct</div>
+        <div class="sb-section-title">Direct <button class="icon" id="new-msg-btn" title="New message">+</button></div>
         <div id="sb-directs"></div>
       </div>
     </div>
@@ -562,12 +582,16 @@
       </div>
       <div class="panel-section">
         <h2>Channels</h2>
-        <p class="hint">Channels use a shared symmetric key derived from a passphrase. Anyone with the same passphrase can post and receive.</p>
+        <p class="hint">Channels use a symmetric key derived from a shared passphrase. Anyone who knows the passphrase can post and read — it is not a secret password.</p>
         <div id="ch-list"></div>
+      </div>
+      <div class="panel-section">
+        <h2>Contacts</h2>
+        <p class="hint">Contacts are other people's public credentials. Share your own via the <strong>Share snk:</strong> button on your identity cards. Paste someone else's snk: URI here to add them.</p>
+        <div id="contact-list"></div>
         <div class="row">
-          <input id="new-ch-name" placeholder="Channel name">
-          <input id="new-ch-pass" type="password" placeholder="Passphrase">
-          <button class="sm" id="join-ch-btn">Join</button>
+          <input id="new-contact-uri" placeholder="snk:name/pubkey/signkey" autocomplete="off">
+          <button class="sm" id="add-contact-btn">Add</button>
         </div>
       </div>
     </div>
@@ -585,9 +609,40 @@ let allMessages    = [];
 let byBlock        = new Map();
 let identities     = [];
 let channels       = [];
+let contacts       = [];
 let currentView    = null;
 let conversations  = [];
 let activeIdentity = null; // identity object or null (anonymous)
+
+// ── snk: URI helpers ───────────────────────────────────────────────────────
+function toB64url(b64) {
+  return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+}
+function fromB64url(b64url) {
+  const b64 = b64url.replace(/-/g, '+').replace(/_/g, '/');
+  return b64 + '='.repeat((4 - b64.length % 4) % 4);
+}
+function snkUri(name, pubKey, signKey) {
+  return `snk:${encodeURIComponent(name)}/${toB64url(pubKey)}/${toB64url(signKey)}`;
+}
+function parseSnkUri(uri) {
+  if (!uri.startsWith('snk:')) return null;
+  const rest = uri.slice(4);
+  const i1 = rest.indexOf('/');
+  if (i1 < 0) return null;
+  const i2 = rest.indexOf('/', i1 + 1);
+  if (i2 < 0) return null;
+  const name = decodeURIComponent(rest.slice(0, i1));
+  const pubPart  = rest.slice(i1 + 1, i2);
+  const signPart = rest.slice(i2 + 1);
+  if (pubPart.length !== 43 || signPart.length !== 43) return null;
+  return {name, public_key: fromB64url(pubPart), signing_public_key: fromB64url(signPart)};
+}
+async function contactHash(pubKeyB64) {
+  const bytes = Uint8Array.from(atob(pubKeyB64), c => c.charCodeAt(0));
+  const hash = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(hash)).slice(0, 4).map(b => b.toString(16).padStart(2, '0')).join('');
+}
 
 // ── boot ───────────────────────────────────────────────────────────────────
 (async () => {
@@ -615,9 +670,19 @@ document.addEventListener('DOMContentLoaded', () => {
   el('send-btn').addEventListener('click', send);
   el('add-id-btn').addEventListener('click', addIdentity);
   el('new-id-name').addEventListener('keydown', e => { if (e.key === 'Enter') addIdentity(); });
-  el('join-ch-btn').addEventListener('click', addChannel);
-  el('new-ch-name').addEventListener('keydown', e => { if (e.key === 'Enter') el('new-ch-pass').focus(); });
+  el('new-ch-btn').addEventListener('click', () => {
+    el('sb-ch-form').classList.toggle('hidden');
+    if (!el('sb-ch-form').classList.contains('hidden')) el('new-ch-pass').focus();
+  });
+  el('sb-ch-cancel').addEventListener('click', () => {
+    el('sb-ch-form').classList.add('hidden');
+    el('new-ch-pass').value = '';
+  });
+  el('sb-ch-join').addEventListener('click', addChannel);
   el('new-ch-pass').addEventListener('keydown', e => { if (e.key === 'Enter') addChannel(); });
+
+  el('add-contact-btn').addEventListener('click', addContact);
+  el('new-contact-uri').addEventListener('keydown', e => { if (e.key === 'Enter') addContact(); });
 
   el('sidebar-overlay').addEventListener('click', closeSidebar);
   el('active-identity').addEventListener('change', e => {
@@ -750,6 +815,12 @@ function rebuildConversations() {
     }
   }
 
+  // Seed channel conversations from the known channel list so they appear
+  // in the sidebar even before any messages have been received.
+  for (const ch of channels) {
+    if (!chMap.has(ch.name)) chMap.set(ch.name, []);
+  }
+
   conversations = [];
 
   for (const [name, msgs] of chMap) {
@@ -775,6 +846,9 @@ function resolveSender(senderPub) {
   for (const id of identities) {
     if (id.signing_public_key === senderPub) return id.name;
   }
+  for (const c of contacts) {
+    if (c.signing_public_key === senderPub) return c.name;
+  }
   return null; // unknown pub — goes to unknown pool
 }
 
@@ -782,6 +856,9 @@ function resolveSenderDisplay(senderPub) {
   if (!senderPub) return null;
   for (const id of identities) {
     if (id.signing_public_key === senderPub) return id.name;
+  }
+  for (const c of contacts) {
+    if (c.signing_public_key === senderPub) return c.name;
   }
   return senderPub.slice(0, 8) + '…';
 }
@@ -1092,10 +1169,24 @@ function openNewMsg() {
 
   const asSuffix = activeIdentity ? `as ${activeIdentity.name}` : '';
   el('compose-ctx').textContent = asSuffix;
+  const contactOpts = contacts.map(c =>
+    `<option value="${esc(c.public_key)}">${esc(c.name)}</option>`
+  ).join('');
   el('compose-extra').innerHTML = `
+    ${contacts.length ? `<div class="compose-row">
+      <select id="new-recipient-contact" style="font-size:12px">
+        <option value="">— pick a contact —</option>
+        ${contactOpts}
+      </select>
+    </div>` : ''}
     <div class="compose-row">
-      <input id="new-recipient" placeholder="Recipient encryption key (base64 X25519)" style="font-family:var(--mono);font-size:11px">
+      <input id="new-recipient" placeholder="Or paste encryption key (base64 X25519)" style="font-family:var(--mono);font-size:11px">
     </div>`;
+  if (contacts.length) {
+    el('new-recipient-contact').addEventListener('change', e => {
+      if (e.target.value) el('new-recipient').value = e.target.value;
+    });
+  }
   el('compose-area').classList.remove('hidden');
   el('compose-body').value = '';
   el('send-btn').dataset.mode = 'new';
@@ -1150,15 +1241,16 @@ async function send() {
 }
 
 // ── identities & channels panel ────────────────────────────────────────────
-function openPanel() {
+async function openPanel() {
   currentView = {kind: 'panel'};
   closeSidebar();
   el('conv-view').classList.add('hidden');
   el('panel-view').classList.remove('hidden');
-  el('conv-title').textContent = 'Identities & Channels';
+  el('conv-title').textContent = 'Identities, Channels & Contacts';
   el('conv-sub').textContent = '';
   renderIdentities();
   renderChannelList();
+  await renderContacts();
   renderSidebar();
 }
 
@@ -1198,7 +1290,10 @@ function renderIdentities() {
     div.innerHTML = `
       <div class="card-header">
         <span class="card-name">${esc(id.name)}</span>
-        <button class="sm danger" data-name="${esc(id.name)}">Delete</button>
+        <div style="display:flex;gap:4px">
+          <button class="sm ghost" data-share>Share snk:</button>
+          <button class="sm danger" data-name="${esc(id.name)}">Delete</button>
+        </div>
       </div>
       <div class="card-key-row">
         <div class="card-key-info">
@@ -1214,6 +1309,10 @@ function renderIdentities() {
         </div>
         <button class="sm ghost" data-copy="${esc(id.signing_public_key)}" title="Copy signing key">Copy</button>
       </div>`;
+    div.querySelector('[data-share]').addEventListener('click', () => {
+      copyKey(snkUri(id.name, id.public_key, id.signing_public_key));
+      toast('snk: URI copied — share it with contacts.');
+    });
     div.querySelector('.sm.danger').addEventListener('click', () => deleteIdentity(id.name));
     div.querySelectorAll('[data-copy]').forEach(btn => {
       btn.addEventListener('click', () => copyKey(btn.dataset.copy));
@@ -1248,6 +1347,90 @@ async function deleteIdentity(name) {
   toast(`Identity "${name}" deleted.`);
 }
 
+// ── contacts ────────────────────────────────────────────────────────────────
+async function loadContacts() {
+  const r = await api('GET', '/api/contacts');
+  if (!r || !r.ok) return;
+  contacts = await r.json() || [];
+}
+
+async function renderContacts() {
+  const list = el('contact-list');
+  if (!list) return;
+  list.innerHTML = '';
+  if (!contacts.length) {
+    list.innerHTML = '<div style="font-size:12px;color:var(--muted)">No contacts yet.</div>';
+    return;
+  }
+  for (const c of contacts) {
+    const hash = await contactHash(c.public_key);
+    const div = document.createElement('div');
+    div.className = 'card';
+    div.innerHTML = `
+      <div class="card-header">
+        <span class="card-name contact-label-${hash}">${esc(c.name)}<span class="contact-hash">#${hash}</span></span>
+        <div style="display:flex;gap:4px">
+          <button class="sm ghost" data-action="rename">Rename</button>
+          <button class="sm ghost" data-action="copy-snk">Copy snk:</button>
+          <button class="sm danger" data-action="remove">Remove</button>
+        </div>
+      </div>`;
+    div.querySelector('[data-action="rename"]').addEventListener('click', () => startRenameContact(c, hash, div));
+    div.querySelector('[data-action="copy-snk"]').addEventListener('click', () => {
+      copyKey(snkUri(c.name, c.public_key, c.signing_public_key));
+      toast('snk: URI copied.');
+    });
+    div.querySelector('[data-action="remove"]').addEventListener('click', () => removeContact(c));
+    list.appendChild(div);
+  }
+}
+
+function startRenameContact(c, hash, card) {
+  const label = card.querySelector(`.contact-label-${hash}`);
+  const current = c.name;
+  label.innerHTML = `<input style="font-size:13px;padding:2px 6px" value="${esc(current)}">`;
+  const input = label.querySelector('input');
+  input.focus(); input.select();
+  let committed = false;
+  const commit = async () => {
+    if (committed) return; committed = true;
+    const newName = input.value.trim();
+    if (!newName || newName === current) { await renderContacts(); return; }
+    const r = await api('PATCH', `/api/contacts/${encodeURIComponent(toB64url(c.public_key))}`, {name: newName});
+    if (!r || !r.ok) { toast('Rename failed.', true); }
+    else { toast(`Renamed to "${newName}".`); }
+    await loadContacts(); await renderContacts();
+  };
+  input.addEventListener('blur', commit);
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+    if (e.key === 'Escape') { committed = true; renderContacts(); }
+  });
+}
+
+async function addContact() {
+  const uri = el('new-contact-uri').value.trim();
+  if (!uri) { toast('Paste a snk: URI.', true); return; }
+  const parsed = parseSnkUri(uri);
+  if (!parsed) { toast('Invalid snk: URI — expected snk:name/pubkey/signkey.', true); return; }
+  const r = await api('POST', '/api/contacts', parsed);
+  if (!r) return;
+  if (r.status === 409) { toast('That contact already exists.', true); return; }
+  if (!r.ok) { toast('Failed to add contact.', true); return; }
+  el('new-contact-uri').value = '';
+  await loadContacts(); await renderContacts();
+  rebuildConversations(); renderSidebar();
+  toast(`Added "${parsed.name}".`);
+}
+
+async function removeContact(c) {
+  const r = await api('DELETE', `/api/contacts/${encodeURIComponent(toB64url(c.public_key))}`);
+  if (!r || !r.ok) { toast('Failed to remove contact.', true); return; }
+  await loadContacts(); await renderContacts();
+  rebuildConversations(); renderSidebar();
+  toast('Contact removed.');
+}
+
 async function loadChannels() {
   const r = await api('GET', '/api/channels');
   if (!r || !r.ok) return;
@@ -1276,25 +1459,26 @@ function renderChannelList() {
 }
 
 async function addChannel() {
-  const name = el('new-ch-name').value.trim();
-  const pass = el('new-ch-pass').value;
-  if (!name || !pass) { toast('Enter channel name and passphrase.', true); return; }
-  const r = await api('POST', '/api/channels', {name, passphrase: pass});
+  const pass = el('new-ch-pass').value.trim();
+  if (!pass) { toast('Enter a passphrase.', true); return; }
+  const r = await api('POST', '/api/channels', {name: pass, passphrase: pass});
   if (!r) return;
-  if (r.status === 409) { toast('Channel name already joined.', true); return; }
+  if (r.status === 409) { toast('Already joined that channel.', true); return; }
   if (!r.ok)            { toast('Failed to join channel.', true); return; }
-  el('new-ch-name').value = '';
   el('new-ch-pass').value = '';
+  el('sb-ch-form').classList.add('hidden');
   await loadChannels();
+  rebuildConversations();
   renderChannelList();
   renderSidebar();
-  toast(`Joined channel "${name}".`);
+  toast(`Joined channel "${pass}".`);
 }
 
 async function removeChannel(name) {
   const r = await api('DELETE', `/api/channels/${encodeURIComponent(name)}`);
   if (!r || !r.ok) { toast('Failed to leave channel.', true); return; }
   await loadChannels();
+  rebuildConversations();
   renderChannelList();
   renderSidebar();
   toast(`Left channel "${name}".`);
@@ -1315,7 +1499,7 @@ function showLock() {
 async function showApp() {
   el('lock-screen').classList.add('hidden');
   el('app').classList.remove('hidden');
-  await Promise.all([loadMessages(), loadIdentities(), loadChannels()]);
+  await Promise.all([loadMessages(), loadIdentities(), loadChannels(), loadContacts()]);
   rebuildConversations();
   renderSidebar();
   setStatus('Ready');
