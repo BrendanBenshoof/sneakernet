@@ -140,7 +140,20 @@
       text-transform: uppercase;
       color: var(--muted);
       padding: 4px 14px 2px;
+      display: flex;
+      align-items: center;
     }
+    .sb-section-title button.icon { margin-left: auto; padding: 1px 6px; font-size: 14px; }
+
+    #sb-ch-form {
+      padding: 6px 10px 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+    #sb-ch-form input { font-size: 12px; padding: 5px 8px; }
+    #sb-ch-form .row { gap: 5px; }
+    #sb-ch-form .row button { flex: 1; font-size: 12px; padding: 5px 8px; }
 
     .sb-item {
       display: flex;
@@ -503,15 +516,21 @@
   <nav id="sidebar">
     <div id="sb-header">
       <h1>Sneakernet <span class="sub">Local Node</span></h1>
-      <button class="icon" id="new-msg-btn" title="New message">+</button>
     </div>
     <div id="sb-body">
       <div class="sb-section">
-        <div class="sb-section-title">Channels</div>
+        <div class="sb-section-title">Channels <button class="icon" id="new-ch-btn" title="Join channel">+</button></div>
+        <div id="sb-ch-form" class="hidden">
+          <input id="new-ch-pass" placeholder="Passphrase" autocomplete="off">
+          <div class="row">
+            <button class="sm ghost" id="sb-ch-cancel">Cancel</button>
+            <button class="sm" id="sb-ch-join">Join</button>
+          </div>
+        </div>
         <div id="sb-channels"></div>
       </div>
       <div class="sb-section">
-        <div class="sb-section-title">Direct</div>
+        <div class="sb-section-title">Direct <button class="icon" id="new-msg-btn" title="New message">+</button></div>
         <div id="sb-directs"></div>
       </div>
     </div>
@@ -562,13 +581,8 @@
       </div>
       <div class="panel-section">
         <h2>Channels</h2>
-        <p class="hint">Channels use a shared symmetric key derived from a passphrase. Anyone with the same passphrase can post and receive.</p>
+        <p class="hint">Channels use a symmetric key derived from a shared passphrase. Anyone who knows the passphrase can post and read — it is not a secret password.</p>
         <div id="ch-list"></div>
-        <div class="row">
-          <input id="new-ch-name" placeholder="Channel name">
-          <input id="new-ch-pass" type="password" placeholder="Passphrase">
-          <button class="sm" id="join-ch-btn">Join</button>
-        </div>
       </div>
     </div>
   </div>
@@ -615,8 +629,15 @@ document.addEventListener('DOMContentLoaded', () => {
   el('send-btn').addEventListener('click', send);
   el('add-id-btn').addEventListener('click', addIdentity);
   el('new-id-name').addEventListener('keydown', e => { if (e.key === 'Enter') addIdentity(); });
-  el('join-ch-btn').addEventListener('click', addChannel);
-  el('new-ch-name').addEventListener('keydown', e => { if (e.key === 'Enter') el('new-ch-pass').focus(); });
+  el('new-ch-btn').addEventListener('click', () => {
+    el('sb-ch-form').classList.toggle('hidden');
+    if (!el('sb-ch-form').classList.contains('hidden')) el('new-ch-pass').focus();
+  });
+  el('sb-ch-cancel').addEventListener('click', () => {
+    el('sb-ch-form').classList.add('hidden');
+    el('new-ch-pass').value = '';
+  });
+  el('sb-ch-join').addEventListener('click', addChannel);
   el('new-ch-pass').addEventListener('keydown', e => { if (e.key === 'Enter') addChannel(); });
 
   el('sidebar-overlay').addEventListener('click', closeSidebar);
@@ -748,6 +769,12 @@ function rebuildConversations() {
         dirMap.get(key).messages.push(m);
       }
     }
+  }
+
+  // Seed channel conversations from the known channel list so they appear
+  // in the sidebar even before any messages have been received.
+  for (const ch of channels) {
+    if (!chMap.has(ch.name)) chMap.set(ch.name, []);
   }
 
   conversations = [];
@@ -1276,25 +1303,26 @@ function renderChannelList() {
 }
 
 async function addChannel() {
-  const name = el('new-ch-name').value.trim();
-  const pass = el('new-ch-pass').value;
-  if (!name || !pass) { toast('Enter channel name and passphrase.', true); return; }
-  const r = await api('POST', '/api/channels', {name, passphrase: pass});
+  const pass = el('new-ch-pass').value.trim();
+  if (!pass) { toast('Enter a passphrase.', true); return; }
+  const r = await api('POST', '/api/channels', {name: pass, passphrase: pass});
   if (!r) return;
-  if (r.status === 409) { toast('Channel name already joined.', true); return; }
+  if (r.status === 409) { toast('Already joined that channel.', true); return; }
   if (!r.ok)            { toast('Failed to join channel.', true); return; }
-  el('new-ch-name').value = '';
   el('new-ch-pass').value = '';
+  el('sb-ch-form').classList.add('hidden');
   await loadChannels();
+  rebuildConversations();
   renderChannelList();
   renderSidebar();
-  toast(`Joined channel "${name}".`);
+  toast(`Joined channel "${pass}".`);
 }
 
 async function removeChannel(name) {
   const r = await api('DELETE', `/api/channels/${encodeURIComponent(name)}`);
   if (!r || !r.ok) { toast('Failed to leave channel.', true); return; }
   await loadChannels();
+  rebuildConversations();
   renderChannelList();
   renderSidebar();
   toast(`Left channel "${name}".`);
