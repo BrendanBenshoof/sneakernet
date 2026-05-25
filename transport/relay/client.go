@@ -156,6 +156,30 @@ func (c *Client) Delta(ctx context.Context, bloom *Bloom, powFloor int, since ti
 	return ids, nil
 }
 
+// GetPeers fetches the list of healthy (non-penalized) peer URLs from the relay.
+// Used for gossip: callers should attempt to add any returned URLs as new peers.
+func (c *Client) GetPeers(ctx context.Context) ([]string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/peers", nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("relay peers: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("relay peers: status %d", resp.StatusCode)
+	}
+	var result struct {
+		Peers []string `json:"peers"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("relay peers: decode: %w", err)
+	}
+	return result.Peers, nil
+}
+
 // GetPowLimit queries the relay for its current minimum proof-of-work requirement.
 func (c *Client) GetPowLimit(ctx context.Context) (int, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,

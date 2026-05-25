@@ -26,9 +26,10 @@ import (
 // Server is an HTTP relay node that accepts and serves blocks.
 // It implements http.Handler and can be passed to http.ListenAndServe.
 type Server struct {
-	store    blockstore.Store
-	powFloor int
-	mux      *http.ServeMux
+	store      blockstore.Store
+	powFloor   int
+	mux        *http.ServeMux
+	peerSource func() []string
 }
 
 // NewServer creates a relay Server. powFloor is the minimum work_factor
@@ -43,6 +44,12 @@ func NewServer(store blockstore.Store, powFloor int) *Server {
 	return s
 }
 
+// SetPeerSource registers a function that returns known healthy (non-penalized)
+// peer base URLs. Called by GET /v1/peers so peers can gossip the network.
+func (s *Server) SetPeerSource(fn func() []string) {
+	s.peerSource = fn
+}
+
 func (s *Server) routes() {
 	// Public webapp and JSON block API.
 	s.mux.HandleFunc("GET /app", s.handleWebApp)
@@ -55,6 +62,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /v1/block", s.handlePut)
 	s.mux.HandleFunc("POST /v1/delta", s.handleDelta)
 	s.mux.HandleFunc("GET /v1/pow-limit", s.handlePowLimit)
+	s.mux.HandleFunc("GET /v1/peers", s.handlePeers)
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -192,6 +200,20 @@ func (s *Server) handleDelta(w http.ResponseWriter, r *http.Request) {
 // Returns JSON {"pow_floor":N} — the minimum work_factor this relay accepts.
 func (s *Server) handlePowLimit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]int{"pow_floor": s.powFloor})
+}
+
+// GET /v1/peers
+// Returns JSON {"peers":["url1","url2",...]} — known healthy (non-penalized) peers.
+// Peers use this to gossip and discover the rest of the network.
+func (s *Server) handlePeers(w http.ResponseWriter, r *http.Request) {
+	var peers []string
+	if s.peerSource != nil {
+		peers = s.peerSource()
+	}
+	if peers == nil {
+		peers = []string{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"peers": peers})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
