@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -88,7 +89,7 @@ func cmdMassStorage(args []string) {
 			os.Exit(1)
 		}
 
-		if err := syncToFlatFile(src, target); err != nil {
+		if err := syncStores(src, target); err != nil {
 			log.Fatalf("sync: %v", err)
 		}
 	}
@@ -100,7 +101,7 @@ func cmdMassStorage(args []string) {
 	log.Println("done")
 }
 
-func syncToFlatFile(src blockstore.Store, dst *blockstore.FlatFileStore) error {
+func syncStores(src, dst blockstore.Store) error {
 	token := ""
 	copied, skipped, errs := 0, 0, 0
 	for {
@@ -150,6 +151,8 @@ func cmdRelay(args []string) {
 	syncInterval := fs.Duration("sync-interval", 5*time.Minute, "interval between peer sync rounds")
 	peersFlag    := fs.String("peers", "", "comma-separated list of peer base URLs to always sync with (e.g. https://relay.example.com,http://peer2.local:8081)")
 	lanScan      := fs.Bool("lan", false, fmt.Sprintf("scan LAN for sneakernet peers on port %d (\"snk\" in base32)", lan.Port))
+	usbDir      := fs.String("usb-dir", "", "path to sneakernet USB volume root; syncs when .sneakernet marker is present (empty = disabled)")
+	usbInterval := fs.Duration("usb-interval", 30*time.Second, "how often to check and sync the USB volume")
 	fs.Parse(args)
 
 	var staticPeers []string
@@ -198,6 +201,10 @@ func cmdRelay(args []string) {
 	// Sync loop: exchange blocks with known peers and gossip to discover more.
 	go pt.run(ctx, bs, mergePeers(ctx, peerSources...), *powFloor, *syncInterval, staticPeers)
 
+	if *usbDir != "" {
+		go usbSyncLoop(ctx, bs, *usbDir, *usbInterval)
+	}
+
 	// User-facing API server.
 	apiSrv := api.New(bs, ms, *keystoreFile)
 	fmt.Printf("Sneakernet running at http://%s\n", *addr)
@@ -209,6 +216,45 @@ func cmdRelay(args []string) {
 
 	<-ctx.Done()
 	log.Println("shutting down")
+}
+
+func usbSyncLoop(ctx context.Context, store blockstore.Store, dir string, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				log.Printf("usb sync: readdir %s: %v", dir, err)
+				continue
+			}
+			for _, e := range entries {
+				if !e.IsDir() {
+					continue
+				}
+				volDir := filepath.Join(dir, e.Name())
+				if _, err := os.Stat(filepath.Join(volDir, ".sneakernet")); err != nil {
+					continue
+				}
+				usb, err := blockstore.OpenFlatFile(volDir)
+				if err != nil {
+					log.Printf("usb sync: open %s: %v", volDir, err)
+					continue
+				}
+				log.Printf("usb sync: syncing with %s", volDir)
+				if err := syncStores(usb, store); err != nil {
+					log.Printf("usb sync: pull from %s: %v", volDir, err)
+				}
+				if err := syncStores(store, usb); err != nil {
+					log.Printf("usb sync: push to %s: %v", volDir, err)
+				}
+				usb.Close()
+			}
+		}
+	}
 }
 
 // mergePeers fans in multiple peer address channels into one.
