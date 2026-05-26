@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Sneakernet — Browser</title>
+  <title>Sneakernet</title>
   <style>
     :root {
       --bg:           #0f1117;
@@ -522,11 +522,11 @@
 </head>
 <body>
 
-<!-- ── lock screen (not shown — no auth required) ────────────────────────── -->
+<!-- ── lock screen ───────────────────────────────────────────── -->
 <div id="lock-screen" class="hidden">
   <div class="lock-card">
     <h1>Sneakernet</h1>
-    <p class="sub">Browser — client-side crypto, keys in IndexedDB</p>
+    <p class="sub" id="lock-subtitle"></p>
     <input type="password" id="pw" placeholder="Password" autocomplete="current-password">
     <button id="unlock-btn">Unlock</button>
     <button class="ghost" id="create-btn">Create new keystore</button>
@@ -553,7 +553,7 @@
 
   <nav id="sidebar">
     <div id="sb-header">
-      <h1>Sneakernet <span class="sub">Browser</span></h1>
+      <h1>Sneakernet <span class="sub" id="sb-subtitle"></span></h1>
     </div>
     <div id="sb-body">
       <div class="sb-section">
@@ -573,14 +573,14 @@
       </div>
     </div>
     <div id="sb-footer">
-      <button id="scrape-btn">⟳  Refresh</button>
-      <button id="identities-btn">⊙  Identities &amp; Channels</button>
+      <button id="scrape-btn">&#x27F3;  Refresh</button>
+      <button id="identities-btn">&#x2299;  Identities &amp; Channels</button>
     </div>
   </nav>
 
   <div id="main">
     <div id="conv-header">
-      <button class="icon" id="mobile-back">☰</button>
+      <button class="icon" id="mobile-back">&#x2630;</button>
       <h2 id="conv-title">Select a conversation</h2>
       <span id="conv-sub" class="sub"></span>
       <div id="identity-picker">
@@ -597,7 +597,7 @@
         <div class="compose-ctx" id="compose-ctx"></div>
         <div id="compose-extra"></div>
         <div class="compose-bottom">
-          <textarea id="compose-body" placeholder="Message…"></textarea>
+          <textarea id="compose-body" placeholder="Message&#x2026;"></textarea>
           <button id="send-btn">Send</button>
         </div>
       </div>
@@ -607,7 +607,7 @@
     <div id="panel-view" class="hidden">
       <div class="panel-section">
         <h2>Identities</h2>
-        <p class="hint">Keys generated in your browser, stored in IndexedDB. Share your <strong>public key</strong> so others can send you messages and verify your identity — one key does both. Keys never leave this browser.</p>
+        <p class="hint" id="identities-hint"></p>
         <div id="id-list"></div>
         <div class="row">
           <input id="new-id-name" placeholder="Identity name">
@@ -624,7 +624,7 @@
         <p class="hint">Contacts are other people's public credentials. Share your own via the <strong>Share snk:</strong> button on your identity cards. Paste someone else's snk: URI here to add them.</p>
         <div id="contact-list"></div>
         <div class="row">
-          <input id="new-contact-uri" placeholder="snk:name/pubkey/signkey" autocomplete="off">
+          <input id="new-contact-uri" placeholder="snk:name/pubkey" autocomplete="off">
           <button class="sm" id="add-contact-btn">Add</button>
         </div>
       </div>
@@ -637,10 +637,6 @@
 <div id="toast"></div>
 
 <script>
-'use strict';
-const el = id => document.getElementById(id);
-function lockErr(msg) { el('lock-err').textContent = msg; }
-function setStatus(msg, cls = '') { const s = el('statusbar'); s.textContent = msg; s.className = cls; }
 // ═══════════════════════════════════════════════════════════════════════
 //  XChaCha20-Poly1305
 //  Implements RFC 8439 ChaCha20-Poly1305 + draft-irtf-cfrg-xchacha-03.
@@ -884,7 +880,6 @@ function hexToBytes(hex) {
 
 const PLAINTEXT_SIZE = 4024;
 const MAX_CONTENT    = 3620;
-const ZERO64         = '0'.repeat(64);
 
 async function buildV2Plain(msgText, senderEd25519PubBytes, signingPrivKey, threadRefHexes) {
   const msg = new TextEncoder().encode(msgText);
@@ -958,7 +953,7 @@ function readV1Plain(plain) {
   if (msgLen > 1970) return null;
   return {
     msgType: 0, sentAt: null, senderPub: '',
-    threadRefs: Array(8).fill(ZERO64),
+    threadRefs: Array(8).fill('0'.repeat(64)),
     contentB64: b64enc(plain.slice(6, 6+msgLen)),
   };
 }
@@ -1088,7 +1083,7 @@ class BrowserBackend {
   async unlock() {}
   async lock() {}
 
-  // ── identities ──────────────────────────────────────────────────────
+  // ── identities ──────────────────────────────────────────────────────────
   // IndexedDB record (v2): {name, pubBase64(Ed25519), privJWK(Ed25519)}
   // Old records (v1) have {name, pubBase64(X25519), privJWK(X25519),
   //   signingPubBase64(Ed25519), signingPrivJWK(Ed25519)}.
@@ -1125,7 +1120,7 @@ class BrowserBackend {
     await dbDelete('identities', name);
   }
 
-  // ── contacts ────────────────────────────────────────────────────────
+  // ── contacts ────────────────────────────────────────────────────────────
   // localStorage (v2): [{name, public_key(Ed25519)}]
   // Old format had {name, public_key(X25519), signing_public_key(Ed25519)}.
   // Migration: if signing_public_key is present, use it as the unified key.
@@ -1166,7 +1161,7 @@ class BrowserBackend {
     this._saveContacts(cs);
   }
 
-  // ── channels ────────────────────────────────────────────────────────
+  // ── channels ────────────────────────────────────────────────────────────
   // localStorage: [{name, keyBase64}]
 
   _loadChannels() {
@@ -1191,7 +1186,7 @@ class BrowserBackend {
     this._saveChannels(this._loadChannels().filter(c => c.name !== name));
   }
 
-  // ── scrape ──────────────────────────────────────────────────────────
+  // ── scrape ──────────────────────────────────────────────────────────────
   // Fetches raw blocks from /api/blocks, decrypts against all local
   // identities and channels, stores results in _inbox.
 
@@ -1294,7 +1289,7 @@ class BrowserBackend {
     return this._inbox.filter(m => m.id > afterId);
   }
 
-  // ── send ────────────────────────────────────────────────────────────
+  // ── send ────────────────────────────────────────────────────────────────
 
   async _getSenderKeys(senderIdentityName) {
     if (!senderIdentityName) return {senderPubBytes: null, signingPrivKey: null};
@@ -1344,7 +1339,7 @@ class BrowserBackend {
         sender_pub:   r.senderSignPub || '',
         msg_type:     0,
         content:      b64enc(new TextEncoder().encode(r.content)),
-        thread_refs:  r.threadRefs || Array(8).fill(ZERO64),
+        thread_refs:  r.threadRefs || Array(8).fill('0'.repeat(64)),
         sent_at:      r.sentAt || r.sent_at || null,
         received_at:  r.sentAt || r.sent_at || null,
         sent_to:      r.recipientPub,
@@ -1358,7 +1353,7 @@ class BrowserBackend {
     recipientPublicKey = fromB64url(recipientPublicKey); // normalize: accept standard or URL-safe b64
     const {senderPubBytes, signingPrivKey} = await this._getSenderKeys(senderIdentity);
     const threadRefs = replyToBlockId
-      ? [replyToBlockId, ...Array(7).fill(ZERO64)]
+      ? [replyToBlockId, ...Array(7).fill('0'.repeat(64))]
       : null;
     const plain   = await buildV2Plain(message, senderPubBytes, signingPrivKey, threadRefs);
     const payload = await encryptDirect(recipientPublicKey, plain);
@@ -1383,7 +1378,7 @@ class BrowserBackend {
       sender_pub:   rec.senderSignPub,
       msg_type:     0,
       content:      b64enc(new TextEncoder().encode(message)),
-      thread_refs:  threadRefs || Array(8).fill(ZERO64),
+      thread_refs:  threadRefs || Array(8).fill('0'.repeat(64)),
       sent_at:      sentAt,
       received_at:  sentAt,
       sent_to:      recipientPublicKey,
@@ -1397,7 +1392,7 @@ class BrowserBackend {
     if (!ch) throw new Error('channel not found');
     const {senderPubBytes, signingPrivKey} = await this._getSenderKeys(senderIdentity);
     const threadRefs = replyToBlockId
-      ? [replyToBlockId, ...Array(7).fill(ZERO64)]
+      ? [replyToBlockId, ...Array(7).fill('0'.repeat(64))]
       : null;
     const plain   = await buildV2Plain(message, senderPubBytes, signingPrivKey, threadRefs);
     const payload = await encryptChannelRaw(b64dec(ch.keyBase64), plain);
@@ -1407,10 +1402,37 @@ class BrowserBackend {
 
 const backend = new BrowserBackend();
 
-// ═══════════════════════════════════════════════════════════════════════
-//  UI — identical to the local node UI from here down.
-//  The backend object above is the only difference.
-// ═══════════════════════════════════════════════════════════════════════
+const UI_CONFIG = {
+  pageTitle:       'Browser',
+  lockSubtitle:    'Browser — client-side crypto, keys in IndexedDB',
+  sidebarSubtitle: 'Browser',
+  hasLockButton:   false,
+  identitiesHint:  'Keys generated in your browser, stored in IndexedDB. Share your <strong>public key</strong> so others can send you messages and verify your identity — one key does both. Keys never leave this browser.',
+  sendStatusMsg:   'Block stored on relay.',
+};
+
+</script>
+<script>
+'use strict';
+
+const ZERO64 = '0'.repeat(64);
+const el = id => document.getElementById(id);
+function lockErr(msg) { el('lock-err').textContent = msg; }
+function setStatus(msg, cls = '') { const s = el('statusbar'); s.textContent = msg; s.className = cls; }
+
+// ── apply UI_CONFIG to DOM ─────────────────────────────────────────────────
+function applyConfig() {
+  document.title = 'Sneakernet — ' + UI_CONFIG.pageTitle;
+  el('lock-subtitle').textContent = UI_CONFIG.lockSubtitle;
+  el('sb-subtitle').textContent   = UI_CONFIG.sidebarSubtitle;
+  if (UI_CONFIG.hasLockButton) {
+    const btn = document.createElement('button');
+    btn.id          = 'lock-btn';
+    btn.textContent = '⏻  Lock';
+    el('sb-footer').appendChild(btn);
+    btn.addEventListener('click', lock);
+  }
+}
 
 // ── state ──────────────────────────────────────────────────────────────────
 let allMessages    = [];
@@ -1469,6 +1491,8 @@ async function contactHash(pubKeyB64) {
 
 // ── event wiring ───────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
+  applyConfig();
+
   el('unlock-btn').addEventListener('click', unlock);
   el('create-btn').addEventListener('click', createAndUnlock);
   el('pw').addEventListener('keydown', e => { if (e.key === 'Enter') unlock(); });
@@ -1601,9 +1625,6 @@ function rebuildConversations() {
   const dirMap  = new Map();
   const unknown = [];
 
-  // Only show messages relevant to the active identity.
-  // A message is relevant if it was decrypted by the active identity's key
-  // (received), or was sent by the active identity (sent_to is set).
   const relevant = activeIdentity
     ? allMessages.filter(m => m.decrypted_by === activeIdentity.name || !m.decrypted_by)
     : allMessages;
@@ -1613,18 +1634,15 @@ function rebuildConversations() {
       if (!chMap.has(m.channel)) chMap.set(m.channel, []);
       chMap.get(m.channel).push(m);
     } else {
-      // Group by the other person's Ed25519 public key. sent_to holds the
-      // recipient key for outgoing messages; sender_pub for incoming — same type.
       const otherPub  = m.sent_to || m.sender_pub || '';
       const otherName = m.sent_to
         ? (resolveByPub(m.sent_to) || m.sent_to.slice(0,8) + '…')
         : resolveSender(m.sender_pub);
-
       if (otherName === null && !otherPub) {
         unknown.push(m);
       } else {
-        const key = otherPub || otherName || '__anon__';
-        const displayName = otherName || otherPub.slice(0,8) + '…';
+        const key         = otherPub || otherName || '__anon__';
+        const displayName = otherName || (otherPub ? otherPub.slice(0,8) + '…' : '?');
         if (!dirMap.has(key)) dirMap.set(key, {name: displayName, pub: otherPub, messages: []});
         dirMap.get(key).messages.push(m);
       }
@@ -1641,7 +1659,6 @@ function rebuildConversations() {
   if (unknown.length) conversations.push({kind:'unknown', name:'Unknown senders', messages:unknown});
 }
 
-// Returns a display name for a given Ed25519 public key.
 function resolveByPub(pub) {
   if (!pub) return null;
   for (const id of identities) { if (id.public_key === pub) return id.name; }
@@ -1660,7 +1677,7 @@ function resolveSenderDisplay(senderPub) {
   if (!senderPub) return null;
   for (const id of identities) { if (id.public_key === senderPub) return id.name; }
   for (const c of contacts)    { if (c.public_key === senderPub)  return c.name; }
-  return senderPub.slice(0,8) + '…';
+  return senderPub.slice(0, 8) + '…';
 }
 
 // ── topological sort (Kahn's) ──────────────────────────────────────────────
@@ -1677,7 +1694,7 @@ function topoSort(msgs) {
       succs.get(p).push(m.block_id);
     }
   }
-  const byId = new Map(msgs.map(m => [m.block_id, m]));
+  const byId  = new Map(msgs.map(m => [m.block_id, m]));
   const queue = msgs.filter(m => inDeg.get(m.block_id) === 0).sort(byReceivedAt);
   const sorted = [];
   while (queue.length) {
@@ -1739,7 +1756,7 @@ function openConversation(conv) {
   el('panel-view').classList.add('hidden');
   el('conv-view').classList.remove('hidden');
   el('conv-title').textContent = conv.kind === 'channel' ? '#' + conv.name : conv.name;
-  el('conv-sub').textContent = conv.kind === 'channel' ? 'channel' : conv.kind === 'unknown' ? 'unknown senders' : 'direct';
+  el('conv-sub').textContent   = conv.kind === 'channel' ? 'channel' : conv.kind === 'unknown' ? 'unknown senders' : 'direct';
   renderMessages(conv);
   renderCompose(conv);
   renderSidebar();
@@ -1778,14 +1795,14 @@ function renderMessages(conv) {
 
   const frag = document.createDocumentFragment();
   for (let i = 0; i < sorted.length; i++) {
-    const m = sorted[i];
-    const directPred = m.thread_refs?.[0];
-    const hasRef     = directPred && directPred !== ZERO64;
-    const predInConv = hasRef && convIds.has(directPred);
+    const m           = sorted[i];
+    const directPred  = m.thread_refs?.[0];
+    const hasRef      = directPred && directPred !== ZERO64;
+    const predInConv  = hasRef && convIds.has(directPred);
     const predMissing = hasRef && !predInConv;
-    const siblings   = hasRef ? (succMap.get(directPred) || []) : [];
-    const isFork     = siblings.length > 1;
-    const forkPos    = isFork ? siblings.indexOf(m.block_id) : -1;
+    const siblings    = hasRef ? (succMap.get(directPred) || []) : [];
+    const isFork      = siblings.length > 1;
+    const forkPos     = isFork ? siblings.indexOf(m.block_id) : -1;
     if (predMissing) frag.appendChild(makeGapNode(directPred));
     frag.appendChild(makeMsgRow(m, {
       hasPred: predInConv || predMissing,
@@ -1875,9 +1892,9 @@ function renderSenderMeta(m) {
 }
 
 function renderTimeMeta(m) {
-  const ref    = m.sent_at || m.received_at;
-  const sentD  = m.sent_at ? new Date(m.sent_at) : null;
-  const recvD  = new Date(m.received_at);
+  const ref     = m.sent_at || m.received_at;
+  const sentD   = m.sent_at ? new Date(m.sent_at) : null;
+  const recvD   = new Date(m.received_at);
   const delayed = sentD && (recvD - sentD) > 5 * 60 * 1000;
   if (delayed) {
     return `<span class="msg-time delayed" title="Sneakernet delay">sent ${fmtTime(m.sent_at)} · recv ${fmtTime(m.received_at)}</span>`;
@@ -1905,7 +1922,7 @@ function renderComposeChannel(conv) {
   const asSuffix = activeIdentity ? ` · as <span class="ctx-val">${esc(activeIdentity.name)}</span>` : '';
   el('compose-ctx').innerHTML = (head
     ? `composing after: <span class="ctx-val">${head.slice(0,12)}…</span>`
-    : 'starting new thread in <span class="ctx-val">#' + esc(conv.name) + '</span>')
+    : `starting new thread in <span class="ctx-val">#${esc(conv.name)}</span>`)
     + asSuffix;
   el('compose-extra').innerHTML = '';
   el('send-btn').dataset.mode = 'channel';
@@ -1941,7 +1958,7 @@ function openNewMsg() {
   el('panel-view').classList.add('hidden');
   el('conv-view').classList.remove('hidden');
   el('conv-title').textContent = 'New Message';
-  el('conv-sub').textContent = '';
+  el('conv-sub').textContent   = '';
   el('conv-messages').innerHTML = '';
   el('conv-empty').classList.remove('hidden');
   el('conv-empty').textContent = 'Your message will appear here after sending and scanning.';
@@ -1959,7 +1976,7 @@ function openNewMsg() {
       <select id="new-recipient-contact" style="font-size:12px">
         <option value="">— pick a recipient —</option>
         ${selfOpts}
-        ${contacts.length && identities.length ? '<option disabled>──────────</option>' : ''}
+        ${contacts.length && identities.length ? '<option disabled>──────</option>' : ''}
         ${contactOpts}
       </select>
     </div>` : ''}
@@ -2014,11 +2031,11 @@ async function send() {
       el('compose-body').value = '';
       await loadMessages();
       const conv = conversations.find(c => c.kind !== 'channel' && c.pub === recipKey);
-      if (conv) { openConversation(conv); toast('Message sent.'); setStatus('Block stored on relay.'); return; }
+      if (conv) { openConversation(conv); toast('Message sent.'); setStatus(UI_CONFIG.sendStatusMsg); return; }
     }
 
     toast('Message sent.');
-    setStatus('Block stored on relay.');
+    setStatus(UI_CONFIG.sendStatusMsg);
   } catch(e) {
     toast('Send failed: ' + e.message, true);
   } finally {
@@ -2033,7 +2050,7 @@ async function openPanel() {
   el('conv-view').classList.add('hidden');
   el('panel-view').classList.remove('hidden');
   el('conv-title').textContent = 'Identities, Channels & Contacts';
-  el('conv-sub').textContent = '';
+  el('conv-sub').textContent   = '';
   renderIdentities();
   renderChannelList();
   await renderContacts();
@@ -2055,10 +2072,10 @@ function populateActiveIdentityDropdown() {
   if (prev && identities.find(id => id.name === prev)) {
     sel.value = prev;
   } else if (identities.length) {
-    sel.value = identities[0].name;
+    sel.value      = identities[0].name;
     activeIdentity = identities[0];
   } else {
-    sel.value = '';
+    sel.value      = '';
     activeIdentity = null;
   }
 }
@@ -2066,6 +2083,7 @@ function populateActiveIdentityDropdown() {
 function renderIdentities() {
   const list = el('id-list');
   list.innerHTML = '';
+  el('identities-hint').innerHTML = UI_CONFIG.identitiesHint;
   if (!identities.length) {
     list.innerHTML = '<div style="font-size:12px;color:var(--muted)">No identities yet — add one to receive and sign messages.</div>';
     return;
@@ -2146,7 +2164,7 @@ async function renderContacts() {
   }
   for (const c of contacts) {
     const hash = await contactHash(c.public_key);
-    const div = document.createElement('div');
+    const div  = document.createElement('div');
     div.className = 'card';
     div.innerHTML = `
       <div class="card-header">
@@ -2168,7 +2186,7 @@ async function renderContacts() {
 }
 
 function startRenameContact(c, hash, card) {
-  const label = card.querySelector(`.contact-label-${hash}`);
+  const label   = card.querySelector(`.contact-label-${hash}`);
   const current = c.name;
   label.innerHTML = `<input style="font-size:13px;padding:2px 6px" value="${esc(current)}">`;
   const input = label.querySelector('input');
@@ -2236,7 +2254,7 @@ function renderChannelList() {
     const div = document.createElement('div');
     div.className = 'card';
     div.style.flexDirection = 'row';
-    div.style.alignItems = 'center';
+    div.style.alignItems    = 'center';
     div.innerHTML = `
       <span class="ch-badge">#</span>
       <span style="flex:1;font-size:13px;font-weight:500;margin-left:6px">${esc(ch.name)}</span>
@@ -2310,6 +2328,7 @@ async function showApp() {
 function openSidebar()  { el('sidebar').classList.add('open'); el('sidebar-overlay').classList.add('show'); }
 function closeSidebar() { el('sidebar').classList.remove('open'); el('sidebar-overlay').classList.remove('show'); }
 
+// ── helpers ────────────────────────────────────────────────────────────────
 let toastTimer;
 function toast(msg, err = false) {
   const t = el('toast');
@@ -2337,7 +2356,7 @@ function esc(s) {
 function b64toText(b64) {
   try {
     const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
-    return new TextDecoder('utf-8', {fatal:true}).decode(bytes);
+    return new TextDecoder('utf-8', {fatal: true}).decode(bytes);
   } catch {
     return '[binary content]';
   }
