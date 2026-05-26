@@ -1519,6 +1519,8 @@ async function addChannel() {
   rebuildConversations();
   renderChannelList();
   renderSidebar();
+  const newConv = conversations.find(c => c.kind === 'channel' && c.name === pass);
+  if (newConv) openConversation(newConv);
   toast(`Joined channel "${pass}".`);
 }
 
