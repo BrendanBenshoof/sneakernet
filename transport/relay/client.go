@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/brendanbenshoof/sneakernet/blockstore"
@@ -18,14 +20,33 @@ import (
 type Client struct {
 	baseURL    string
 	httpClient *http.Client
+	tag        blockstore.Tag // applied when storing pulled blocks
 }
 
 // NewClient creates a relay Client targeting baseURL (no trailing slash).
+// The origin tag is inferred from the URL: private/loopback IPs are TagLan,
+// everything else is TagGlobal.
 func NewClient(baseURL string) *Client {
 	return &Client{
 		baseURL:    baseURL,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
+		tag:        tagForURL(baseURL),
 	}
+}
+
+// tagForURL returns the blockstore tag that reflects the network distance to
+// the given base URL. Private and loopback IPs → TagLan; DNS names and public
+// IPs → TagGlobal.
+func tagForURL(rawURL string) blockstore.Tag {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return blockstore.TagGlobal
+	}
+	ip := net.ParseIP(u.Hostname())
+	if ip != nil && (ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast()) {
+		return blockstore.TagLan
+	}
+	return blockstore.TagGlobal
 }
 
 // Get fetches a block by its ID.
@@ -229,7 +250,7 @@ func (c *Client) Pull(ctx context.Context, localStore blockstore.Store, powFloor
 		if err != nil {
 			continue // relay may have pruned it between delta and get
 		}
-		if _, err := localStore.Put(stamp, payload, blockstore.TagPhysical); err != nil {
+		if _, err := localStore.Put(stamp, payload, c.tag); err != nil {
 			return stored, fmt.Errorf("relay pull: store block: %w", err)
 		}
 		stored++

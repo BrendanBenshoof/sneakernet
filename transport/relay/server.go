@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"time"
 
@@ -129,7 +130,8 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, err := s.store.Put(stamp, payload, blockstore.TagPhysical)
+	tag := tagFromRemoteAddr(r.RemoteAddr)
+	id, err := s.store.Put(stamp, payload, tag)
 	if err != nil {
 		serverError(w, http.StatusInternalServerError, "storage error")
 		return
@@ -214,6 +216,19 @@ func (s *Server) handlePeers(w http.ResponseWriter, r *http.Request) {
 		peers = []string{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"peers": peers})
+}
+
+// tagFromRemoteAddr returns TagLan for private/loopback IPs, TagGlobal otherwise.
+func tagFromRemoteAddr(addr string) blockstore.Tag {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	ip := net.ParseIP(host)
+	if ip != nil && (ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast()) {
+		return blockstore.TagLan
+	}
+	return blockstore.TagGlobal
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
