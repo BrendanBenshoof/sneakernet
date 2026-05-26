@@ -155,15 +155,16 @@
     .sb-section-title button.icon { margin-left: auto; padding: 1px 6px; font-size: 14px; }
     .contact-hash { font-family: var(--mono); font-size: 10px; color: var(--muted); margin-left: 3px; }
 
-    #sb-ch-form {
+    #sb-ch-form, #sb-dm-form {
       padding: 6px 10px 8px;
       display: flex;
       flex-direction: column;
       gap: 5px;
     }
-    #sb-ch-form input { font-size: 12px; padding: 5px 8px; }
-    #sb-ch-form .row { gap: 5px; }
-    #sb-ch-form .row button { flex: 1; font-size: 12px; padding: 5px 8px; }
+    #sb-ch-form input, #sb-dm-form input { font-size: 12px; padding: 5px 8px; }
+    #sb-ch-form select, #sb-dm-form select { font-size: 12px; padding: 5px 8px; }
+    #sb-ch-form .row, #sb-dm-form .row { gap: 5px; }
+    #sb-ch-form .row button, #sb-dm-form .row button { flex: 1; font-size: 12px; padding: 5px 8px; }
 
     .sb-item {
       display: flex;
@@ -576,6 +577,14 @@
       </div>
       <div class="sb-section">
         <div class="sb-section-title">Direct <button class="icon" id="new-msg-btn" title="New message">+</button></div>
+        <div id="sb-dm-form" class="hidden">
+          <select id="sb-dm-contact"></select>
+          <input id="sb-dm-key" placeholder="Or paste snk: URI or public key" autocomplete="off">
+          <div class="row">
+            <button class="sm ghost" id="sb-dm-cancel">Cancel</button>
+            <button class="sm" id="sb-dm-open">Open</button>
+          </div>
+        </div>
         <div id="sb-directs"></div>
       </div>
     </div>
@@ -678,6 +687,17 @@ let currentView    = null;
 let conversations  = [];
 let activeIdentity = null;
 
+// ── recipient input helpers ────────────────────────────────────────────────
+function parseRecipientInput(str) {
+  if (!str) return null;
+  if (str.startsWith('snk:')) {
+    const p = parseSnkUri(str);
+    return p ? {key: p.public_key, name: p.name} : null;
+  }
+  if (str.length >= 40) return {key: str, name: null};
+  return null;
+}
+
 // ── snk: URI helpers ───────────────────────────────────────────────────────
 function toB64url(b64) {
   return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
@@ -735,7 +755,10 @@ document.addEventListener('DOMContentLoaded', () => {
   el('onboard-name').addEventListener('keydown', e => { if (e.key === 'Enter') onboardCreate(); });
 
   el('scrape-btn').addEventListener('click', scrape);
-  el('new-msg-btn').addEventListener('click', () => openNewMsg());
+  el('new-msg-btn').addEventListener('click', toggleDmForm);
+  el('sb-dm-cancel').addEventListener('click', closeDmForm);
+  el('sb-dm-open').addEventListener('click', submitDmForm);
+  el('sb-dm-key').addEventListener('keydown', e => { if (e.key === 'Enter') submitDmForm(); });
   el('identities-btn').addEventListener('click', () => openPanel());
   el('mobile-back').addEventListener('click', openSidebar);
 
@@ -1192,7 +1215,50 @@ function updateComposeHead(conv) {
   }
 }
 
-function openNewMsg() {
+function toggleDmForm() {
+  const form = el('sb-dm-form');
+  form.classList.toggle('hidden');
+  if (!form.classList.contains('hidden')) {
+    const sel = el('sb-dm-contact');
+    sel.innerHTML = '<option value="">— pick a contact —</option>';
+    const selfOpts = identities.map(id =>
+      `<option value="${esc(id.public_key)}">${esc(id.name)} (me)</option>`
+    ).join('');
+    const contactOpts = contacts.map(c =>
+      `<option value="${esc(c.public_key)}">${esc(c.name)}</option>`
+    ).join('');
+    if (identities.length || contacts.length) {
+      sel.innerHTML += selfOpts;
+      if (identities.length && contacts.length) sel.innerHTML += '<option disabled>──────</option>';
+      sel.innerHTML += contactOpts;
+      sel.classList.remove('hidden');
+    } else {
+      sel.classList.add('hidden');
+    }
+    el('sb-dm-key').focus();
+  }
+}
+
+function closeDmForm() {
+  el('sb-dm-form').classList.add('hidden');
+  el('sb-dm-key').value = '';
+  el('sb-dm-contact').value = '';
+}
+
+function submitDmForm() {
+  const raw = el('sb-dm-contact').value || el('sb-dm-key').value.trim();
+  if (!raw) { toast('Pick or enter a recipient.', true); return; }
+  const recip = parseRecipientInput(raw);
+  if (!recip) { toast('Invalid recipient — paste a snk: URI or public key.', true); return; }
+  closeDmForm();
+  const existing = conversations.find(c => c.kind !== 'channel' && c.pub === recip.key);
+  if (existing) { openConversation(existing); return; }
+  const resolvedName = resolveByPub(recip.key) || recip.name;
+  if (resolvedName) { openConversation({kind: 'direct', name: resolvedName, pub: recip.key, messages: []}); return; }
+  openNewMsg(recip.key);
+}
+
+function openNewMsg(prefilledKey = null) {
   currentView = {kind: 'new'};
   closeSidebar();
   el('panel-view').classList.add('hidden');
@@ -1221,13 +1287,14 @@ function openNewMsg() {
       </select>
     </div>` : ''}
     <div class="compose-row">
-      <input id="new-recipient" placeholder="Or paste public key (base64 Ed25519)" style="font-family:var(--mono);font-size:11px">
+      <input id="new-recipient" placeholder="Paste snk: URI or raw public key (base64 Ed25519)" style="font-family:var(--mono);font-size:11px">
     </div>`;
   if (hasRecipients) {
     el('new-recipient-contact').addEventListener('change', e => {
       if (e.target.value) el('new-recipient').value = e.target.value;
     });
   }
+  if (prefilledKey) el('new-recipient').value = prefilledKey;
   el('compose-area').classList.remove('hidden');
   el('compose-body').value = '';
   el('send-btn').dataset.mode = 'new';
@@ -1265,8 +1332,10 @@ async function send() {
       await loadMessages();
 
     } else { // new
-      const recipKey = el('new-recipient')?.value.trim();
-      if (!recipKey) { toast('Enter recipient key.', true); return; }
+      const recipInput = el('new-recipient')?.value.trim();
+      const recipParsed = parseRecipientInput(recipInput);
+      if (!recipParsed) { toast('Enter a valid snk: URI or public key.', true); return; }
+      const recipKey = recipParsed.key;
       await backend.sendDirect(recipKey, body, senderName, null);
       el('compose-body').value = '';
       await loadMessages();
