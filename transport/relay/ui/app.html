@@ -1513,6 +1513,12 @@ document.addEventListener('DOMContentLoaded', () => {
   el('mobile-back').addEventListener('click', openSidebar);
 
   el('send-btn').addEventListener('click', send);
+  el('compose-body').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey && !window.matchMedia('(pointer: coarse)').matches) {
+      e.preventDefault();
+      send();
+    }
+  });
   el('add-id-btn').addEventListener('click', addIdentity);
   el('new-id-name').addEventListener('keydown', e => { if (e.key === 'Enter') addIdentity(); });
   el('new-ch-btn').addEventListener('click', () => {
@@ -2286,6 +2292,8 @@ async function addChannel() {
   rebuildConversations();
   renderChannelList();
   renderSidebar();
+  const newConv = conversations.find(c => c.kind === 'channel' && c.name === pass);
+  if (newConv) openConversation(newConv);
   toast(`Joined channel "${pass}".`);
 }
 
