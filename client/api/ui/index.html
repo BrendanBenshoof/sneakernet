@@ -772,7 +772,7 @@ class ServerBackend {
   }
 
   async sendDirect(recipientPublicKey, message, senderIdentity, replyToBlockId) {
-    const payload = {recipient_public_key: recipientPublicKey, message};
+    const payload = {recipient_public_key: fromB64url(recipientPublicKey), message};
     if (senderIdentity) payload.sender_identity = senderIdentity;
     if (replyToBlockId) payload.reply_to_block_id = replyToBlockId;
     const r = await this._req('POST', '/api/send', payload);
@@ -985,7 +985,11 @@ function rebuildConversations() {
   const dirMap  = new Map();
   const unknown = [];
 
-  for (const m of allMessages) {
+  const relevant = activeIdentity
+    ? allMessages.filter(m => m.decrypted_by === activeIdentity.name || !m.decrypted_by)
+    : allMessages;
+
+  for (const m of relevant) {
     if (m.channel) {
       if (!chMap.has(m.channel)) chMap.set(m.channel, []);
       chMap.get(m.channel).push(m);
