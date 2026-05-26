@@ -142,7 +142,7 @@ func (s *Server) handleSubmitBlock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, err := s.store.Put(stamp, payload)
+	id, err := s.store.Put(stamp, payload, blockstore.TagPhysical)
 	if err != nil {
 		serverError(w, http.StatusInternalServerError, err.Error())
 		return

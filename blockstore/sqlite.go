@@ -43,7 +43,7 @@ func (s *SQLiteStore) migrate() error {
 	return err
 }
 
-func (s *SQLiteStore) Put(stamp Stamp, payload Payload) (ID, error) {
+func (s *SQLiteStore) Put(stamp Stamp, payload Payload, _ Tag) (ID, error) {
 	id := ComputeID(payload)
 	wf := WorkFactor(stamp, payload)
 	now := time.Now()
@@ -199,6 +199,8 @@ func (s *SQLiteStore) Prune() (int, error) {
 	n, _ := result.RowsAffected()
 	return int(n), nil
 }
+
+func (s *SQLiteStore) Evict(_ int) (int, error) { return 0, nil }
 
 func (s *SQLiteStore) Close() error {
 	return s.db.Close()

@@ -229,7 +229,7 @@ func (c *Client) Pull(ctx context.Context, localStore blockstore.Store, powFloor
 		if err != nil {
 			continue // relay may have pruned it between delta and get
 		}
-		if _, err := localStore.Put(stamp, payload); err != nil {
+		if _, err := localStore.Put(stamp, payload, blockstore.TagPhysical); err != nil {
 			return stored, fmt.Errorf("relay pull: store block: %w", err)
 		}
 		stored++

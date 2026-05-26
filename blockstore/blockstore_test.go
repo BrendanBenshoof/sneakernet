@@ -61,7 +61,7 @@ func TestPutGet(t *testing.T) {
 			payload[0] = 0xDE
 			payload[1] = 0xAD
 
-			id, err := s.Put(stamp, payload)
+			id, err := s.Put(stamp, payload, blockstore.TagPhysical)
 			if err != nil {
 				t.Fatal("Put:", err)
 			}
@@ -84,7 +84,7 @@ func TestHas(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			var stamp blockstore.Stamp
 			var payload blockstore.Payload
-			id, _ := s.Put(stamp, payload)
+			id, _ := s.Put(stamp, payload, blockstore.TagPhysical)
 
 			ok, err := s.Has(id)
 			if err != nil || !ok {
@@ -108,8 +108,8 @@ func TestListIDs(t *testing.T) {
 			p1[0] = 1
 			p2[0] = 2
 
-			id1, _ := s.Put(stamp, p1)
-			id2, _ := s.Put(stamp, p2)
+			id1, _ := s.Put(stamp, p1, blockstore.TagPhysical)
+			id2, _ := s.Put(stamp, p2, blockstore.TagPhysical)
 
 			ids, err := s.ListIDs()
 			if err != nil {
@@ -148,7 +148,7 @@ func TestIDIsPayloadHash(t *testing.T) {
 			payload[100] = 42
 
 			expected := blockstore.ComputeID(payload)
-			id, err := s.Put(stamp, payload)
+			id, err := s.Put(stamp, payload, blockstore.TagPhysical)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -166,7 +166,7 @@ func TestListBlocksPagination(t *testing.T) {
 			for i := 0; i < 5; i++ {
 				var p blockstore.Payload
 				p[0] = byte(i + 1)
-				if _, err := s.Put(stamp, p); err != nil {
+				if _, err := s.Put(stamp, p, blockstore.TagPhysical); err != nil {
 					t.Fatal("Put:", err)
 				}
 			}
@@ -204,7 +204,7 @@ func TestListBlocksPOWFloor(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			var stamp blockstore.Stamp
 			var p blockstore.Payload
-			s.Put(stamp, p)
+			s.Put(stamp, p, blockstore.TagPhysical)
 
 			_, refs, err := s.ListBlocks("", 100, 999, time.Time{})
 			if err != nil {
@@ -223,7 +223,7 @@ func TestListBlocksSinceFilter(t *testing.T) {
 			var stamp blockstore.Stamp
 			var p blockstore.Payload
 			p[0] = 1
-			s.Put(stamp, p)
+			s.Put(stamp, p, blockstore.TagPhysical)
 
 			future := time.Now().Add(time.Hour)
 			_, refs, err := s.ListBlocks("", 100, 0, future)

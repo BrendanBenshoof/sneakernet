@@ -3,6 +3,7 @@ package blockstore
 import (
 	"encoding/binary"
 	"fmt"
+	"sort"
 	"time"
 
 	badger "github.com/dgraph-io/badger/v4"
@@ -11,14 +12,24 @@ import (
 const (
 	blockPrefix = byte('b')
 	travPrefix  = byte('t')
+	tombPrefix  = byte('x')
+
+	// blockValHeaderSize: stamp[4] + wf[4] + created_at[8] + tag[1] = 17 bytes.
+	blockValHeaderSize = StampSize + 4 + 8 + 1
+
+	evictBatch = int64(10) // extra blocks to evict beyond the immediate minimum
 )
 
 // BadgerStore is a BadgerDB-backed implementation of Store.
 // Key layout:
-//   block key: 'b' | id[32]                          → stamp[4] | wf[4] | created_at[8] | payload[4096]  (TTL set)
-//   trav  key: 't' | created_at[8] | id[32]          → wf[4]                                             (TTL set)
+//
+//	block key:     'b' | id[32]                → stamp[4] | wf[4] | created_at[8] | tag[1] | payload[4096]  (TTL set)
+//	trav  key:     't' | created_at[8] | id[32] → wf[4] | tag[1]                                            (TTL set)
+//	tombstone key: 'x' | id[32]                → (empty)                                                    (TTL = remaining block TTL at eviction time)
 type BadgerStore struct {
-	db *badger.DB
+	db           *badger.DB
+	storageLimit int64         // 0 = no limit
+	reservations map[Tag]int64 // reserved bytes per tag; absent tags have reservation 0
 }
 
 // OpenBadger opens (or creates) a BadgerDB blockstore at dir.
@@ -29,6 +40,22 @@ func OpenBadger(dir string) (*BadgerStore, error) {
 		return nil, fmt.Errorf("blockstore: badger open: %w", err)
 	}
 	return &BadgerStore{db: db}, nil
+}
+
+// WithStorageLimit sets the maximum total storage in bytes. When Put pushes
+// usage over this threshold, the least-valuable blocks are evicted to make
+// room. A limit of 0 disables enforcement.
+func (s *BadgerStore) WithStorageLimit(bytes int64) *BadgerStore {
+	s.storageLimit = bytes
+	return s
+}
+
+// WithReservations configures per-tag storage guarantees. During eviction the
+// tag with the largest (usage − reservation) is targeted first. Tags absent
+// from the map have an implicit reservation of 0.
+func (s *BadgerStore) WithReservations(r map[Tag]int64) *BadgerStore {
+	s.reservations = r
+	return s
 }
 
 func (s *BadgerStore) blockKey(id ID) []byte {
@@ -49,28 +76,42 @@ func (s *BadgerStore) travKey(createdAt int64, id ID) []byte {
 	return key
 }
 
-func encodeBlockVal(stamp Stamp, wf int, createdAt int64, payload Payload) []byte {
-	val := make([]byte, StampSize+4+8+PayloadSize)
+func (s *BadgerStore) tombKey(id ID) []byte {
+	key := make([]byte, 1+IDSize)
+	key[0] = tombPrefix
+	copy(key[1:], id[:])
+	return key
+}
+
+func encodeBlockVal(stamp Stamp, wf int, createdAt int64, tag Tag, payload Payload) []byte {
+	val := make([]byte, blockValHeaderSize+PayloadSize)
 	copy(val[:StampSize], stamp[:])
 	binary.BigEndian.PutUint32(val[StampSize:StampSize+4], uint32(wf))
 	binary.BigEndian.PutUint64(val[StampSize+4:StampSize+12], uint64(createdAt))
-	copy(val[StampSize+12:], payload[:])
+	val[StampSize+12] = byte(tag)
+	copy(val[blockValHeaderSize:], payload[:])
 	return val
 }
 
-func (s *BadgerStore) Put(stamp Stamp, payload Payload) (ID, error) {
+func (s *BadgerStore) Put(stamp Stamp, payload Payload, tag Tag) (ID, error) {
 	id := ComputeID(payload)
 	wf := WorkFactor(stamp, payload)
 	now := time.Now()
 	ttl := TTLFromWorkFactor(wf)
 
 	err := s.db.Update(func(txn *badger.Txn) error {
+		// Don't re-accept tombstoned blocks.
+		if _, err := txn.Get(s.tombKey(id)); err == nil {
+			return nil
+		} else if err != badger.ErrKeyNotFound {
+			return err
+		}
+
 		bKey := s.blockKey(id)
 		createdAt := now.Unix()
 
 		item, err := txn.Get(bKey)
 		if err == nil {
-			// Block exists; keep only if new wf is higher.
 			var skip bool
 			if valErr := item.Value(func(existing []byte) error {
 				if len(existing) >= StampSize+4+8 {
@@ -93,18 +134,32 @@ func (s *BadgerStore) Put(stamp Stamp, payload Payload) (ID, error) {
 			return err
 		}
 
-		bEntry := badger.NewEntry(bKey, encodeBlockVal(stamp, wf, createdAt, payload)).WithTTL(ttl)
+		bEntry := badger.NewEntry(bKey, encodeBlockVal(stamp, wf, createdAt, tag, payload)).WithTTL(ttl)
 		if err := txn.SetEntry(bEntry); err != nil {
 			return err
 		}
-		travVal := make([]byte, 4)
+		travVal := make([]byte, 5)
 		binary.BigEndian.PutUint32(travVal, uint32(wf))
+		travVal[4] = byte(tag)
 		tEntry := badger.NewEntry(s.travKey(createdAt, id), travVal).WithTTL(ttl)
 		return txn.SetEntry(tEntry)
 	})
 	if err != nil {
 		return ID{}, fmt.Errorf("blockstore: put: %w", err)
 	}
+
+	// Enforce storage limit after storing; best-effort (ignore eviction error).
+	if s.storageLimit > 0 {
+		lsm, vlog := s.db.Size()
+		if lsm+vlog > s.storageLimit {
+			needed := (lsm+vlog-s.storageLimit)/int64(blockValHeaderSize+PayloadSize) + evictBatch
+			if needed < 1 {
+				needed = 1
+			}
+			s.Evict(int(needed)) //nolint:errcheck
+		}
+	}
+
 	return id, nil
 }
 
@@ -120,11 +175,11 @@ func (s *BadgerStore) Get(id ID) (Stamp, Payload, error) {
 			return err
 		}
 		return item.Value(func(val []byte) error {
-			if len(val) < StampSize+4+8+PayloadSize {
+			if len(val) < blockValHeaderSize+PayloadSize {
 				return fmt.Errorf("blockstore: corrupt block value for %x", id)
 			}
 			copy(stamp[:], val[:StampSize])
-			copy(payload[:], val[StampSize+12:StampSize+12+PayloadSize])
+			copy(payload[:], val[blockValHeaderSize:blockValHeaderSize+PayloadSize])
 			return nil
 		})
 	})
@@ -134,9 +189,17 @@ func (s *BadgerStore) Get(id ID) (Stamp, Payload, error) {
 	return stamp, payload, nil
 }
 
+// Has returns true if the block is present OR if a tombstone exists for it.
+// A tombstone means the block was evicted and will not be re-accepted, so
+// callers should treat it as "already seen".
 func (s *BadgerStore) Has(id ID) (bool, error) {
 	err := s.db.View(func(txn *badger.Txn) error {
-		_, err := txn.Get(s.blockKey(id))
+		if _, err := txn.Get(s.blockKey(id)); err == nil {
+			return nil
+		} else if err != badger.ErrKeyNotFound {
+			return err
+		}
+		_, err := txn.Get(s.tombKey(id))
 		return err
 	})
 	if err == badger.ErrKeyNotFound {
@@ -235,9 +298,13 @@ func (s *BadgerStore) ListBlocks(pageToken string, limit int, powFloor int, sinc
 			copy(id[:], key[9:])
 
 			var wf int
+			var tag Tag
 			if err := it.Item().Value(func(val []byte) error {
 				if len(val) >= 4 {
 					wf = int(binary.BigEndian.Uint32(val))
+				}
+				if len(val) >= 5 {
+					tag = Tag(val[4])
 				}
 				return nil
 			}); err != nil {
@@ -247,7 +314,7 @@ func (s *BadgerStore) ListBlocks(pageToken string, limit int, powFloor int, sinc
 				continue
 			}
 
-			refs = append(refs, BlockRef{ID: id, WorkFactor: wf})
+			refs = append(refs, BlockRef{ID: id, WorkFactor: wf, Tag: tag})
 			last.createdAt = createdAt
 			last.id = id
 		}
@@ -273,6 +340,124 @@ func (s *BadgerStore) Prune() (int, error) {
 		return 0, nil
 	}
 	return 0, err
+}
+
+type evictCandidate struct {
+	id        ID
+	createdAt int64
+	expiresAt uint64
+	tag       Tag
+}
+
+// Evict removes up to n blocks, choosing the tag most over its configured
+// reservation at each step, then picking the soonest-expiring block within
+// that tag. A tombstone carrying the block's remaining TTL is written for
+// each evicted ID so the ID is not re-accepted before it would have
+// naturally expired.
+func (s *BadgerStore) Evict(n int) (int, error) {
+	if n <= 0 {
+		return 0, nil
+	}
+
+	// Collect all live blocks with their tag and expiry time.
+	var all []evictCandidate
+	if err := s.db.View(func(txn *badger.Txn) error {
+		opts := badger.DefaultIteratorOptions
+		opts.Prefix = []byte{blockPrefix}
+		opts.PrefetchValues = true
+		it := txn.NewIterator(opts)
+		defer it.Close()
+		for it.Rewind(); it.Valid(); it.Next() {
+			item := it.Item()
+			key := item.Key()
+			if len(key) != 1+IDSize {
+				continue
+			}
+			var id ID
+			copy(id[:], key[1:])
+			var createdAt int64
+			var tag Tag
+			if err := item.Value(func(val []byte) error {
+				if len(val) >= blockValHeaderSize {
+					createdAt = int64(binary.BigEndian.Uint64(val[StampSize+4 : StampSize+12]))
+					tag = Tag(val[StampSize+12])
+				}
+				return nil
+			}); err != nil {
+				return err
+			}
+			all = append(all, evictCandidate{
+				id: id, createdAt: createdAt,
+				expiresAt: item.ExpiresAt(), tag: tag,
+			})
+		}
+		return nil
+	}); err != nil {
+		return 0, fmt.Errorf("blockstore: evict: scan: %w", err)
+	}
+
+	// Build per-tag candidate lists sorted soonest-expiring first.
+	const blockSize = int64(blockValHeaderSize + PayloadSize)
+	perTag := make(map[Tag][]evictCandidate)
+	tagUsage := make(map[Tag]int64)
+	for _, c := range all {
+		perTag[c.tag] = append(perTag[c.tag], c)
+		tagUsage[c.tag] += blockSize
+	}
+	for t := range perTag {
+		sort.Slice(perTag[t], func(i, j int) bool {
+			return perTag[t][i].expiresAt < perTag[t][j].expiresAt
+		})
+	}
+
+	now := uint64(time.Now().Unix())
+	var evicted int
+	for evicted < n {
+		// Pick the non-empty tag furthest above its reservation.
+		var target Tag
+		var maxOver int64 = -1 << 62
+		hasTarget := false
+		for t, usage := range tagUsage {
+			if len(perTag[t]) == 0 {
+				continue
+			}
+			over := usage - s.reservations[t]
+			if !hasTarget || over > maxOver {
+				maxOver = over
+				target = t
+				hasTarget = true
+			}
+		}
+		if !hasTarget {
+			break
+		}
+
+		c := perTag[target][0]
+		perTag[target] = perTag[target][1:]
+		tagUsage[target] -= blockSize
+
+		var ttl time.Duration
+		if c.expiresAt > now {
+			ttl = time.Duration(c.expiresAt-now) * time.Second
+		} else {
+			ttl = time.Second
+		}
+
+		if err := s.db.Update(func(txn *badger.Txn) error {
+			if err := txn.Delete(s.blockKey(c.id)); err != nil && err != badger.ErrKeyNotFound {
+				return err
+			}
+			if err := txn.Delete(s.travKey(c.createdAt, c.id)); err != nil && err != badger.ErrKeyNotFound {
+				return err
+			}
+			tomb := badger.NewEntry(s.tombKey(c.id), []byte{}).WithTTL(ttl)
+			return txn.SetEntry(tomb)
+		}); err != nil {
+			return evicted, fmt.Errorf("blockstore: evict: %w", err)
+		}
+		evicted++
+	}
+	return evicted, nil
 }
 
 func (s *BadgerStore) Close() error {

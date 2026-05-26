@@ -129,7 +129,7 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, err := s.store.Put(stamp, payload)
+	id, err := s.store.Put(stamp, payload, blockstore.TagPhysical)
 	if err != nil {
 		serverError(w, http.StatusInternalServerError, "storage error")
 		return

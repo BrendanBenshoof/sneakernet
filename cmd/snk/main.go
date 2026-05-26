@@ -124,7 +124,7 @@ func syncStores(src, dst blockstore.Store) error {
 				skipped++
 				continue
 			}
-			if _, err := dst.Put(stamp, payload); err != nil {
+			if _, err := dst.Put(stamp, payload, blockstore.TagPhysical); err != nil {
 				errs++
 				continue
 			}
@@ -142,17 +142,22 @@ func syncStores(src, dst blockstore.Store) error {
 
 func cmdRelay(args []string) {
 	fs := flag.NewFlagSet("relay", flag.ExitOnError)
-	addr         := fs.String("addr", "127.0.0.1:8080", "user API listen address")
-	relayAddr    := fs.String("relay-addr", "0.0.0.0:8081", "relay listen address")
-	blocksDir    := fs.String("blocks", "blocks.db", "blockstore directory path")
-	messagesDB   := fs.String("messages", "messages.db", "message store SQLite path")
-	keystoreFile := fs.String("keystore", "keystore.json", "keystore file path")
-	powFloor     := fs.Int("pow-floor", 0, "minimum proof-of-work for relay block acceptance")
-	syncInterval := fs.Duration("sync-interval", 5*time.Minute, "interval between peer sync rounds")
-	peersFlag    := fs.String("peers", "", "comma-separated list of peer base URLs to always sync with (e.g. https://relay.example.com,http://peer2.local:8081)")
-	lanScan      := fs.Bool("lan", false, fmt.Sprintf("scan LAN for sneakernet peers on port %d (\"snk\" in base32)", lan.Port))
-	usbDir      := fs.String("usb-dir", "", "path to sneakernet USB volume root; syncs when .sneakernet marker is present (empty = disabled)")
-	usbInterval := fs.Duration("usb-interval", 30*time.Second, "how often to check and sync the USB volume")
+	addr             := fs.String("addr", "127.0.0.1:8080", "user API listen address")
+	relayAddr        := fs.String("relay-addr", "0.0.0.0:8081", "relay listen address")
+	blocksDir        := fs.String("blocks", "blocks.db", "blockstore directory path")
+	messagesDB       := fs.String("messages", "messages.db", "message store SQLite path")
+	keystoreFile     := fs.String("keystore", "keystore.json", "keystore file path")
+	powFloor         := fs.Int("pow-floor", 0, "minimum proof-of-work for relay block acceptance")
+	syncInterval     := fs.Duration("sync-interval", 5*time.Minute, "interval between peer sync rounds")
+	peersFlag        := fs.String("peers", "", "comma-separated list of peer base URLs to always sync with (e.g. https://relay.example.com,http://peer2.local:8081)")
+	lanScan          := fs.Bool("lan", false, fmt.Sprintf("scan LAN for sneakernet peers on port %d (\"snk\" in base32)", lan.Port))
+	usbDir           := fs.String("usb-dir", "", "path to sneakernet USB volume root; syncs when .sneakernet marker is present (empty = disabled)")
+	usbInterval      := fs.Duration("usb-interval", 30*time.Second, "how often to check and sync the USB volume")
+	storageLimit     := fs.String("storage-limit", "0", "maximum blockstore size (e.g. 10GB, 512MB); 0 = unlimited")
+	reservePhysical  := fs.String("reserve-physical", "0", "storage reserved for physical/local blocks (e.g. 2GB)")
+	reserveLan       := fs.String("reserve-lan", "0", "storage reserved for LAN peer blocks")
+	reserveRegional  := fs.String("reserve-regional", "0", "storage reserved for regional peer blocks")
+	reserveGlobal    := fs.String("reserve-global", "0", "storage reserved for global relay blocks")
 	fs.Parse(args)
 
 	var staticPeers []string
@@ -169,6 +174,33 @@ func cmdRelay(args []string) {
 		log.Fatalf("open blockstore: %v", err)
 	}
 	defer bs.Close()
+
+	if limit, err := parseBytes(*storageLimit); err != nil {
+		log.Fatalf("invalid -storage-limit: %v", err)
+	} else if limit > 0 {
+		physical, err := parseBytes(*reservePhysical)
+		if err != nil {
+			log.Fatalf("invalid -reserve-physical: %v", err)
+		}
+		lan_, err := parseBytes(*reserveLan)
+		if err != nil {
+			log.Fatalf("invalid -reserve-lan: %v", err)
+		}
+		regional, err := parseBytes(*reserveRegional)
+		if err != nil {
+			log.Fatalf("invalid -reserve-regional: %v", err)
+		}
+		global, err := parseBytes(*reserveGlobal)
+		if err != nil {
+			log.Fatalf("invalid -reserve-global: %v", err)
+		}
+		bs.WithStorageLimit(limit).WithReservations(map[blockstore.Tag]int64{
+			blockstore.TagPhysical: physical,
+			blockstore.TagLan:      lan_,
+			blockstore.TagRegional: regional,
+			blockstore.TagGlobal:   global,
+		})
+	}
 
 	ms, err := client.OpenMessageStore(*messagesDB)
 	if err != nil {
@@ -488,4 +520,39 @@ func (pt *peerTracker) run(ctx context.Context, store blockstore.Store, peers <-
 			doSync()
 		}
 	}
+}
+
+// parseBytes parses a human-readable byte size string into an int64.
+// Accepts plain integers or values with SI suffixes: KB, MB, GB, TB
+// (case-insensitive). Returns 0 for the string "0" or "".
+func parseBytes(s string) (int64, error) {
+	s = strings.TrimSpace(s)
+	if s == "" || s == "0" {
+		return 0, nil
+	}
+	suffixes := []struct {
+		suffix string
+		mult   int64
+	}{
+		{"TB", 1 << 40},
+		{"GB", 1 << 30},
+		{"MB", 1 << 20},
+		{"KB", 1 << 10},
+	}
+	upper := strings.ToUpper(s)
+	for _, sf := range suffixes {
+		if strings.HasSuffix(upper, sf.suffix) {
+			numStr := strings.TrimSpace(s[:len(s)-len(sf.suffix)])
+			var n int64
+			if _, err := fmt.Sscanf(numStr, "%d", &n); err != nil {
+				return 0, fmt.Errorf("cannot parse %q", s)
+			}
+			return n * sf.mult, nil
+		}
+	}
+	var n int64
+	if _, err := fmt.Sscanf(s, "%d", &n); err != nil {
+		return 0, fmt.Errorf("cannot parse %q", s)
+	}
+	return n, nil
 }
