@@ -113,9 +113,10 @@ func (s *Server) handleGetBlock(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"id":      hex.EncodeToString(id[:]),
-		"stamp":   base64.StdEncoding.EncodeToString(stamp[:]),
-		"payload": base64.StdEncoding.EncodeToString(payload[:]),
+		"id":          hex.EncodeToString(id[:]),
+		"stamp":       base64.StdEncoding.EncodeToString(stamp[:]),
+		"payload":     base64.StdEncoding.EncodeToString(payload[:]),
+		"work_factor": blockstore.WorkFactor(stamp, payload),
 	})
 }
 
