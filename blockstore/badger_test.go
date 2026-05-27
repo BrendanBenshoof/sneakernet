@@ -37,10 +37,14 @@ func TestBadgerMedianWorkFactorEmpty(t *testing.T) {
 }
 
 func TestBadgerMedianWorkFactor(t *testing.T) {
+	// blockValHeaderSize(17) + PayloadSize(4096) = 4113; capacity=10, halfCapacity=5
+	const blockSize = 4113
 	s := openBadger(t)
+	s.WithStorageLimit(int64(10 * blockSize))
+
 	var stamp blockstore.Stamp
 	var wfs []int
-	for i := 0; i < 5; i++ {
+	for i := 0; i < 8; i++ { // 8 > halfCapacity(5)
 		var p blockstore.Payload
 		p[0] = byte(i + 1)
 		if _, err := s.Put(stamp, p, blockstore.TagPhysical); err != nil {
@@ -58,9 +62,36 @@ func TestBadgerMedianWorkFactor(t *testing.T) {
 	}
 
 	sort.Ints(wfs)
-	want := wfs[len(wfs)/2]
+	want := wfs[5] // wfs[halfCapacity] where halfCapacity = capacity/2 = 10/2 = 5
 	if got != want {
 		t.Errorf("median: got %d, want %d (sorted wfs: %v)", got, want, wfs)
+	}
+}
+
+func TestBadgerMedianWorkFactorBelowHalfFull(t *testing.T) {
+	// capacity=10, halfCapacity=5; storing only 3 blocks should return 0
+	const blockSize = 4113
+	s := openBadger(t)
+	s.WithStorageLimit(int64(10 * blockSize))
+
+	var stamp blockstore.Stamp
+	for i := 0; i < 3; i++ {
+		var p blockstore.Payload
+		p[0] = byte(i + 1)
+		if _, err := s.Put(stamp, p, blockstore.TagPhysical); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := s.RefreshMedian(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.MedianWorkFactor()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 0 {
+		t.Errorf("below half-full: got median %d, want 0", got)
 	}
 }
 
