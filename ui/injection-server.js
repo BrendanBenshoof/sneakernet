@@ -159,4 +159,5 @@ const UI_CONFIG = {
   hasLockButton:   true,
   identitiesHint:  'Stored in the server-side encrypted keystore. Share your <strong>public key</strong> so others can send you messages and verify your identity — one key does both.',
   sendStatusMsg:   'Message stored in blockstore.',
+  welcomeHtml:     'Select a conversation from the sidebar, or click <strong>+</strong> to send a new message.',
 };
