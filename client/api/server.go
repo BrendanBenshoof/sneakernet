@@ -88,6 +88,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/lock", s.auth(s.handleLock))
 	s.mux.HandleFunc("GET /api/identities", s.auth(s.handleListIdentities))
 	s.mux.HandleFunc("POST /api/identities", s.auth(s.handleAddIdentity))
+	s.mux.HandleFunc("POST /api/identities/import", s.auth(s.handleImportIdentity))
+	s.mux.HandleFunc("POST /api/identities/{name}/export", s.auth(s.handleExportIdentity))
 	s.mux.HandleFunc("DELETE /api/identities/{name}", s.auth(s.handleRemoveIdentity))
 	s.mux.HandleFunc("GET /api/channels", s.auth(s.handleListChannels))
 	s.mux.HandleFunc("POST /api/channels", s.auth(s.handleAddChannel))

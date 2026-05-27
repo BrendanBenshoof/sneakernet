@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -434,6 +435,78 @@ func (k *Keystore) ChangePassword(newPassword []byte) error {
 	k.salt = salt
 	k.masterKey = deriveKey(newPassword, salt, k.kdfTime, k.kdfMemory, k.kdfThreads)
 	return nil
+}
+
+// VerifyPassword returns true if password re-derives the same master key.
+func (k *Keystore) VerifyPassword(password []byte) bool {
+	derived := deriveKey(password, k.salt, k.kdfTime, k.kdfMemory, k.kdfThreads)
+	return subtle.ConstantTimeCompare(derived[:], k.masterKey[:]) == 1
+}
+
+// IdentityExport is the portable, password-encrypted bundle produced by ExportIdentity.
+type IdentityExport struct {
+	Version    int    `json:"version"`
+	Name       string `json:"name"`
+	Salt       []byte `json:"salt"`
+	KDFTime    uint32 `json:"kdf_time"`
+	KDFMemory  uint32 `json:"kdf_memory"`
+	KDFThreads uint8  `json:"kdf_threads"`
+	Nonce      []byte `json:"nonce"`
+	Ciphertext []byte `json:"ciphertext"`
+}
+
+// ExportIdentity encrypts the named identity's Ed25519 private key with
+// exportPassword (fresh random salt, same Argon2id params) and returns
+// the JSON-encoded IdentityExport bundle.
+func (k *Keystore) ExportIdentity(name string, exportPassword []byte) ([]byte, error) {
+	id := k.get(name)
+	if id == nil {
+		return nil, fmt.Errorf("client: identity %q not found", name)
+	}
+	salt := make([]byte, kdfSaltSize)
+	if _, err := rand.Read(salt); err != nil {
+		return nil, err
+	}
+	exportKey := deriveKey(exportPassword, salt, kdfTime, kdfMemory, kdfThreads)
+	nonce, ct, err := ksEncrypt(exportKey, id.SignKey)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(IdentityExport{
+		Version: 1, Name: id.Name,
+		Salt: salt, KDFTime: kdfTime, KDFMemory: kdfMemory, KDFThreads: kdfThreads,
+		Nonce: nonce, Ciphertext: ct,
+	})
+}
+
+// ImportIdentity decrypts an IdentityExport bundle with exportPassword and
+// appends the identity to the keystore. Returns an error if the name is
+// already taken or the password is wrong.
+func (k *Keystore) ImportIdentity(data []byte, exportPassword []byte) (*Identity, error) {
+	var b IdentityExport
+	if err := json.Unmarshal(data, &b); err != nil {
+		return nil, fmt.Errorf("client: import identity: invalid bundle")
+	}
+	if b.Version != 1 {
+		return nil, fmt.Errorf("client: import identity: unsupported version %d", b.Version)
+	}
+	exportKey := deriveKey(exportPassword, b.Salt, b.KDFTime, b.KDFMemory, b.KDFThreads)
+	privBytes, err := ksDecrypt(exportKey, b.Nonce, b.Ciphertext)
+	if err != nil {
+		return nil, fmt.Errorf("client: import identity: wrong password or corrupted bundle")
+	}
+	if len(privBytes) != ed25519.PrivateKeySize {
+		return nil, fmt.Errorf("client: import identity: invalid key size")
+	}
+	if err := validateName(b.Name); err != nil {
+		return nil, err
+	}
+	if k.get(b.Name) != nil {
+		return nil, fmt.Errorf("client: identity %q already exists", b.Name)
+	}
+	id := &Identity{Name: b.Name, SignKey: ed25519.PrivateKey(privBytes)}
+	k.identities = append(k.identities, id)
+	return id, nil
 }
 
 func (k *Keystore) get(name string) *Identity {

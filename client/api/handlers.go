@@ -465,6 +465,83 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// POST /api/identities/{name}/export  {"password":"..."}
+// Re-authenticates with the keystore password, then returns a portable
+// IdentityExport JSON bundle with the private key encrypted under a fresh salt.
+func (s *Server) handleExportIdentity(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	var req struct {
+		Password string `json:"password"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	if req.Password == "" {
+		writeError(w, http.StatusBadRequest, "password required")
+		return
+	}
+
+	s.mu.RLock()
+	verified := s.ks.VerifyPassword([]byte(req.Password))
+	var bundle []byte
+	var exportErr error
+	if verified {
+		bundle, exportErr = s.ks.ExportIdentity(name, []byte(req.Password))
+	}
+	s.mu.RUnlock()
+
+	if !verified {
+		writeError(w, http.StatusUnauthorized, "wrong password")
+		return
+	}
+	if exportErr != nil {
+		writeError(w, http.StatusNotFound, exportErr.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(bundle) //nolint:errcheck
+}
+
+// POST /api/identities/import  {"bundle":{...}, "password":"..."}
+// Decrypts an IdentityExport bundle and adds the identity to the keystore.
+func (s *Server) handleImportIdentity(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Bundle   json.RawMessage `json:"bundle"`
+		Password string          `json:"password"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	if req.Password == "" {
+		writeError(w, http.StatusBadRequest, "password required")
+		return
+	}
+	if len(req.Bundle) == 0 {
+		writeError(w, http.StatusBadRequest, "bundle required")
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	id, err := s.ks.ImportIdentity(req.Bundle, []byte(req.Password))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.ks.Save(s.ksPath); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to save keystore")
+		return
+	}
+	s.rebuildScraper()
+
+	writeJSON(w, http.StatusCreated, map[string]string{
+		"name":       id.Name,
+		"public_key": base64.StdEncoding.EncodeToString(id.PublicKey()),
+	})
+}
+
 // GET /api/channels
 // Returns all stored channel names.
 func (s *Server) handleListChannels(w http.ResponseWriter, r *http.Request) {
