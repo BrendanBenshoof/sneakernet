@@ -53,10 +53,28 @@ Every block carries a `Tag` that records where it was received from:
 |-----|-------|---------|
 | `TagPhysical` | 0 | Physical sneakernet (USB, QR code, locally authored messages) |
 | `TagLan` | 1 | Same local network peer |
-| `TagRegional` | 2 | Regional peer |
-| `TagGlobal` | 3 | Internet relay |
+| `TagRegional` | 2 | Regional peer (same geographic area as this node) |
+| `TagGlobal` | 3 | Internet relay outside the node's region |
 
-Tags are set by the transport layer at `Put` time. The networking layer is responsible for assigning the correct tag; until it does, all callers default to `TagPhysical`.
+Tags are set by the transport layer at `Put` time. Assignment logic in `transport/relay`:
+
+- **Private / loopback / link-local IP** → `TagLan`
+- **Public IP, GeoIP matches node's region** → `TagRegional`
+- **Public IP, GeoIP does not match** → `TagGlobal`
+- **GeoIP not configured** → all public IPs get `TagGlobal`
+- **Locally authored messages** → `TagPhysical`
+
+### Configuring regional tagging
+
+Regional tagging is enabled by passing `--region` to `snk relay`. Regions are specified as ISO 3166-1 alpha-2 country codes or ISO 3166-2 country+subdivision codes, comma-separated:
+
+```
+--region US              # all IPs in the United States
+--region US-GA,US-TX     # Georgia and Texas only
+--region US-GA,CA        # Georgia + all of Canada
+```
+
+The relay downloads a GeoLite2-City MMDB at startup (from the URL in `--geoip-url`) and caches it at `--geoip-db` (default: `<blocks-dir>/geoip.mmdb`). The database is refreshed automatically every `--geoip-refresh` interval (default: 120 h). If the download fails at startup, the node logs a warning and falls back to `TagGlobal` for all public IPs until the database becomes available.
 
 Tags drive the eviction policy (see below) but are otherwise opaque to the blockstore. They are stored in both the block value and the traversal index entry so they are available during eviction scans without loading full payloads.
 

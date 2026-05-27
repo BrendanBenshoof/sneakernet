@@ -158,6 +158,10 @@ func cmdRelay(args []string) {
 	reserveLan       := fs.String("reserve-lan", "0", "storage reserved for LAN peer blocks")
 	reserveRegional  := fs.String("reserve-regional", "0", "storage reserved for regional peer blocks")
 	reserveGlobal    := fs.String("reserve-global", "0", "storage reserved for global relay blocks")
+	regionFlag       := fs.String("region", "", "ISO 3166 codes this node serves, e.g. US-GA,CA; enables regional tagging")
+	geoipDB          := fs.String("geoip-db", "", "path to cache the GeoIP MMDB (default: <blocks-dir>/geoip.mmdb)")
+	geoipURL         := fs.String("geoip-url", "https://github.com/P3TERX/GeoLite.mmdb/raw/download/GeoLite2-City.mmdb", "URL to download GeoLite2-City MMDB")
+	geoipRefresh     := fs.Duration("geoip-refresh", 120*time.Hour, "how often to refresh the GeoIP database")
 	fs.Parse(args)
 
 	var staticPeers []string
@@ -216,6 +220,22 @@ func cmdRelay(args []string) {
 	// Relay server: block exchange with other sneakernet nodes.
 	relaySrv := relay.NewServer(bs, *powFloor)
 	relaySrv.SetPeerSource(pt.nonPenalizedPeers)
+	if *regionFlag != "" {
+		dbPath := *geoipDB
+		if dbPath == "" {
+			dbPath = filepath.Join(*blocksDir, "geoip.mmdb")
+		}
+		var regions []string
+		for _, r := range strings.Split(*regionFlag, ",") {
+			if r = strings.TrimSpace(r); r != "" {
+				regions = append(regions, r)
+			}
+		}
+		g := relay.NewGeoIP(dbPath, *geoipURL, regions, *geoipRefresh)
+		g.Start(ctx)
+		relaySrv.SetGeoIP(g)
+		log.Printf("regional tagging enabled: %s", *regionFlag)
+	}
 	go func() {
 		if err := http.ListenAndServe(*relayAddr, relaySrv); err != nil {
 			log.Printf("relay server stopped: %v", err)

@@ -31,6 +31,7 @@ type Server struct {
 	powFloor   int
 	mux        *http.ServeMux
 	peerSource func() []string
+	geoip      *GeoIP // optional; nil = LAN-or-Global only
 }
 
 // NewServer creates a relay Server. powFloor is the minimum work_factor
@@ -49,6 +50,12 @@ func NewServer(store blockstore.Store, powFloor int) *Server {
 // peer base URLs. Called by GET /v1/peers so peers can gossip the network.
 func (s *Server) SetPeerSource(fn func() []string) {
 	s.peerSource = fn
+}
+
+// SetGeoIP attaches a GeoIP classifier that enables regional tagging of
+// inbound blocks. Without it, blocks are tagged LAN or Global only.
+func (s *Server) SetGeoIP(g *GeoIP) {
+	s.geoip = g
 }
 
 func (s *Server) routes() {
@@ -130,7 +137,12 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tag := tagFromRemoteAddr(r.RemoteAddr)
+	var tag blockstore.Tag
+	if s.geoip != nil {
+		tag = s.geoip.Tag(r.RemoteAddr)
+	} else {
+		tag = tagFromRemoteAddr(r.RemoteAddr)
+	}
 	id, err := s.store.Put(stamp, payload, tag)
 	if err != nil {
 		serverError(w, http.StatusInternalServerError, "storage error")
