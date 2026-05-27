@@ -496,9 +496,11 @@ func (s *BadgerStore) Evict(n int) (int, error) {
 			var wf int
 			var tag Tag
 			if err := item.Value(func(val []byte) error {
-				if len(val) >= blockValHeaderSize {
+				if len(val) >= legacyBlockValHeaderSize+PayloadSize {
 					wf = int(binary.BigEndian.Uint32(val[StampSize : StampSize+4]))
 					createdAt = int64(binary.BigEndian.Uint64(val[StampSize+4 : StampSize+12]))
+				}
+				if len(val) >= blockValHeaderSize+PayloadSize {
 					tag = Tag(val[StampSize+12])
 				}
 				return nil
