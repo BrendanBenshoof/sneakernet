@@ -63,11 +63,17 @@ func (s *BadgerStore) computeMedianWorkFactor() (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("blockstore: median work factor: %w", err)
 	}
-	if len(wfs) == 0 {
+	limit := s.storageLimit
+	if limit == 0 {
+		limit = defaultStorageLimit
+	}
+	capacity := limit / int64(blockValHeaderSize+PayloadSize)
+	halfCapacity := int(capacity / 2)
+	if len(wfs) <= halfCapacity {
 		return 0, nil
 	}
 	sort.Ints(wfs)
-	return wfs[len(wfs)/2], nil
+	return wfs[halfCapacity], nil
 }
 
 const (
@@ -78,9 +84,11 @@ const (
 	// blockValHeaderSize: stamp[4] + wf[4] + created_at[8] + tag[1] = 17 bytes.
 	blockValHeaderSize = StampSize + 4 + 8 + 1
 
-	evictBatch      = int64(10)           // extra blocks to evict beyond the immediate minimum
-	tombstoneTTL    = 14 * 24 * time.Hour // how long eviction tombstones block re-acceptance
-	medianCacheTTL  = 5 * time.Minute     // how often MedianWorkFactor recomputes
+	defaultStorageLimit = int64(10 * 1024 * 1024 * 1024) // 10 GiB, used when no limit is configured
+
+	evictBatch     = int64(10)           // extra blocks to evict beyond the immediate minimum
+	tombstoneTTL   = 14 * 24 * time.Hour // how long eviction tombstones block re-acceptance
+	medianCacheTTL = 5 * time.Minute     // how often MedianWorkFactor recomputes
 )
 
 // BadgerStore is a BadgerDB-backed implementation of Store.

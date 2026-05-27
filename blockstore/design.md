@@ -172,6 +172,21 @@ An empty input token starts from the beginning. An empty returned token means no
 
 `SQLiteStore` and `FlatFileStore` implement the `Store` interface for testing and archival use. They accept a `Tag` parameter on `Put` but do not persist it, and `Evict` is a no-op that returns `(0, nil)`. Storage limit enforcement is not supported on these backends.
 
+## Dynamic PoW floor
+
+`MedianWorkFactor()` returns the current PoW floor, which peers use to decide the minimum work required before submitting a block. The value is recomputed in the background every `medianCacheTTL` (5 minutes) and cached; `RefreshMedian()` forces an immediate update.
+
+The floor is calculated relative to a **full-store baseline** rather than the actual median of stored blocks:
+
+```
+capacity     = storageLimit / blockSize          (default storageLimit = 10 GiB)
+halfCapacity = capacity / 2
+floor        = 0                                  if count ≤ halfCapacity
+             = wfs[halfCapacity]                  otherwise  (sorted ascending)
+```
+
+The floor is 0 while the store is less than half-full, so an empty or sparsely-loaded node accepts everything. Once more than half the capacity is occupied, the floor rises to the work factor sitting at the midpoint of a fully-loaded store — roughly the value that would be evicted first if the store were full. This prevents a single high-PoW outlier from artificially raising the floor before real storage pressure exists.
+
 ## What the blockstore does not do
 
 - Message framing or multi-block assembly — client layer

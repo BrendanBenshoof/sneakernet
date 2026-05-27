@@ -213,8 +213,10 @@ func (s *Server) handleDelta(w http.ResponseWriter, r *http.Request) {
 }
 
 // GET /v1/pow-limit
-// Returns JSON {"pow_floor":N} — the median work_factor currently stored on
-// this node, giving peers a dynamic signal of the network's PoW floor.
+// Returns JSON {"pow_floor":N} — the PoW floor for this node, giving peers a
+// dynamic signal of the minimum work required for acceptance. The floor is
+// derived from the work factor at the median position of a full store: it is 0
+// while the store is less than half-full, then rises as storage fills.
 // Falls back to the static powFloor if the backend does not support it.
 func (s *Server) handlePowLimit(w http.ResponseWriter, r *http.Request) {
 	type medianWFer interface {
