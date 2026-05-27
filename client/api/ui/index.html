@@ -1603,8 +1603,9 @@ function signalBars(wf) {
 async function handleBoost(barsEl, m) {
   barsEl.dataset.boosting = '1';
   try {
-    const newWF = await backend.boost(m.block_id);
-    if (newWF !== null) {
+    const result = await backend.boost(m.block_id);
+    if (result !== null) {
+      const newWF = typeof result === 'number' ? result : result.work_factor;
       m.work_factor = newWF;
       barsEl.dataset.level = newWF >= 15 ? 4 : newWF >= 10 ? 3 : newWF >= 6 ? 2 : newWF >= 3 ? 1 : 0;
       barsEl.title = `${newWF} PoW bits · click to boost`;

@@ -912,7 +912,10 @@ func (s *Server) handleBoost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]int{"work_factor": newWF})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"work_factor": newWF,
+		"stamp":       base64.StdEncoding.EncodeToString(stamp[:]),
+	})
 }
 
 // --- helpers ---

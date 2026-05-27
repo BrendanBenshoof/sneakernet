@@ -188,6 +188,7 @@ func (s *BadgerStore) Put(stamp Stamp, payload Payload, tag Tag) (ID, error) {
 		bKey := s.blockKey(id)
 		createdAt := now.Unix()
 
+		var oldCreatedAt int64
 		item, err := txn.Get(bKey)
 		if err == nil {
 			var skip bool
@@ -198,8 +199,7 @@ func (s *BadgerStore) Put(stamp Stamp, payload Payload, tag Tag) (ID, error) {
 						skip = true
 						return nil
 					}
-					// Keep original created_at so trav key is stable.
-					createdAt = int64(binary.BigEndian.Uint64(existing[StampSize+4 : StampSize+12]))
+					oldCreatedAt = int64(binary.BigEndian.Uint64(existing[StampSize+4 : StampSize+12]))
 				}
 				return nil
 			}); valErr != nil {
@@ -207,6 +207,11 @@ func (s *BadgerStore) Put(stamp Stamp, payload Payload, tag Tag) (ID, error) {
 			}
 			if skip {
 				return nil
+			}
+			// Delete the old trav key so it doesn't become an orphan.
+			// createdAt stays as now so the Push sync treats this as a new block.
+			if err := txn.Delete(s.travKey(oldCreatedAt, id)); err != nil && err != badger.ErrKeyNotFound {
+				return err
 			}
 		} else if err != badger.ErrKeyNotFound {
 			return err
