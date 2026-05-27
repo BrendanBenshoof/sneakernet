@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
@@ -182,9 +183,10 @@ type msgResp struct {
 	ReceivedAt  string   `json:"received_at"`
 	SentTo      string   `json:"sent_to,omitempty"`      // base64 Ed25519 pub of recipient; set for sent messages
 	DecryptedBy string   `json:"decrypted_by,omitempty"` // local identity name that decrypted or sent the message
+	WorkFactor  int      `json:"work_factor"`
 }
 
-func buildMsgResp(m client.Message) msgResp {
+func (s *Server) buildMsgResp(m client.Message) msgResp {
 	resp := msgResp{
 		ID:         m.ID,
 		BlockID:    hex.EncodeToString(m.BlockID[:]),
@@ -218,7 +220,32 @@ func buildMsgResp(m client.Message) msgResp {
 		resp.SentTo = base64.StdEncoding.EncodeToString(m.SentTo)
 	}
 	resp.DecryptedBy = m.DecryptedBy
+	// best-effort work factor lookup; 0 on miss (expired or not yet synced)
+	if wf, err := s.blocks.GetWorkFactor(m.BlockID); err == nil {
+		resp.WorkFactor = wf
+	}
 	return resp
+}
+
+// powFloor returns the local PoW floor: median work_factor - 1, or 0.
+func (s *Server) powFloor() int {
+	type medianWFer interface {
+		MedianWorkFactor() (int, error)
+	}
+	if m, ok := s.blocks.(medianWFer); ok {
+		if median, err := m.MedianWorkFactor(); err == nil && median > 1 {
+			return median - 1
+		}
+	}
+	return 0
+}
+
+// mineWithDeadline mines a stamp for payload with a 30-second deadline.
+func (s *Server) mineWithDeadline(r *http.Request, payload blockstore.Payload) (blockstore.Stamp, error) {
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	stamp, _, err := blockstore.MineStamp(ctx, payload, s.powFloor())
+	return stamp, err
 }
 
 // GET /api/messages?after_id=N
@@ -234,7 +261,7 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 
 	out := make([]msgResp, len(msgs))
 	for i, m := range msgs {
-		out[i] = buildMsgResp(m)
+		out[i] = s.buildMsgResp(m)
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -259,7 +286,7 @@ func (s *Server) handleGetMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "message not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, buildMsgResp(m))
+	writeJSON(w, http.StatusOK, s.buildMsgResp(m))
 }
 
 // POST /api/scrape
@@ -373,7 +400,11 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		var stamp blockstore.Stamp
+		stamp, err := s.mineWithDeadline(r, payload)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "pow mining failed: "+err.Error())
+			return
+		}
 		id, err := s.blocks.Put(stamp, payload, blockstore.TagPhysical)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to store block")
@@ -402,7 +433,6 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	chunks := splitBytes(content, client.V2MaxContent)
 	total := uint16(len(chunks))
 	blockIDs := make([]string, 0, total)
-	var stamp blockstore.Stamp
 
 	for i, chunk := range chunks {
 		fmp := mp
@@ -413,17 +443,22 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		fmp.SentTo = recipientEdPubBytes
 		fmp.DecryptedBy = req.SenderIdentity
 
-		var payload blockstore.Payload
+		var fragPayload blockstore.Payload
 		if signerID != nil {
-			payload, err = client.EncryptSigned(recipientEdPub, fmp, signerID.SignKey)
+			fragPayload, err = client.EncryptSigned(recipientEdPub, fmp, signerID.SignKey)
 		} else {
-			payload, err = client.Encrypt(recipientEdPub, fmp)
+			fragPayload, err = client.Encrypt(recipientEdPub, fmp)
 		}
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to encrypt fragment")
 			return
 		}
-		id, err := s.blocks.Put(stamp, payload, blockstore.TagPhysical)
+		fragStamp, err := s.mineWithDeadline(r, fragPayload)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "pow mining failed: "+err.Error())
+			return
+		}
+		id, err := s.blocks.Put(fragStamp, fragPayload, blockstore.TagPhysical)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to store fragment block")
 			return
@@ -704,7 +739,11 @@ func (s *Server) handleSendChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var stamp blockstore.Stamp
+	stamp, err := s.mineWithDeadline(r, payload)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "pow mining failed: "+err.Error())
+		return
+	}
 	id, err := s.blocks.Put(stamp, payload, blockstore.TagPhysical)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to store block")
@@ -820,6 +859,60 @@ func (s *Server) handleRenameContact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// GET /api/pow-floor
+// Returns the current local PoW floor (median work_factor - 1).
+// Clients use this to calibrate how hard to mine before sending.
+func (s *Server) handlePowFloor(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]int{"pow_floor": s.powFloor()})
+}
+
+// POST /api/boost  {"block_id":"<hex>"}
+// Mines a better stamp for the given block, extending its TTL.
+// Returns the new work_factor.
+func (s *Server) handleBoost(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		BlockID string `json:"block_id"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	idBytes, err := hex.DecodeString(req.BlockID)
+	if err != nil || len(idBytes) != blockstore.IDSize {
+		writeError(w, http.StatusBadRequest, "invalid block_id")
+		return
+	}
+	var id blockstore.ID
+	copy(id[:], idBytes)
+
+	_, payload, err := s.blocks.Get(id)
+	if err != nil {
+		if errors.Is(err, blockstore.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "block not found")
+		} else {
+			writeError(w, http.StatusInternalServerError, "failed to retrieve block")
+		}
+		return
+	}
+
+	currentWF, _ := s.blocks.GetWorkFactor(id)
+	target := currentWF + 1
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	stamp, newWF, err := blockstore.MineStamp(ctx, payload, target)
+	if err != nil {
+		writeError(w, http.StatusGatewayTimeout, "no improvement found in 5s — try again")
+		return
+	}
+
+	if _, err := s.blocks.Put(stamp, payload, blockstore.TagPhysical); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to store boosted block")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]int{"work_factor": newWF})
 }
 
 // --- helpers ---

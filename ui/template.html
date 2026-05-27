@@ -490,6 +490,27 @@
     .msg-time.delayed { color: var(--warn); }
     .msg-block-id { color: var(--border-2); font-size: 9.5px; }
 
+    /* PoW upvote widget */
+    .pow-upvote {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 2px;
+      color: var(--muted);
+    }
+    .pow-upvote:has(.boost-btn:not(:disabled)):hover .boost-btn { color: var(--accent); }
+    .pow-upvote:has(.boost-btn:not(:disabled)):hover .pow-count  { color: var(--accent); }
+    .boost-btn {
+      background: none;
+      border: none;
+      padding: 0;
+      cursor: pointer;
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1;
+    }
+    .boost-btn:disabled { opacity: .4; cursor: default; }
+    .pow-count { font-size: 10.5px; color: var(--muted); }
+
     .msg-content {
       line-height: 1.6;
       word-break: break-word;
@@ -1331,12 +1352,18 @@ function makeMsgRow(m, {hasPred, hasSucc, isFork, forkFirst, forkLast}) {
         ${renderSenderMeta(m)}
         ${renderTimeMeta(m)}
         <span class="msg-block-id">${m.block_id.slice(0,12)}…</span>
+        <span class="pow-upvote" title="${m.work_factor || 0} PoW bits · click to boost">
+          <button class="boost-btn" data-block-id="${esc(m.block_id)}">▲</button><span class="pow-count">${m.work_factor || 0}</span>
+        </span>
       </div>
       <div class="msg-content ${m.msg_type === 1 ? 'binary' : m.msg_type === 2 ? 'system' : ''}">${renderContent(m)}</div>
     </div>`;
 
   const senderEl = div.querySelector('[data-snk-uri]');
   if (senderEl) senderEl.addEventListener('click', () => toggleSnkCard(senderEl));
+
+  const boostBtn = div.querySelector('.boost-btn');
+  if (boostBtn) boostBtn.addEventListener('click', () => handleBoost(boostBtn, m));
 
   return div;
 }
@@ -1385,6 +1412,28 @@ function renderTimeMeta(m) {
     return `<span class="msg-time delayed" title="Sneakernet delay">sent ${fmtTime(m.sent_at)} · recv ${fmtTime(m.received_at)}</span>`;
   }
   return `<span class="msg-time">${fmtTime(ref)}</span>`;
+}
+
+
+async function handleBoost(btn, m) {
+  btn.disabled = true;
+  btn.textContent = '…';
+  try {
+    const newWF = await backend.boost(m.block_id);
+    if (newWF === null) {
+      toast('No improvement found in 5s — try again.', true);
+    } else {
+      m.work_factor = newWF;
+      const countEl = btn.closest('.pow-upvote')?.querySelector('.pow-count');
+      if (countEl) countEl.textContent = newWF;
+      toast(`Boosted to ${newWF} PoW bit${newWF !== 1 ? 's' : ''} — block TTL extended.`);
+    }
+  } catch (err) {
+    toast('Boost error: ' + err.message, true);
+  } finally {
+    btn.textContent = '▲';
+    btn.disabled = false;
+  }
 }
 
 function renderContent(m) {

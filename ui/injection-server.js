@@ -148,6 +148,14 @@ class ServerBackend {
     if (!r) throw new Error('failed');
     if (!r.ok) { const d = await r.json(); throw new Error(d.error || 'failed'); }
   }
+
+  // Boost a message by mining a better stamp. Returns new work_factor or null.
+  async boost(blockId) {
+    const r = await this._req('POST', '/api/boost', {block_id: blockId});
+    if (!r || !r.ok) return null;
+    const d = await r.json();
+    return d.work_factor ?? null;
+  }
 }
 
 const backend = new ServerBackend();

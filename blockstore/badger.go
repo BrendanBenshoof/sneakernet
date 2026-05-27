@@ -230,6 +230,27 @@ func (s *BadgerStore) Put(stamp Stamp, payload Payload, tag Tag) (ID, error) {
 	return id, nil
 }
 
+func (s *BadgerStore) GetWorkFactor(id ID) (int, error) {
+	var wf int
+	err := s.db.View(func(txn *badger.Txn) error {
+		item, err := txn.Get(s.blockKey(id))
+		if err == badger.ErrKeyNotFound {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		return item.Value(func(val []byte) error {
+			if len(val) < StampSize+4 {
+				return fmt.Errorf("blockstore: corrupt block value")
+			}
+			wf = int(binary.BigEndian.Uint32(val[StampSize : StampSize+4]))
+			return nil
+		})
+	})
+	return wf, err
+}
+
 func (s *BadgerStore) Get(id ID) (Stamp, Payload, error) {
 	var stamp Stamp
 	var payload Payload

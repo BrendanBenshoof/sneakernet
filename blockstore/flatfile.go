@@ -168,6 +168,14 @@ func (s *FlatFileStore) Get(id ID) (Stamp, Payload, error) {
 	return stamp, payload, nil
 }
 
+func (s *FlatFileStore) GetWorkFactor(id ID) (int, error) {
+	_, wf, _, _, err := s.readHeader(s.blockPath(id))
+	if os.IsNotExist(err) {
+		return 0, ErrNotFound
+	}
+	return wf, err
+}
+
 func (s *FlatFileStore) Has(id ID) (bool, error) {
 	_, _, _, _, err := s.readHeader(s.blockPath(id))
 	if os.IsNotExist(err) {

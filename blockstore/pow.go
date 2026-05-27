@@ -1,6 +1,8 @@
 package blockstore
 
 import (
+	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"math/bits"
 
@@ -29,6 +31,27 @@ func WorkFactor(stamp Stamp, payload Payload) int {
 	copy(input[StampSize:], payload[:])
 	hash := argon2.IDKey(input, argonSalt, argonTime, argonMemory, argonThreads, argonKeyLen)
 	return leadingZeroBits(hash)
+}
+
+// MineStamp searches for a Stamp giving WorkFactor >= target for payload.
+// Tries random stamps until one succeeds or ctx is cancelled.
+// Returns immediately with a zero stamp when target <= 0.
+func MineStamp(ctx context.Context, payload Payload, target int) (Stamp, int, error) {
+	var stamp Stamp
+	if target <= 0 {
+		return stamp, WorkFactor(stamp, payload), nil
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return stamp, 0, err
+		}
+		if _, err := rand.Read(stamp[:]); err != nil {
+			return stamp, 0, err
+		}
+		if wf := WorkFactor(stamp, payload); wf >= target {
+			return stamp, wf, nil
+		}
+	}
 }
 
 func leadingZeroBits(b []byte) int {

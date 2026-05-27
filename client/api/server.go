@@ -96,6 +96,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /api/channels/{name}", s.auth(s.handleRemoveChannel))
 	s.mux.HandleFunc("GET /api/messages", s.auth(s.handleListMessages))
 	s.mux.HandleFunc("GET /api/messages/{block_id}", s.auth(s.handleGetMessage))
+	s.mux.HandleFunc("GET /api/pow-floor", s.auth(s.handlePowFloor))
+	s.mux.HandleFunc("POST /api/boost", s.auth(s.handleBoost))
 	s.mux.HandleFunc("POST /api/scrape", s.auth(s.handleScrape))
 	s.mux.HandleFunc("POST /api/send", s.auth(s.handleSend))
 	s.mux.HandleFunc("POST /api/send-channel", s.auth(s.handleSendChannel))

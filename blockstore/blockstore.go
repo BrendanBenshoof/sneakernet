@@ -51,6 +51,7 @@ func (r BlockRef) Token() string {
 type Store interface {
 	Put(stamp Stamp, payload Payload, tag Tag) (ID, error)
 	Get(id ID) (Stamp, Payload, error)
+	GetWorkFactor(id ID) (int, error)
 	Has(id ID) (bool, error)
 	ListIDs() ([]ID, error)
 	// ListBlocks returns up to limit blocks with work_factor >= powFloor and
