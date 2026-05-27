@@ -291,13 +291,27 @@ func (s *Server) handleGetMessage(w http.ResponseWriter, r *http.Request) {
 
 // POST /api/scrape
 // Scans all new blocks and attempts decryption with every stored identity.
+// Optional body: {"full": true} resets the checkpoint so all blocks are rescanned.
 func (s *Server) handleScrape(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Full bool `json:"full"`
+	}
+	// Body is optional; ignore decode errors (e.g. empty body).
+	json.NewDecoder(r.Body).Decode(&req) //nolint:errcheck
+
 	s.scrapeMu.Lock()
 	defer s.scrapeMu.Unlock()
 
 	s.mu.RLock()
 	scraper := s.scraper
 	s.mu.RUnlock()
+
+	if req.Full {
+		if err := s.msgs.SetCheckpoint(time.Time{}); err != nil {
+			writeError(w, http.StatusInternalServerError, "reset checkpoint: "+err.Error())
+			return
+		}
+	}
 
 	found, err := scraper.Scrape(r.Context())
 	if err != nil {

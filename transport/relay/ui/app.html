@@ -809,7 +809,7 @@
       </div>
     </div>
     <div id="sb-footer">
-      <button id="scrape-btn"><span class="glyph">&#x27F3;</span> Refresh</button>
+      <button id="scrape-btn" title="Refresh — Shift+click to rescan all blocks"><span class="glyph">&#x27F3;</span> Refresh</button>
       <button id="identities-btn"><span class="glyph">&#x2299;</span> Identities &amp; Channels</button>
       <button id="theme-btn"><span class="glyph" id="theme-glyph">&#x263D;</span> <span id="theme-label">Light mode</span></button>
     </div>
@@ -1851,7 +1851,7 @@ document.addEventListener('DOMContentLoaded', () => {
   el('onboard-btn').addEventListener('click', onboardCreate);
   el('onboard-name').addEventListener('keydown', e => { if (e.key === 'Enter') onboardCreate(); });
 
-  el('scrape-btn').addEventListener('click', scrape);
+  el('scrape-btn').addEventListener('click', e => scrape(e.shiftKey));
   el('new-msg-btn').addEventListener('click', toggleDmForm);
   el('sb-dm-cancel').addEventListener('click', closeDmForm);
   el('sb-dm-open').addEventListener('click', submitDmForm);
@@ -1945,15 +1945,16 @@ async function onboardCreate() {
 // ── scrape ─────────────────────────────────────────────────────────────────
 let autoScrapeTimer = null;
 
-async function scrape() {
+async function scrape(full = false) {
   clearTimeout(autoScrapeTimer);
   const btn = el('scrape-btn');
   btn.disabled = true;
-  btn.innerHTML = '<span class="glyph">&#x27F3;</span> Scanning…';
-  setStatus('Scanning blocks…');
+  btn.innerHTML = `<span class="glyph">&#x27F3;</span> ${full ? 'Full scan…' : 'Scanning…'}`;
+  setStatus(full ? 'Full rescan — checking all blocks…' : 'Scanning blocks…');
   try {
-    const {found} = await backend.scrape();
+    const {found} = await backend.scrape(full);
     setStatus(`Scan complete — ${found} new message${found === 1 ? '' : 's'}.`, found > 0 ? 'ok' : '');
+    if (full) { allMessages = []; byBlock.clear(); }
     await loadMessages();
   } catch {
     setStatus('Scan failed.', 'err');
