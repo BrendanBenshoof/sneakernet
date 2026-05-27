@@ -68,7 +68,9 @@ func cmdNode(args []string) {
 	lanScan      := fs.Bool("lan", false, fmt.Sprintf("scan LAN for sneakernet peers on port %d", lan.Port))
 	usbDir       := fs.String("usb-dir", "", "path to sneakernet USB volume root; syncs when .sneakernet marker is present (empty = disabled)")
 	usbInterval  := fs.Duration("usb-interval", 30*time.Second, "how often to check and sync the USB volume")
-	storageLimit := fs.String("storage-limit", "0", "maximum blockstore size (e.g. 10GB, 512MB); 0 = unlimited")
+	storageLimit    := fs.String("storage-limit", "0", "maximum blockstore size (e.g. 10GB, 512MB); 0 = unlimited")
+	reservePhysical := fs.String("reserve-physical", "0", "storage reserved for physical/local blocks (e.g. 2GB)")
+	reserveLan      := fs.String("reserve-lan", "0", "storage reserved for LAN peer blocks")
 	fs.Parse(args)
 
 	staticPeers := splitPeers(*peersFlag)
@@ -82,7 +84,18 @@ func cmdNode(args []string) {
 	if limit, err := parseBytes(*storageLimit); err != nil {
 		log.Fatalf("invalid -storage-limit: %v", err)
 	} else if limit > 0 {
-		bs.WithStorageLimit(limit)
+		physical, err := parseBytes(*reservePhysical)
+		if err != nil {
+			log.Fatalf("invalid -reserve-physical: %v", err)
+		}
+		lan_, err := parseBytes(*reserveLan)
+		if err != nil {
+			log.Fatalf("invalid -reserve-lan: %v", err)
+		}
+		bs.WithStorageLimit(limit).WithReservations(map[blockstore.Tag]int64{
+			blockstore.TagPhysical: physical,
+			blockstore.TagLan:      lan_,
+		})
 	}
 
 	ms, err := client.OpenMessageStore(*messagesDB)
