@@ -11,7 +11,7 @@ import (
 )
 
 func TestScrape(t *testing.T) {
-	bs, err := blockstore.OpenSQLite(":memory:")
+	bs, err := blockstore.OpenBadger(t.TempDir())
 	if err != nil {
 		t.Fatalf("open blockstore: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestTryDecryptWrongKey(t *testing.T) {
 }
 
 func TestCheckpointAdvances(t *testing.T) {
-	bs, err := blockstore.OpenSQLite(":memory:")
+	bs, err := blockstore.OpenBadger(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +193,7 @@ func TestCheckpointAdvances(t *testing.T) {
 }
 
 func TestFragmentReassembly(t *testing.T) {
-	bs, err := blockstore.OpenSQLite(":memory:")
+	bs, err := blockstore.OpenBadger(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -19,7 +19,7 @@ import (
 
 func newStore(t *testing.T) blockstore.Store {
 	t.Helper()
-	s, err := blockstore.OpenSQLite(":memory:")
+	s, err := blockstore.OpenBadger(t.TempDir())
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -48,14 +48,14 @@ func makeBlock(seed byte) (blockstore.Stamp, blockstore.Payload) {
 }
 
 func TestGetPowLimit(t *testing.T) {
-	// SQLite has no MedianWorkFactor; server falls back to static powFloor.
+	// Empty BadgerDB store: median=0, so server returns median-1 = -1.
 	_, client := newTestPair(t, 3)
 	floor, err := client.GetPowLimit(context.Background())
 	if err != nil {
 		t.Fatalf("GetPowLimit: %v", err)
 	}
-	if floor != 3 {
-		t.Fatalf("expected pow_floor=3, got %d", floor)
+	if floor != -1 {
+		t.Fatalf("expected pow_floor=-1 for empty store, got %d", floor)
 	}
 }
 

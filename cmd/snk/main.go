@@ -233,8 +233,7 @@ func cmdRelay(args []string) {
 
 func cmdMassStorage(args []string) {
 	fs := flag.NewFlagSet("mass-storage", flag.ExitOnError)
-	srcSQLite := fs.String("from-sqlite", "", "source SQLite blockstore path (blocks.db)")
-	srcBadger  := fs.String("from-badger", "", "source BadgerDB blockstore directory")
+	srcBadger := fs.String("from-badger", "", "source BadgerDB blockstore directory")
 	targetDir  := fs.String("to", "", "target flat-file mass storage directory (required)")
 	reindex    := fs.Bool("reindex", false, "rebuild index only, do not sync blocks")
 	fs.Parse(args)
@@ -252,26 +251,19 @@ func cmdMassStorage(args []string) {
 	defer target.Close()
 
 	if !*reindex {
+		if *srcBadger == "" {
+			fmt.Fprintln(os.Stderr, "mass-storage: -from-badger is required unless -reindex is set")
+			fs.Usage()
+			os.Exit(1)
+		}
 		var src blockstore.Store
-		switch {
-		case *srcSQLite != "":
-			s, err := blockstore.OpenSQLite(*srcSQLite)
-			if err != nil {
-				log.Fatalf("open sqlite source: %v", err)
-			}
-			defer s.Close()
-			src = s
-		case *srcBadger != "":
+		{
 			s, err := blockstore.OpenBadger(*srcBadger)
 			if err != nil {
 				log.Fatalf("open badger source: %v", err)
 			}
 			defer s.Close()
 			src = s
-		default:
-			fmt.Fprintln(os.Stderr, "mass-storage: one of -from-sqlite or -from-badger is required unless -reindex is set")
-			fs.Usage()
-			os.Exit(1)
 		}
 
 		if err := syncStores(src, target); err != nil {

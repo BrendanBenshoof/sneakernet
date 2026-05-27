@@ -43,7 +43,7 @@
 // # Typical usage
 //
 //	ks, err := client.LoadKeystore("keys.json", password)
-//	bs, err := blockstore.OpenSQLite("blocks.db")
+//	bs, err := blockstore.OpenBadger("blocks.db")
 //	ms, err := client.OpenMessageStore("inbox.db")
 //
 //	c := client.New(bs, ms, ks.Keys()...)

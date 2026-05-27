@@ -12,18 +12,6 @@ import (
 func openStores(t *testing.T) map[string]blockstore.Store {
 	t.Helper()
 
-	// SQLite
-	sqliteFile, err := os.CreateTemp("", "blockstore-*.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	sqliteFile.Close()
-	sqliteStore, err := blockstore.OpenSQLite(sqliteFile.Name())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { sqliteStore.Close(); os.Remove(sqliteFile.Name()) })
-
 	// BadgerDB
 	badgerDir, err := os.MkdirTemp("", "blockstore-badger-*")
 	if err != nil {
@@ -47,7 +35,6 @@ func openStores(t *testing.T) map[string]blockstore.Store {
 	t.Cleanup(func() { flatStore.Close(); os.RemoveAll(flatDir) })
 
 	return map[string]blockstore.Store{
-		"sqlite":   sqliteStore,
 		"badger":   badgerStore,
 		"flatfile": flatStore,
 	}
