@@ -14,7 +14,11 @@ import (
 )
 
 // flatHeaderSize is the fixed header preceding the payload in each block file.
-//   stamp[4] | work_factor uint32[4] | created_at int64[8] | expires_at int64[8]
+//
+//	stamp[4] | work_factor uint32[4] | created_at int64[8] | expires_at int64[8]
+//
+// expires_at is the logical TTL deadline (createdAt + TTLFromWorkFactor(wf)) and
+// is written for eviction-ordering purposes only — it is not an acceptance gate.
 const flatHeaderSize = StampSize + 4 + 8 + 8 // 24 bytes
 
 // FlatFileStore is a filesystem-backed implementation of Store intended for
@@ -26,8 +30,13 @@ const flatHeaderSize = StampSize + 4 + 8 + 8 // 24 bytes
 //
 // Two levels of directory sharding (65536 leaf dirs) keep individual
 // directories manageable up to ~1 TB (≈230 M blocks at 4 KB each).
+//
+// Blocks are retained as long as there is physical allocation. When Put
+// exceeds the storage limit, Evict is called to free space by removing the
+// blocks with the lowest logical priority (soonest logical expiry first).
 type FlatFileStore struct {
-	root string
+	root         string
+	storageLimit int64 // 0 = no limit
 }
 
 // OpenFlatFile opens (or creates) a flat-file blockstore rooted at dir.
@@ -38,9 +47,33 @@ func OpenFlatFile(dir string) (*FlatFileStore, error) {
 	return &FlatFileStore{root: dir}, nil
 }
 
+// WithStorageLimit sets the maximum total storage in bytes. When Put would
+// push usage over this threshold, the lowest-priority blocks are evicted first.
+// A limit of 0 disables enforcement.
+func (s *FlatFileStore) WithStorageLimit(bytes int64) *FlatFileStore {
+	s.storageLimit = bytes
+	return s
+}
+
 func (s *FlatFileStore) blockPath(id ID) string {
 	h := hex.EncodeToString(id[:])
 	return filepath.Join(s.root, h[:2], h[2:4], h)
+}
+
+const flatFileSize = int64(flatHeaderSize + PayloadSize)
+
+func (s *FlatFileStore) diskUsage() (int64, error) {
+	var count int64
+	err := filepath.WalkDir(s.root, func(_ string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil || d.IsDir() {
+			return walkErr
+		}
+		if len(d.Name()) == 2*IDSize {
+			count++
+		}
+		return nil
+	})
+	return count * flatFileSize, err
 }
 
 func (s *FlatFileStore) Put(stamp Stamp, payload Payload, _ Tag) (ID, error) {
@@ -61,6 +94,14 @@ func (s *FlatFileStore) Put(stamp Stamp, payload Payload, _ Tag) (ID, error) {
 			if existingWF >= wf {
 				return id, nil
 			}
+		}
+	}
+
+	// Enforce storage limit; evict lowest-priority blocks to make room.
+	if s.storageLimit > 0 {
+		if usage, err := s.diskUsage(); err == nil && usage >= s.storageLimit {
+			needed := (usage-s.storageLimit)/flatFileSize + 10 + 1
+			s.Evict(int(needed)) //nolint:errcheck
 		}
 	}
 
@@ -120,10 +161,6 @@ func (s *FlatFileStore) Get(id ID) (Stamp, Payload, error) {
 	if _, err := io.ReadFull(f, buf[:]); err != nil {
 		return Stamp{}, Payload{}, fmt.Errorf("blockstore: flatfile: get: %w", err)
 	}
-	expiresAt := int64(binary.BigEndian.Uint64(buf[StampSize+12 : StampSize+20]))
-	if time.Now().Unix() > expiresAt {
-		return Stamp{}, Payload{}, ErrNotFound
-	}
 	var stamp Stamp
 	var payload Payload
 	copy(stamp[:], buf[:StampSize])
@@ -132,18 +169,17 @@ func (s *FlatFileStore) Get(id ID) (Stamp, Payload, error) {
 }
 
 func (s *FlatFileStore) Has(id ID) (bool, error) {
-	_, _, _, expiresAt, err := s.readHeader(s.blockPath(id))
+	_, _, _, _, err := s.readHeader(s.blockPath(id))
 	if os.IsNotExist(err) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	return time.Now().Unix() <= expiresAt, nil
+	return true, nil
 }
 
 func (s *FlatFileStore) ListIDs() ([]ID, error) {
-	now := time.Now().Unix()
 	var ids []ID
 	err := filepath.WalkDir(s.root, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil || d.IsDir() {
@@ -153,8 +189,7 @@ func (s *FlatFileStore) ListIDs() ([]ID, error) {
 		if decErr != nil || len(idBytes) != IDSize {
 			return nil
 		}
-		_, _, _, expiresAt, hdrErr := s.readHeader(path)
-		if hdrErr != nil || now > expiresAt {
+		if _, err := os.Stat(path); err != nil {
 			return nil
 		}
 		var id ID
@@ -172,7 +207,6 @@ type flatEntry struct {
 }
 
 func (s *FlatFileStore) ListBlocks(pageToken string, limit int, powFloor int, since time.Time) (string, []BlockRef, error) {
-	now := time.Now().Unix()
 	sinceUnix := since.Unix()
 
 	var cur cursor
@@ -195,8 +229,8 @@ func (s *FlatFileStore) ListBlocks(pageToken string, limit int, powFloor int, si
 		if decErr != nil || len(idBytes) != IDSize {
 			return nil
 		}
-		_, wf, createdAt, expiresAt, hdrErr := s.readHeader(path)
-		if hdrErr != nil || now > expiresAt || wf < powFloor || createdAt < sinceUnix {
+		_, wf, createdAt, _, hdrErr := s.readHeader(path)
+		if hdrErr != nil || wf < powFloor || createdAt < sinceUnix {
 			return nil
 		}
 		var id ID
@@ -241,9 +275,24 @@ func (s *FlatFileStore) ListBlocks(pageToken string, limit int, powFloor int, si
 	return nextToken, refs, nil
 }
 
-func (s *FlatFileStore) Prune() (int, error) {
-	now := time.Now().Unix()
-	count := 0
+// Prune is a no-op for FlatFileStore; space is reclaimed exclusively through
+// Evict when the storage limit is reached.
+func (s *FlatFileStore) Prune() (int, error) { return 0, nil }
+
+type flatCandidate struct {
+	path      string
+	expiresAt int64
+}
+
+// Evict removes up to n blocks ordered by logical expiry ascending — blocks
+// whose PoW-based lifetime ran out longest ago are removed first, preserving
+// higher-value (high-PoW) blocks as long as physical space allows.
+func (s *FlatFileStore) Evict(n int) (int, error) {
+	if n <= 0 {
+		return 0, nil
+	}
+
+	var all []flatCandidate
 	err := filepath.WalkDir(s.root, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil || d.IsDir() {
 			return walkErr
@@ -255,16 +304,27 @@ func (s *FlatFileStore) Prune() (int, error) {
 		if hdrErr != nil {
 			return nil
 		}
-		if now > expiresAt {
-			if removeErr := os.Remove(path); removeErr == nil {
-				count++
-			}
-		}
+		all = append(all, flatCandidate{path: path, expiresAt: expiresAt})
 		return nil
 	})
-	return count, err
-}
+	if err != nil {
+		return 0, fmt.Errorf("blockstore: flatfile: evict: %w", err)
+	}
 
-func (s *FlatFileStore) Evict(_ int) (int, error) { return 0, nil }
+	sort.Slice(all, func(i, j int) bool {
+		return all[i].expiresAt < all[j].expiresAt
+	})
+
+	var evicted int
+	for _, c := range all {
+		if evicted >= n {
+			break
+		}
+		if err := os.Remove(c.path); err == nil {
+			evicted++
+		}
+	}
+	return evicted, nil
+}
 
 func (s *FlatFileStore) Close() error { return nil }

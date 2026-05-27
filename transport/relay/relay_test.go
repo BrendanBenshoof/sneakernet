@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -46,6 +48,7 @@ func makeBlock(seed byte) (blockstore.Stamp, blockstore.Payload) {
 }
 
 func TestGetPowLimit(t *testing.T) {
+	// SQLite has no MedianWorkFactor; server falls back to static powFloor.
 	_, client := newTestPair(t, 3)
 	floor, err := client.GetPowLimit(context.Background())
 	if err != nil {
@@ -53,6 +56,46 @@ func TestGetPowLimit(t *testing.T) {
 	}
 	if floor != 3 {
 		t.Fatalf("expected pow_floor=3, got %d", floor)
+	}
+}
+
+func TestGetPowLimitMedian(t *testing.T) {
+	dir, err := os.MkdirTemp("", "relay-badger-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := blockstore.OpenBadger(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close(); os.RemoveAll(dir) })
+
+	srv := relay.NewServer(store, 0)
+	ts := httptest.NewServer(srv)
+	t.Cleanup(ts.Close)
+	client := relay.NewClient(ts.URL)
+
+	var stamp blockstore.Stamp
+	var wfs []int
+	for i := 0; i < 5; i++ {
+		var p blockstore.Payload
+		p[0] = byte(i + 1)
+		store.Put(stamp, p, blockstore.TagPhysical)
+		wfs = append(wfs, blockstore.WorkFactor(stamp, p))
+	}
+	sort.Ints(wfs)
+	median := wfs[len(wfs)/2]
+
+	if err := store.RefreshMedian(); err != nil {
+		t.Fatal("RefreshMedian:", err)
+	}
+
+	floor, err := client.GetPowLimit(context.Background())
+	if err != nil {
+		t.Fatalf("GetPowLimit: %v", err)
+	}
+	if floor != median-1 {
+		t.Errorf("pow_floor: got %d, want median-1=%d (median=%d)", floor, median-1, median)
 	}
 }
 
