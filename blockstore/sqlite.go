@@ -87,6 +87,18 @@ func (s *SQLiteStore) Get(id ID) (Stamp, Payload, error) {
 	return stamp, payload, nil
 }
 
+func (s *SQLiteStore) GetWorkFactor(id ID) (int, error) {
+	var wf int
+	err := s.db.QueryRow(`SELECT work_factor FROM blocks WHERE id = ?`, id[:]).Scan(&wf)
+	if err == sql.ErrNoRows {
+		return 0, ErrNotFound
+	}
+	if err != nil {
+		return 0, fmt.Errorf("blockstore: get work_factor: %w", err)
+	}
+	return wf, nil
+}
+
 func (s *SQLiteStore) Has(id ID) (bool, error) {
 	var count int
 	err := s.db.QueryRow(

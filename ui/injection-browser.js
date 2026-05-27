@@ -663,8 +663,32 @@ class BrowserBackend {
     };
   }
 
+  async _getPowFloor() {
+    try {
+      const r = await fetch('/v1/pow-limit');
+      if (!r.ok) return 0;
+      const d = await r.json();
+      return d.pow_floor || 0;
+    } catch { return 0; }
+  }
+
+  // Ask the relay to mine a stamp for payload. Falls back to zero stamp on error.
+  async _mineStamp(payload) {
+    try {
+      const floor = await this._getPowFloor();
+      const r = await fetch('/v1/stamp', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({payload: b64enc(payload), target: floor}),
+      });
+      if (!r.ok) return new Uint8Array(4);
+      const d = await r.json();
+      return b64dec(d.stamp);
+    } catch { return new Uint8Array(4); }
+  }
+
   async _postBlock(payload) {
-    const stamp = new Uint8Array(4); // work_factor 0, 24h TTL
+    const stamp = await this._mineStamp(payload);
     const r = await fetch('/api/blocks', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
@@ -674,6 +698,43 @@ class BrowserBackend {
       const d = await r.json().catch(() => ({}));
       throw new Error(d.error || `HTTP ${r.status}`);
     }
+  }
+
+  // Boost a message by mining a better stamp. Returns new work_factor or null.
+  // Hard 5-second budget; gives up cleanly if no improvement is found in time.
+  async boost(blockId) {
+    const br = await fetch(`/api/blocks/${blockId}`);
+    if (!br.ok) return null;
+    const bd = await br.json();
+    const payload = b64dec(bd.payload);
+    const currentWF = bd.work_factor || 0;
+
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), 5000);
+    let d;
+    try {
+      const r = await fetch('/v1/stamp', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({payload: b64enc(payload), target: currentWF + 1}),
+        signal: abort.signal,
+      });
+      if (!r.ok) return null;
+      d = await r.json();
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+
+    const stamp = b64dec(d.stamp);
+    const sr = await fetch('/api/blocks', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({stamp: b64enc(stamp), payload: b64enc(payload)}),
+    });
+    if (!sr.ok) return null;
+    return d.work_factor;
   }
 
   // ── sent log (localStorage) ─────────────────────────────────────────
@@ -774,7 +835,7 @@ const UI_CONFIG = {
     <p style="margin-bottom:18px;font-size:15px;color:var(--text)">Select a conversation from the sidebar, or click <strong>+</strong> to send a new message.</p>
     <div style="font-size:13px;color:var(--muted);line-height:1.65;background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--accent-line);border-radius:6px;padding:14px 16px">
       <strong style="color:var(--text);display:block;margin-bottom:8px">You are using the browser client.</strong>
-      <strong style="color:var(--text)">Messages expire in 24 hours.</strong> This browser does not mine proof-of-work, so blocks you send get the minimum TTL. A native node mines PoW that extends lifetime to days — if your contact may not check soon, ask them to also run a node.<br><br>
+      <strong style="color:var(--text)">Message lifetime scales with proof-of-work.</strong> When you send, the relay mines PoW on your behalf — this adds a second or two but extends your block's TTL beyond the 24-hour base.<br><br>
       <strong style="color:var(--text)">Your inbox is not saved.</strong> Decrypted messages live in memory and are cleared when you close or reload this tab. Re-scanning will only recover blocks still held by the relay.<br><br>
       <strong style="color:var(--text)">Keys are stored in this browser only.</strong> Your identities live in this browser's IndexedDB. A different browser, incognito window, or clearing browser data means starting over with a new identity.
     </div>

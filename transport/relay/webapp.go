@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"context"
 	_ "embed"
 	"encoding/base64"
 	"encoding/hex"
@@ -160,5 +161,52 @@ func (s *Server) handleSubmitBlock(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"id":          hex.EncodeToString(id[:]),
 		"work_factor": blockstore.WorkFactor(stamp, payload),
+	})
+}
+
+// POST /v1/stamp  {"payload":"<base64>","target":N}
+// Mines a stamp giving work_factor >= target for the given payload.
+// Used by browser clients that cannot run argon2 natively.
+// Capped at max 5 bits above pow_floor to prevent abuse.
+func (s *Server) handleMineStamp(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Payload string `json:"payload"`
+		Target  int    `json:"target"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		serverError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+
+	payloadBytes, err := base64.StdEncoding.DecodeString(req.Payload)
+	if err != nil || len(payloadBytes) != blockstore.PayloadSize {
+		serverError(w, http.StatusBadRequest, "payload must be base64-encoded 4096-byte block")
+		return
+	}
+	var payload blockstore.Payload
+	copy(payload[:], payloadBytes)
+
+	// Cap target to prevent a client forcing unbounded work on the relay.
+	floor := s.powFloor
+	maxTarget := floor + 5
+	if req.Target < floor {
+		req.Target = floor
+	}
+	if req.Target > maxTarget {
+		req.Target = maxTarget
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	stamp, wf, err := blockstore.MineStamp(ctx, payload, req.Target)
+	if err != nil {
+		serverError(w, http.StatusGatewayTimeout, "mining timed out — try again or lower target")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"stamp":       base64.StdEncoding.EncodeToString(stamp[:]),
+		"work_factor": wf,
 	})
 }

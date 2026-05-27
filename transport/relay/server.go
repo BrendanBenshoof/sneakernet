@@ -71,6 +71,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /v1/block", s.handlePut)
 	s.mux.HandleFunc("POST /v1/delta", s.handleDelta)
 	s.mux.HandleFunc("GET /v1/pow-limit", s.handlePowLimit)
+	s.mux.HandleFunc("POST /v1/stamp", s.handleMineStamp)
 	s.mux.HandleFunc("GET /v1/peers", s.handlePeers)
 }
 

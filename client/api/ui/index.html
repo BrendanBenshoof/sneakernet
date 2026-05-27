@@ -490,6 +490,38 @@
     .msg-time.delayed { color: var(--warn); }
     .msg-block-id { color: var(--border-2); font-size: 9.5px; }
 
+    /* PoW signal strength widget */
+    .pow-widget {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      cursor: pointer;
+      vertical-align: middle;
+    }
+    .pow-widget[data-boosting]                              { opacity: .4; pointer-events: none; }
+    .signal-bars {
+      display: inline-flex;
+      align-items: flex-end;
+      gap: 2px;
+      height: 13px;
+    }
+    .signal-bar {
+      width: 3px;
+      border-radius: 1px 1px 0 0;
+      background: var(--muted-2);
+    }
+    .signal-bar:nth-child(1) { height: 4px; }
+    .signal-bar:nth-child(2) { height: 7px; }
+    .signal-bar:nth-child(3) { height: 10px; }
+    .signal-bar:nth-child(4) { height: 13px; }
+    .pow-widget[data-level="1"] .signal-bar:nth-child(-n+1) { background: var(--muted); }
+    .pow-widget[data-level="2"] .signal-bar:nth-child(-n+2) { background: var(--warn); }
+    .pow-widget[data-level="3"] .signal-bar:nth-child(-n+3) { background: var(--warn); }
+    .pow-widget[data-level="4"] .signal-bar                 { background: #6a9e4a; }
+    .pow-widget:not([data-boosting]):hover .signal-bar      { filter: brightness(1.3); }
+    .boost-arrow { font-size: 10px; color: var(--muted); }
+    .pow-widget:not([data-boosting]):hover .boost-arrow     { color: var(--accent); }
+
     .msg-content {
       line-height: 1.6;
       word-break: break-word;
@@ -714,11 +746,6 @@
       #mobile-back { display: flex; }
       #main { width: 100%; }
     }
-    .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,.55); display:flex; align-items:center; justify-content:center; z-index:100; }
-    .modal-overlay.hidden { display:none; }
-    .modal-card { background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:24px; width:min(360px,90vw); display:flex; flex-direction:column; gap:12px; }
-    .modal-card h3 { margin:0; }
-    .modal-card .error { color:var(--danger,#e05); font-size:12px; min-height:16px; }
   </style>
 </head>
 <body>
@@ -822,7 +849,6 @@
         <div class="row">
           <input id="new-id-name" placeholder="Identity name">
           <button class="sm" id="add-id-btn">Add</button>
-          <button class="sm ghost" id="import-id-btn">Import</button>
         </div>
       </div>
       <div class="panel-section">
@@ -842,35 +868,6 @@
     </div>
   </div>
 
-</div>
-
-<!-- ── Export identity modal ──────────────────────────────────────────────── -->
-<div id="export-modal" class="modal-overlay hidden">
-  <div class="modal-card">
-    <h3>Export identity</h3>
-    <p class="sub">Re-enter your keystore password to encrypt the export file.</p>
-    <input id="export-pw" type="password" placeholder="Keystore password" autocomplete="off">
-    <div class="row">
-      <button class="sm ghost" id="export-cancel-btn">Cancel</button>
-      <button class="sm" id="export-confirm-btn">Export</button>
-    </div>
-    <div class="error" id="export-err"></div>
-  </div>
-</div>
-
-<!-- ── Import identity modal ──────────────────────────────────────────────── -->
-<div id="import-modal" class="modal-overlay hidden">
-  <div class="modal-card">
-    <h3>Import identity</h3>
-    <p class="sub">Select an exported identity file and enter the password used when exporting.</p>
-    <input id="import-file" type="file" accept=".json">
-    <input id="import-pw" type="password" placeholder="Export password" autocomplete="off">
-    <div class="row">
-      <button class="sm ghost" id="import-cancel-btn">Cancel</button>
-      <button class="sm" id="import-confirm-btn">Import</button>
-    </div>
-    <div class="error" id="import-err"></div>
-  </div>
 </div>
 
 <div id="statusbar">Ready</div>
@@ -989,21 +986,6 @@ class ServerBackend {
     if (!r || !r.ok) throw new Error('failed');
   }
 
-  async exportIdentity(name, password) {
-    const r = await fetch(`/api/identities/${encodeURIComponent(name)}/export`, {
-      method: 'POST', headers: this._hdrs(true),
-      body: JSON.stringify({password}),
-    });
-    if (!r.ok) { const e = await r.json().catch(()=>({})); throw new Error(e.error || 'Export failed'); }
-    return r.json();
-  }
-
-  async importIdentity(bundle, password) {
-    const r = await this._req('POST', '/api/identities/import', {bundle, password});
-    if (!r || !r.ok) { const e = r ? await r.json().catch(()=>({})) : {}; throw new Error(e.error || 'Import failed'); }
-    return r.json();
-  }
-
   async listContacts() {
     const r = await this._req('GET', '/api/contacts');
     if (!r || !r.ok) return [];
@@ -1073,6 +1055,14 @@ class ServerBackend {
     const r = await this._req('POST', '/api/send-channel', payload);
     if (!r) throw new Error('failed');
     if (!r.ok) { const d = await r.json(); throw new Error(d.error || 'failed'); }
+  }
+
+  // Boost a message by mining a better stamp. Returns new work_factor or null.
+  async boost(blockId) {
+    const r = await this._req('POST', '/api/boost', {block_id: blockId});
+    if (!r || !r.ok) return null;
+    const d = await r.json();
+    return d.work_factor ?? null;
   }
 }
 
@@ -1219,17 +1209,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   el('add-contact-btn').addEventListener('click', addContact);
   el('new-contact-uri').addEventListener('keydown', e => { if (e.key === 'Enter') addContact(); });
-
-  el('import-id-btn').addEventListener('click', () => {
-    el('import-file').value = '';
-    el('import-pw').value = '';
-    el('import-err').textContent = '';
-    el('import-modal').classList.remove('hidden');
-  });
-  el('export-cancel-btn').addEventListener('click', () => el('export-modal').classList.add('hidden'));
-  el('import-cancel-btn').addEventListener('click', () => el('import-modal').classList.add('hidden'));
-  el('export-confirm-btn').addEventListener('click', confirmExport);
-  el('import-confirm-btn').addEventListener('click', confirmImport);
 
   el('sidebar-overlay').addEventListener('click', closeSidebar);
   el('active-identity').addEventListener('change', e => {
@@ -1555,12 +1534,16 @@ function makeMsgRow(m, {hasPred, hasSucc, isFork, forkFirst, forkLast}) {
         ${renderSenderMeta(m)}
         ${renderTimeMeta(m)}
         <span class="msg-block-id">${m.block_id.slice(0,12)}…</span>
+        ${signalBars(m.work_factor || 0)}
       </div>
       <div class="msg-content ${m.msg_type === 1 ? 'binary' : m.msg_type === 2 ? 'system' : ''}">${renderContent(m)}</div>
     </div>`;
 
   const senderEl = div.querySelector('[data-snk-uri]');
   if (senderEl) senderEl.addEventListener('click', () => toggleSnkCard(senderEl));
+
+  const barsEl = div.querySelector('.pow-widget');
+  if (barsEl) barsEl.addEventListener('click', () => handleBoost(barsEl, m));
 
   return div;
 }
@@ -1609,6 +1592,29 @@ function renderTimeMeta(m) {
     return `<span class="msg-time delayed" title="Sneakernet delay">sent ${fmtTime(m.sent_at)} · recv ${fmtTime(m.received_at)}</span>`;
   }
   return `<span class="msg-time">${fmtTime(ref)}</span>`;
+}
+
+
+function signalBars(wf) {
+  const level = wf >= 15 ? 4 : wf >= 10 ? 3 : wf >= 6 ? 2 : wf >= 3 ? 1 : 0;
+  return `<span class="pow-widget" data-level="${level}" title="${wf} PoW bits · click to boost"><span class="boost-arrow">▲</span><span class="signal-bars"><span class="signal-bar"></span><span class="signal-bar"></span><span class="signal-bar"></span><span class="signal-bar"></span></span></span>`;
+}
+
+async function handleBoost(barsEl, m) {
+  barsEl.dataset.boosting = '1';
+  try {
+    const newWF = await backend.boost(m.block_id);
+    if (newWF !== null) {
+      m.work_factor = newWF;
+      barsEl.dataset.level = newWF >= 15 ? 4 : newWF >= 10 ? 3 : newWF >= 6 ? 2 : newWF >= 3 ? 1 : 0;
+      barsEl.title = `${newWF} PoW bits · click to boost`;
+      toast(`Boosted to ${newWF} PoW bit${newWF !== 1 ? 's' : ''} — block TTL extended.`);
+    }
+  } catch {
+    // silent
+  } finally {
+    delete barsEl.dataset.boosting;
+  }
 }
 
 function renderContent(m) {
@@ -1851,7 +1857,6 @@ function renderIdentities() {
         <span class="card-name">${esc(id.name)}</span>
         <div style="display:flex;gap:4px">
           <button class="sm ghost" data-share>Share snk:</button>
-          <button class="sm ghost" data-export>Export</button>
           <button class="sm danger" data-name="${esc(id.name)}">Delete</button>
         </div>
       </div>
@@ -1866,7 +1871,6 @@ function renderIdentities() {
       copyKey(snkUri(id.name, id.public_key));
       toast('snk: URI copied — share it with contacts.');
     });
-    div.querySelector('[data-export]').addEventListener('click', () => openExportModal(id.name));
     div.querySelector('.sm.danger').addEventListener('click', () => deleteIdentity(id.name));
     div.querySelectorAll('[data-copy]').forEach(btn => {
       btn.addEventListener('click', () => copyKey(btn.dataset.copy));
@@ -1904,58 +1908,6 @@ async function deleteIdentity(name) {
   rebuildConversations();
   renderSidebar();
   toast(`Identity "${name}" deleted.`);
-}
-
-// ── export / import identity modals ─────────────────────────────────────────
-let exportTargetName = null;
-
-function openExportModal(name) {
-  exportTargetName = name;
-  el('export-pw').value = '';
-  el('export-err').textContent = '';
-  el('export-modal').classList.remove('hidden');
-  el('export-pw').focus();
-}
-
-async function confirmExport() {
-  const pw = el('export-pw').value;
-  if (!pw) { el('export-err').textContent = 'Password required.'; return; }
-  el('export-err').textContent = '';
-  try {
-    const bundle = await backend.exportIdentity(exportTargetName, pw);
-    const blob = new Blob([JSON.stringify(bundle, null, 2)], {type: 'application/json'});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${exportTargetName}-identity.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-    el('export-modal').classList.add('hidden');
-    toast(`Identity "${exportTargetName}" exported.`);
-  } catch(e) {
-    el('export-err').textContent = e.message || 'Export failed.';
-  }
-}
-
-async function confirmImport() {
-  const file = el('import-file').files[0];
-  const pw = el('import-pw').value;
-  if (!file) { el('import-err').textContent = 'Select a file.'; return; }
-  if (!pw) { el('import-err').textContent = 'Password required.'; return; }
-  el('import-err').textContent = '';
-  try {
-    const text = await file.text();
-    const bundle = JSON.parse(text);
-    const id = await backend.importIdentity(bundle, pw);
-    el('import-modal').classList.add('hidden');
-    await loadIdentities();
-    renderIdentities();
-    rebuildConversations();
-    renderSidebar();
-    toast(`Identity "${id.name}" imported.`);
-  } catch(e) {
-    el('import-err').textContent = e.message || 'Import failed.';
-  }
 }
 
 // ── contacts ────────────────────────────────────────────────────────────────
