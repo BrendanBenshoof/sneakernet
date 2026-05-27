@@ -64,10 +64,13 @@ func TestGetPowLimitMedian(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// capacity=10 blocks, halfCapacity=5; store 8 so the floor is non-zero.
+	const blockSize = 4113 // blockValHeaderSize(17) + PayloadSize(4096)
 	store, err := blockstore.OpenBadger(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
+	store.WithStorageLimit(int64(10 * blockSize))
 	t.Cleanup(func() { store.Close(); os.RemoveAll(dir) })
 
 	srv := relay.NewServer(store, 0)
@@ -77,14 +80,14 @@ func TestGetPowLimitMedian(t *testing.T) {
 
 	var stamp blockstore.Stamp
 	var wfs []int
-	for i := 0; i < 5; i++ {
+	for i := 0; i < 8; i++ { // 8 > halfCapacity(5)
 		var p blockstore.Payload
 		p[0] = byte(i + 1)
 		store.Put(stamp, p, blockstore.TagPhysical)
 		wfs = append(wfs, blockstore.WorkFactor(stamp, p))
 	}
 	sort.Ints(wfs)
-	median := wfs[len(wfs)/2]
+	want := wfs[5] // wfs[halfCapacity] where halfCapacity = capacity/2 = 10/2 = 5
 
 	if err := store.RefreshMedian(); err != nil {
 		t.Fatal("RefreshMedian:", err)
@@ -94,8 +97,8 @@ func TestGetPowLimitMedian(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetPowLimit: %v", err)
 	}
-	if floor != median-1 {
-		t.Errorf("pow_floor: got %d, want median-1=%d (median=%d)", floor, median-1, median)
+	if floor != want {
+		t.Errorf("pow_floor: got %d, want %d (sorted wfs: %v)", floor, want, wfs)
 	}
 }
 
@@ -396,9 +399,10 @@ func TestWebBlockEndpoints(t *testing.T) {
 	}
 	var listResp struct {
 		Blocks []struct {
-			ID      string `json:"id"`
-			Payload string `json:"payload"`
-			Stamp   string `json:"stamp"`
+			ID         string `json:"id"`
+			Payload    string `json:"payload"`
+			Stamp      string `json:"stamp"`
+			WorkFactor int    `json:"work_factor"`
 		} `json:"blocks"`
 	}
 	json.NewDecoder(resp.Body).Decode(&listResp)
@@ -406,11 +410,20 @@ func TestWebBlockEndpoints(t *testing.T) {
 		t.Fatalf("unexpected blocks: %+v", listResp.Blocks)
 	}
 
-	// GET /api/blocks/{id} fetches the payload.
+	// GET /api/blocks/{id} fetches the payload and work_factor.
 	resp2 := relayGet(t, ts, "/api/blocks/"+idHex)
 	defer resp2.Body.Close()
 	if resp2.StatusCode != http.StatusOK {
 		t.Fatalf("GET /api/blocks/%s: got %d", idHex, resp2.StatusCode)
+	}
+	var getResp struct {
+		WorkFactor int `json:"work_factor"`
+	}
+	if err := json.NewDecoder(resp2.Body).Decode(&getResp); err != nil {
+		t.Fatalf("decode GET block response: %v", err)
+	}
+	if getResp.WorkFactor != listResp.Blocks[0].WorkFactor {
+		t.Errorf("GET block work_factor: got %d, want %d", getResp.WorkFactor, listResp.Blocks[0].WorkFactor)
 	}
 
 	// GET /api/blocks/{id} returns 404 for an unknown ID.
