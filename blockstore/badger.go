@@ -83,6 +83,9 @@ const (
 
 	// blockValHeaderSize: stamp[4] + wf[4] + created_at[8] + tag[1] = 17 bytes.
 	blockValHeaderSize = StampSize + 4 + 8 + 1
+	// legacyBlockValHeaderSize: stamp[4] + wf[4] + created_at[8] = 16 bytes (no tag field).
+	// Blocks written before the tag byte was added are treated as TagPhysical on read.
+	legacyBlockValHeaderSize = StampSize + 4 + 8
 
 	defaultStorageLimit = int64(10 * 1024 * 1024 * 1024) // 10 GiB, used when no limit is configured
 
@@ -271,11 +274,14 @@ func (s *BadgerStore) Get(id ID) (Stamp, Payload, error) {
 			return err
 		}
 		return item.Value(func(val []byte) error {
-			if len(val) < blockValHeaderSize+PayloadSize {
+			hdrSize := blockValHeaderSize
+			if len(val) == legacyBlockValHeaderSize+PayloadSize {
+				hdrSize = legacyBlockValHeaderSize
+			} else if len(val) < blockValHeaderSize+PayloadSize {
 				return fmt.Errorf("blockstore: corrupt block value for %x", id)
 			}
 			copy(stamp[:], val[:StampSize])
-			copy(payload[:], val[blockValHeaderSize:blockValHeaderSize+PayloadSize])
+			copy(payload[:], val[hdrSize:hdrSize+PayloadSize])
 			return nil
 		})
 	})

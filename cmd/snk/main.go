@@ -297,11 +297,13 @@ func syncStores(src, dst blockstore.Store) error {
 		for _, ref := range refs {
 			stamp, payload, err := src.Get(ref.ID)
 			if err != nil {
+				log.Printf("sync: get %x: %v", ref.ID, err)
 				errs++
 				continue
 			}
 			already, err := dst.Has(ref.ID)
 			if err != nil {
+				log.Printf("sync: has %x: %v", ref.ID, err)
 				errs++
 				continue
 			}
@@ -310,6 +312,7 @@ func syncStores(src, dst blockstore.Store) error {
 				continue
 			}
 			if _, err := dst.Put(stamp, payload, blockstore.TagPhysical); err != nil {
+				log.Printf("sync: put %x: %v", ref.ID, err)
 				errs++
 				continue
 			}
