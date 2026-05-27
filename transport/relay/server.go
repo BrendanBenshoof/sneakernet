@@ -212,8 +212,22 @@ func (s *Server) handleDelta(w http.ResponseWriter, r *http.Request) {
 }
 
 // GET /v1/pow-limit
-// Returns JSON {"pow_floor":N} — the minimum work_factor this relay accepts.
+// Returns JSON {"pow_floor":N} — the median work_factor currently stored on
+// this node, giving peers a dynamic signal of the network's PoW floor.
+// Falls back to the static powFloor if the backend does not support it.
 func (s *Server) handlePowLimit(w http.ResponseWriter, r *http.Request) {
+	type medianWFer interface {
+		MedianWorkFactor() (int, error)
+	}
+	if m, ok := s.store.(medianWFer); ok {
+		median, err := m.MedianWorkFactor()
+		if err != nil {
+			serverError(w, http.StatusInternalServerError, "store error")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]int{"pow_floor": median - 1})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]int{"pow_floor": s.powFloor})
 }
 
