@@ -770,4 +770,13 @@ const UI_CONFIG = {
   hasLockButton:   false,
   identitiesHint:  'Keys generated in your browser, stored in IndexedDB. Share your <strong>public key</strong> so others can send you messages and verify your identity — one key does both. Keys never leave this browser.',
   sendStatusMsg:   'Block stored on relay.',
+  welcomeHtml: `<div style="max-width:520px;text-align:left">
+    <p style="margin-bottom:18px;font-size:15px;color:var(--text)">Select a conversation from the sidebar, or click <strong>+</strong> to send a new message.</p>
+    <div style="font-size:13px;color:var(--muted);line-height:1.65;background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--accent-line);border-radius:6px;padding:14px 16px">
+      <strong style="color:var(--text);display:block;margin-bottom:8px">You are using the browser client.</strong>
+      <strong style="color:var(--text)">Messages expire in 24 hours.</strong> This browser does not mine proof-of-work, so blocks you send get the minimum TTL. A native node mines PoW that extends lifetime to days — if your contact may not check soon, ask them to also run a node.<br><br>
+      <strong style="color:var(--text)">Your inbox is not saved.</strong> Decrypted messages live in memory and are cleared when you close or reload this tab. Re-scanning will only recover blocks still held by the relay.<br><br>
+      <strong style="color:var(--text)">Keys are stored in this browser only.</strong> Your identities live in this browser's IndexedDB. A different browser, incognito window, or clearing browser data means starting over with a new identity.
+    </div>
+  </div>`,
 };

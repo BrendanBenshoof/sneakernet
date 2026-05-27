@@ -60,6 +60,7 @@ func (s *Server) SetGeoIP(g *GeoIP) {
 
 func (s *Server) routes() {
 	// Public webapp and JSON block API.
+	s.mux.HandleFunc("GET /", s.handleIndex)
 	s.mux.HandleFunc("GET /app", s.handleWebApp)
 	s.mux.HandleFunc("GET /api/blocks", s.handleListBlocks)
 	s.mux.HandleFunc("GET /api/blocks/{id}", s.handleGetBlock)

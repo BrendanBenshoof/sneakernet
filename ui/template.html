@@ -796,7 +796,7 @@
 
     <!-- conversation messages + compose -->
     <div id="conv-view">
-      <div class="empty-state" id="conv-empty">Select a conversation from the sidebar, or click + to send a new message.</div>
+      <div class="empty-state" id="conv-empty"></div>
       <div id="conv-messages"></div>
       <div id="compose-area" class="hidden">
         <div class="compose-ctx" id="compose-ctx"></div>
@@ -889,6 +889,7 @@ function applyConfig() {
   document.title = 'Sneakernet — ' + UI_CONFIG.pageTitle;
   el('lock-subtitle').textContent = UI_CONFIG.lockSubtitle;
   el('sb-subtitle').textContent   = UI_CONFIG.sidebarSubtitle;
+  if (UI_CONFIG.welcomeHtml) el('conv-empty').innerHTML = UI_CONFIG.welcomeHtml;
   if (UI_CONFIG.hasLockButton) {
     const btn = document.createElement('button');
     btn.id          = 'lock-btn';

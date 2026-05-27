@@ -16,6 +16,15 @@ import (
 //go:embed ui/app.html
 var appHTML []byte
 
+//go:embed ui/index.html
+var indexHTML []byte
+
+// GET / — relay landing page.
+func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write(indexHTML)
+}
+
 // GET /app — public webapp served from the relay port.
 func (s *Server) handleWebApp(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

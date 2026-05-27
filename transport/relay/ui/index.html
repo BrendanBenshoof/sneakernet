@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sneakernet relay</title>
+  <script>
+    (function () {
+      try { document.documentElement.setAttribute('data-theme', localStorage.getItem('snk_theme') || 'dark'); }
+      catch (e) { document.documentElement.setAttribute('data-theme', 'dark'); }
+    })();
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    html[data-theme="dark"] {
+      --bg:           #14130f;
+      --surface:      #1c1a14;
+      --surface-2:    #24211a;
+      --border:       #2e2a22;
+      --border-2:     #3d3829;
+      --text:         #ece6d3;
+      --text-strong:  #f7f2e2;
+      --muted:        #8a8270;
+      --muted-2:      #5e5849;
+      --accent:       #c4724f;
+      --accent-hover: #d5876a;
+      --accent-soft:  rgba(196, 114, 79, 0.14);
+      --accent-line:  rgba(196, 114, 79, 0.36);
+      --ok:           #88a874;
+      --warn:         #d4a04a;
+      --on-accent:    #fff;
+      color-scheme: dark;
+    }
+    html[data-theme="light"] {
+      --bg:           #f6f2e7;
+      --surface:      #ece6d4;
+      --surface-2:    #e0d9c2;
+      --border:       #d2cab2;
+      --border-2:     #bdb398;
+      --text:         #1f1c14;
+      --text-strong:  #0d0b06;
+      --muted:        #6c6450;
+      --muted-2:      #948b74;
+      --accent:       #a8552f;
+      --accent-hover: #8c4322;
+      --accent-soft:  rgba(168, 85, 47, 0.10);
+      --accent-line:  rgba(168, 85, 47, 0.30);
+      --ok:           #4f7a3f;
+      --warn:         #8a6418;
+      --on-accent:    #fff;
+      color-scheme: light;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 15px;
+      line-height: 1.65;
+      min-height: 100dvh;
+      padding: 48px 24px 64px;
+      -webkit-font-smoothing: antialiased;
+    }
+    .page { max-width: 660px; margin: 0 auto; }
+
+    header { margin-bottom: 40px; }
+    header h1 {
+      font-size: 28px;
+      font-weight: 700;
+      color: var(--text-strong);
+      letter-spacing: -0.02em;
+      margin-bottom: 6px;
+    }
+    header .sub {
+      font-size: 13px;
+      color: var(--muted);
+      font-family: 'IBM Plex Mono', monospace;
+      letter-spacing: 0.02em;
+    }
+
+    .cta {
+      display: inline-block;
+      margin: 28px 0 40px;
+      background: var(--accent);
+      color: var(--on-accent);
+      font-weight: 600;
+      font-size: 15px;
+      padding: 12px 24px;
+      border-radius: 6px;
+      text-decoration: none;
+      transition: background .15s;
+    }
+    .cta:hover { background: var(--accent-hover); }
+    .cta .arrow { margin-left: 6px; opacity: .8; }
+
+    section { margin-bottom: 36px; }
+    section h2 {
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 12px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+    }
+    p { color: var(--text); margin-bottom: 12px; }
+    p:last-child { margin-bottom: 0; }
+
+    .notice {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--accent-line);
+      border-radius: 6px;
+      padding: 14px 16px;
+      font-size: 13.5px;
+      line-height: 1.6;
+      color: var(--muted);
+    }
+    .notice strong { color: var(--text); font-weight: 600; }
+
+    .limit-list {
+      list-style: none;
+      padding: 0;
+      margin: 12px 0 0;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .limit-list li {
+      font-size: 13.5px;
+      color: var(--muted);
+      padding-left: 18px;
+      position: relative;
+      line-height: 1.55;
+    }
+    .limit-list li::before {
+      content: "—";
+      position: absolute;
+      left: 0;
+      color: var(--muted-2);
+    }
+    .limit-list li strong { color: var(--text); font-weight: 600; }
+
+    footer {
+      margin-top: 56px;
+      padding-top: 20px;
+      border-top: 1px solid var(--border);
+      font-size: 12px;
+      color: var(--muted-2);
+      font-family: 'IBM Plex Mono', monospace;
+    }
+
+    .theme-toggle {
+      position: fixed;
+      top: 16px;
+      right: 16px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 6px 12px;
+      font-size: 12px;
+      color: var(--muted);
+      cursor: pointer;
+      font-family: inherit;
+      transition: color .15s, background .15s;
+    }
+    .theme-toggle:hover { color: var(--text); background: var(--surface-2); }
+  </style>
+</head>
+<body>
+
+<button class="theme-toggle" id="theme-btn">light / dark</button>
+
+<div class="page">
+
+  <header>
+    <h1>Sneakernet</h1>
+    <div class="sub">relay node &mdash; community-operated anonymous messaging</div>
+  </header>
+
+  <a class="cta" href="/app">Open browser client <span class="arrow">→</span></a>
+
+  <section>
+    <h2>What this is</h2>
+    <p>Sneakernet is a tool for people who need to communicate safely when they cannot trust the network — or when there is no network at all. Messages are encrypted end-to-end before they leave your device. Nobody operating this relay can read them. There is no sender field, no addressing header, and no metadata linking any block to any identity. Blocks look like random bytes to everyone except the intended recipient.</p>
+    <p>Messages travel by epidemic routing: each node shares blocks with peers, who share with theirs. This node is one relay in that network — it stores incoming blocks and syncs them with other sneakernet nodes. When your device connects, it fetches blocks and tries to decrypt them. Only the ones addressed to your key will open.</p>
+    <p>Transport can be internet relay (this node), local network peer discovery, or physical media — USB drives handed between people. The system keeps working even when parts of it fail or are cut off.</p>
+  </section>
+
+  <section>
+    <h2>Using the browser client</h2>
+    <p>The browser client at <a href="/app" style="color:var(--accent)">/app</a> lets you send and receive messages from any device without installing anything. All cryptography runs in your browser — this server never sees your keys or your plaintext.</p>
+
+    <div class="notice">
+      <strong>The browser client has real limitations.</strong> For anything time-sensitive or high-stakes, a native node or phone app is much safer.
+      <ul class="limit-list">
+        <li><strong>Messages expire in 24 hours.</strong> The browser sends blocks with no proof-of-work stamp. Native nodes mine PoW that extends block lifetime to days. Unread browser messages may be gone before your contact checks.</li>
+        <li><strong>Your inbox is not saved.</strong> Decrypted messages live in memory and vanish when you close or reload the tab. Re-scanning only recovers blocks still on the relay.</li>
+        <li><strong>Keys are this browser only.</strong> Identities live in IndexedDB for this browser on this device. A different browser, an incognito window, or clearing browser storage means starting over.</li>
+        <li><strong>No key encryption at rest.</strong> Identity keys sit as plaintext in browser storage, protected only by the browser's same-origin policy. A native node encrypts keys behind a passphrase.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <h2>Running your own node</h2>
+    <p>Anyone can run a relay and contribute storage and bandwidth to the network. The more people running nodes, the longer messages survive and the harder the network is to disrupt. Running a node is an act of mutual support — you are helping everyone who uses this network maintain their ability to communicate.</p>
+    <p>The source code and setup instructions are at <span style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--accent)">github.com/brendanbenshoof/sneakernet</span>.</p>
+  </section>
+
+  <footer>sneakernet relay &mdash; blocks are opaque &mdash; no logs, no accounts, no tracking</footer>
+
+</div>
+
+<script>
+  (function () {
+    var btn = document.getElementById('theme-btn');
+    if (!btn) return;
+    btn.addEventListener('click', function () {
+      var cur = document.documentElement.getAttribute('data-theme') || 'dark';
+      var next = cur === 'light' ? 'dark' : 'light';
+      document.documentElement.setAttribute('data-theme', next);
+      try { localStorage.setItem('snk_theme', next); } catch (e) {}
+    });
+  })();
+</script>
+
+</body>
+</html>
