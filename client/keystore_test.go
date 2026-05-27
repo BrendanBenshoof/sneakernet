@@ -172,7 +172,7 @@ func TestKeystoreMultiKeyClient(t *testing.T) {
 			t.Fatal(err)
 		}
 		var stamp blockstore.Stamp
-		if _, err := bs.Put(stamp, payload); err != nil {
+		if _, err := bs.Put(stamp, payload, blockstore.TagPhysical); err != nil {
 			t.Fatal(err)
 		}
 	}

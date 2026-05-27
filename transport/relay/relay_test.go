@@ -107,7 +107,7 @@ func TestDelta(t *testing.T) {
 	id2, _ := client.Put(context.Background(), stamp2, payload2)
 
 	// Local store has only block 1.
-	localStore.Put(stamp1, payload1)
+	localStore.Put(stamp1, payload1, blockstore.TagPhysical)
 
 	bloom, err := relay.BloomOfStore(localStore)
 	if err != nil {
@@ -144,7 +144,7 @@ func TestDeltaEmptyResult(t *testing.T) {
 	client.Put(context.Background(), stamp, payload)
 
 	// Local store has the same block.
-	localStore.Put(stamp, payload)
+	localStore.Put(stamp, payload, blockstore.TagPhysical)
 
 	bloom, _ := relay.BloomOfStore(localStore)
 	ids, err := client.Delta(context.Background(), bloom, 0, time.Time{})
@@ -162,8 +162,8 @@ func TestPull(t *testing.T) {
 	// Put blocks on the relay directly.
 	stamp1, payload1 := makeBlock(10)
 	stamp2, payload2 := makeBlock(20)
-	remoteStore.Put(stamp1, payload1)
-	remoteStore.Put(stamp2, payload2)
+	remoteStore.Put(stamp1, payload1, blockstore.TagPhysical)
+	remoteStore.Put(stamp2, payload2, blockstore.TagPhysical)
 
 	n, err := client.Pull(context.Background(), localStore, 0, time.Time{})
 	if err != nil {
@@ -189,8 +189,8 @@ func TestPush(t *testing.T) {
 
 	stamp1, payload1 := makeBlock(30)
 	stamp2, payload2 := makeBlock(40)
-	localStore.Put(stamp1, payload1)
-	localStore.Put(stamp2, payload2)
+	localStore.Put(stamp1, payload1, blockstore.TagPhysical)
+	localStore.Put(stamp2, payload2, blockstore.TagPhysical)
 
 	n, err := client.Push(context.Background(), localStore, 0, time.Time{})
 	if err != nil {
@@ -339,7 +339,7 @@ func TestWebBlockEndpoints(t *testing.T) {
 
 	// Seed a block directly into the store.
 	stamp, payload := makeBlock(0x42)
-	id, err := store.Put(stamp, payload)
+	id, err := store.Put(stamp, payload, blockstore.TagPhysical)
 	if err != nil {
 		t.Fatalf("seed block: %v", err)
 	}

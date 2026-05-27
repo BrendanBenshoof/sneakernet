@@ -26,7 +26,7 @@ func TestBuildAndOpenIndex(t *testing.T) {
 	for i := range ids {
 		var p blockstore.Payload
 		p[0] = byte(i + 1)
-		id, err := store.Put(stamp, p)
+		id, err := store.Put(stamp, p, blockstore.TagPhysical)
 		if err != nil {
 			t.Fatal("Put:", err)
 		}
@@ -78,7 +78,7 @@ func TestBuildShardedIndex(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		var p blockstore.Payload
 		p[0] = byte(i + 1)
-		id, err := store.Put(stamp, p)
+		id, err := store.Put(stamp, p, blockstore.TagPhysical)
 		if err != nil {
 			t.Fatal("Put:", err)
 		}

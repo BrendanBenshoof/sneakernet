@@ -42,7 +42,7 @@ func TestScrape(t *testing.T) {
 			t.Fatalf("Encrypt: %v", err)
 		}
 		var stamp blockstore.Stamp
-		if _, err := bs.Put(stamp, payload); err != nil {
+		if _, err := bs.Put(stamp, payload, blockstore.TagPhysical); err != nil {
 			t.Fatalf("Put: %v", err)
 		}
 	}
@@ -53,7 +53,7 @@ func TestScrape(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stamp blockstore.Stamp
-	if _, err := bs.Put(stamp, noise); err != nil {
+	if _, err := bs.Put(stamp, noise, blockstore.TagPhysical); err != nil {
 		t.Fatal(err)
 	}
 
@@ -173,7 +173,7 @@ func TestCheckpointAdvances(t *testing.T) {
 			t.Fatal(err)
 		}
 		var stamp blockstore.Stamp
-		if _, err := bs.Put(stamp, payload); err != nil {
+		if _, err := bs.Put(stamp, payload, blockstore.TagPhysical); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -233,7 +233,7 @@ func TestFragmentReassembly(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := bs.Put(stamp, payload); err != nil {
+		if _, err := bs.Put(stamp, payload, blockstore.TagPhysical); err != nil {
 			t.Fatal(err)
 		}
 	}

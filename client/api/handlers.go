@@ -374,7 +374,7 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var stamp blockstore.Stamp
-		id, err := s.blocks.Put(stamp, payload)
+		id, err := s.blocks.Put(stamp, payload, blockstore.TagPhysical)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to store block")
 			return
@@ -423,7 +423,7 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "failed to encrypt fragment")
 			return
 		}
-		id, err := s.blocks.Put(stamp, payload)
+		id, err := s.blocks.Put(stamp, payload, blockstore.TagPhysical)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to store fragment block")
 			return
@@ -628,7 +628,7 @@ func (s *Server) handleSendChannel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var stamp blockstore.Stamp
-	id, err := s.blocks.Put(stamp, payload)
+	id, err := s.blocks.Put(stamp, payload, blockstore.TagPhysical)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to store block")
 		return

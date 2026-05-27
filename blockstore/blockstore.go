@@ -23,11 +23,22 @@ type ID = [IDSize]byte
 type Stamp = [StampSize]byte
 type Payload = [PayloadSize]byte
 
+// Tag classifies the origin of a block for storage prioritization.
+type Tag uint8
+
+const (
+	TagPhysical Tag = iota // physical sneakernet (USB, QR, locally authored)
+	TagLan                 // same local network
+	TagRegional            // regional peer
+	TagGlobal              // internet relay
+)
+
 // BlockRef is a lightweight handle returned by ListBlocks.
 type BlockRef struct {
 	WorkFactor int
 	ID         ID
 	CreatedAt  int64 // unix seconds
+	Tag        Tag
 }
 
 // Token returns an opaque cursor that can be passed as pageToken to
@@ -38,7 +49,7 @@ func (r BlockRef) Token() string {
 
 // Store is the interface every blockstore backend must satisfy.
 type Store interface {
-	Put(stamp Stamp, payload Payload) (ID, error)
+	Put(stamp Stamp, payload Payload, tag Tag) (ID, error)
 	Get(id ID) (Stamp, Payload, error)
 	Has(id ID) (bool, error)
 	ListIDs() ([]ID, error)
@@ -48,6 +59,11 @@ type Store interface {
 	// when no further pages exist.
 	ListBlocks(pageToken string, limit int, powFloor int, since time.Time) (nextToken string, blocks []BlockRef, err error)
 	Prune() (int, error)
+	// Evict removes up to n blocks in soonest-to-expire order, preferring tags
+	// that exceed their storage reservation. A tombstone with the block's
+	// remaining TTL is written for each evicted ID so it is not re-accepted
+	// before it would have naturally expired. Returns the count evicted.
+	Evict(n int) (int, error)
 	Close() error
 }
 

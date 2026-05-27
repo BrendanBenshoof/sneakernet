@@ -43,7 +43,7 @@ func (s *FlatFileStore) blockPath(id ID) string {
 	return filepath.Join(s.root, h[:2], h[2:4], h)
 }
 
-func (s *FlatFileStore) Put(stamp Stamp, payload Payload) (ID, error) {
+func (s *FlatFileStore) Put(stamp Stamp, payload Payload, _ Tag) (ID, error) {
 	id := ComputeID(payload)
 	wf := WorkFactor(stamp, payload)
 	now := time.Now()
@@ -264,5 +264,7 @@ func (s *FlatFileStore) Prune() (int, error) {
 	})
 	return count, err
 }
+
+func (s *FlatFileStore) Evict(_ int) (int, error) { return 0, nil }
 
 func (s *FlatFileStore) Close() error { return nil }

@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"time"
 
@@ -30,6 +31,7 @@ type Server struct {
 	powFloor   int
 	mux        *http.ServeMux
 	peerSource func() []string
+	geoip      *GeoIP // optional; nil = LAN-or-Global only
 }
 
 // NewServer creates a relay Server. powFloor is the minimum work_factor
@@ -48,6 +50,12 @@ func NewServer(store blockstore.Store, powFloor int) *Server {
 // peer base URLs. Called by GET /v1/peers so peers can gossip the network.
 func (s *Server) SetPeerSource(fn func() []string) {
 	s.peerSource = fn
+}
+
+// SetGeoIP attaches a GeoIP classifier that enables regional tagging of
+// inbound blocks. Without it, blocks are tagged LAN or Global only.
+func (s *Server) SetGeoIP(g *GeoIP) {
+	s.geoip = g
 }
 
 func (s *Server) routes() {
@@ -129,7 +137,13 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, err := s.store.Put(stamp, payload)
+	var tag blockstore.Tag
+	if s.geoip != nil {
+		tag = s.geoip.Tag(r.RemoteAddr)
+	} else {
+		tag = tagFromRemoteAddr(r.RemoteAddr)
+	}
+	id, err := s.store.Put(stamp, payload, tag)
 	if err != nil {
 		serverError(w, http.StatusInternalServerError, "storage error")
 		return
@@ -214,6 +228,19 @@ func (s *Server) handlePeers(w http.ResponseWriter, r *http.Request) {
 		peers = []string{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"peers": peers})
+}
+
+// tagFromRemoteAddr returns TagLan for private/loopback IPs, TagGlobal otherwise.
+func tagFromRemoteAddr(addr string) blockstore.Tag {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	ip := net.ParseIP(host)
+	if ip != nil && (ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast()) {
+		return blockstore.TagLan
+	}
+	return blockstore.TagGlobal
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
