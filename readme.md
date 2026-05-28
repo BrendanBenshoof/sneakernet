@@ -1,13 +1,8 @@
-
 SNEAKERNET
 ==========
 
 > Never underestimate the bandwidth of a station wagon full of tapes hurtling down the highway.
 > - Andrew S. Tanenbaum
-
-### WARNING This repo is not ready for release ###
-
-please don't share it yet further than yourself. That moment will come in a few weeks.
 
 # What is this?
 
@@ -15,11 +10,19 @@ Sneakernet is a tool for people who need to communicate safely when they cannot 
 
 The name comes from the old practice of carrying data physically: by foot, by hand, on a USB drive. That is still a transport mode here. But the system extends that idea to cover every way people actually pass information to each other: local wireless networks, internet relays run by community members, and literal physical media exchanged in person.
 
+## Why it matters
+
+The right to communicate privately is not a product feature. It is something people need to support each other, organize, stay safe, and maintain dignity. That right is routinely attacked — by states, by platforms, by network operators who surveil or throttle traffic.
+
+This project is a tool for people to help each other maintain that right, without depending on any company, server, or infrastructure they do not control. Anyone can run a relay node and contribute storage and bandwidth to the network. Anyone can carry a USB drive and be a link in the chain. The system is designed to keep working even when parts of it fail or are attacked.
+
+There is no central point to shut down, no account to deactivate.
+
 ## The problem it solves
 
 Most communication tools either require trusting a central server or trust the network to keep your metadata private. Both assumptions fail under exactly the conditions when safe communication matters most — surveillance, censorship, infrastructure shutdowns, or adversarial network operators.
 
-Sneakernet is built for those conditions. It works with intermittent connectivity. It does not require any central authority. And it is designed so that an adversary who intercepts traffic cannot determine who is talking to whom, or even that any particular block of data is a message rather than noise.
+It works with intermittent connectivity. It does not require any central authority. And it is designed so that an adversary who intercepts traffic cannot determine who is talking to whom, or even that any particular block of data is a message rather than noise.
 
 ## How it works
 
@@ -55,13 +58,26 @@ Senders can optionally sign messages with an Ed25519 identity key, which lets re
 
 Messages can span multiple blocks via fragmentation, and replies carry a skip-list of thread references so conversations can be reconstructed without requiring access to the full history — important when messages arrive out of order or some blocks have already expired.
 
-## Why it matters
+### What this doesn't protect
 
-The right to communicate privately is not a product feature. It is something people need to support each other, organize, stay safe, and maintain dignity. That right is routinely attacked — by states, by platforms, by network operators who surveil or throttle traffic.
+Sneakernet addresses the network and metadata layer. It does not address everything:
 
-This project is a tool for people to help each other maintain that right, without depending on any company, server, or infrastructure they do not control. Anyone can run a relay node and contribute storage and bandwidth to the network. Anyone can carry a USB drive and be a link in the chain. The system is designed to keep working even when parts of it fail or are attacked.
+- **Endpoint security** — if the device running the node is compromised, the system cannot help. Protect your device.
+- **Relay access visibility** — an observer watching a relay's IP traffic can see which IPs connect to it, even though they cannot see what those connections carry. Using a relay you or your community operates reduces this risk.
+- **Browser client limitations** — the browser UI has weaker security than a native node: keys are stored in IndexedDB (cleared with browser data), there is no proof-of-work mining so messages get the minimum 24-hour TTL, and the inbox is memory-only and lost on page reload. See [web_client.md](web_client.md) for a full comparison.
 
-There is no central point to shut down, no account to deactivate, no metadata to subpoena.
+## Getting started
+
+```
+git clone https://github.com/brendanbenshoof/sneakernet
+cd sneakernet
+go build ./cmd/snk
+./snk node -peers https://relay.example.com
+```
+
+Open `http://127.0.0.1:8080` in a browser to use the local interface.
+
+See **[RUNNING.md](RUNNING.md)** for all options: running a relay, syncing to a USB volume, storage limits, LAN peering, and more.
 
 ## What is in this repository
 
@@ -73,5 +89,5 @@ transport/
 client/         Message encryption/decryption, keystore, inbox, message format
 client/api/     HTTP API for local node access (used by web UI and mobile clients)
 ui/             Web interface (browser-side and server-side rendering modes)
-cmd/snk/        CLI: `snk relay` to run a node, `snk mass-storage` to sync to a USB volume
+cmd/snk/        CLI: `snk node` (personal), `snk relay` (public relay), `snk mass-storage` (USB sync)
 ```

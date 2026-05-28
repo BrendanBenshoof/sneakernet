@@ -186,8 +186,8 @@
   <section>
     <h2>What this is</h2>
     <p>Sneakernet is a tool for people who need to communicate safely when they cannot trust the network — or when there is no network at all. Messages are encrypted end-to-end before they leave your device. Nobody operating this relay can read them. There is no sender field, no addressing header, and no metadata linking any block to any identity. Blocks look like random bytes to everyone except the intended recipient.</p>
-    <p>Messages travel by epidemic routing: each node shares blocks with peers, who share with theirs. This node is one relay in that network — it stores incoming blocks and syncs them with other sneakernet nodes. When your device connects, it fetches blocks and tries to decrypt them. Only the ones addressed to your key will open.</p>
-    <p>Transport can be internet relay (this node), local network peer discovery, or physical media — USB drives handed between people. The system keeps working even when parts of it fail or are cut off.</p>
+    <p>Everything stored and exchanged is a fixed 4096-byte block of opaque data. Blocks spread through the network by epidemic routing: each node shares blocks with peers, who share with theirs. This node is one relay in that network — it stores incoming blocks and syncs them with other sneakernet nodes. When your device connects, it fetches blocks and tries to decrypt them. Only the ones addressed to your key will open.</p>
+    <p>There are three ways blocks move: <strong>relay nodes</strong> like this one (internet-accessible, community-operated), <strong>LAN sync</strong> (nodes on the same local network find each other automatically), and <strong>physical sync</strong> — blocks exported to a USB drive and handed to someone, who plugs it in and absorbs the data. There is no central point to shut down, no account to deactivate.</p>
   </section>
 
   <section>
@@ -208,7 +208,7 @@
   <section>
     <h2>Running your own node</h2>
     <p>Anyone can run a relay and contribute storage and bandwidth to the network. The more people running nodes, the longer messages survive and the harder the network is to disrupt. Running a node is an act of mutual support — you are helping everyone who uses this network maintain their ability to communicate.</p>
-    <p>The source code and setup instructions are at <span style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--accent)">github.com/brendanbenshoof/sneakernet</span>.</p>
+    <p>Source code and setup instructions: <span style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--accent)">github.com/brendanbenshoof/sneakernet</span>. See <span style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--accent)">RUNNING.md</span> in the repo for relay configuration, storage limits, and peering options.</p>
   </section>
 
   <footer>sneakernet relay &mdash; blocks are opaque &mdash; no logs, no accounts, no tracking</footer>

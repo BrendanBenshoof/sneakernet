@@ -37,8 +37,6 @@ A dedicated node running on a laptop or server handles this invisibly in the bac
 
 ## What is and is not persisted
 
-This is the most important thing to understand about the browser client.
-
 | Data | Where stored | Survives reload? | Survives clearing browser data? |
 |------|-------------|-----------------|-------------------------------|
 | Identity keys | IndexedDB | Yes | No |
@@ -60,4 +58,4 @@ This is the most important thing to understand about the browser client.
 
 Use it when you need to check in from a device you do not control — a borrowed laptop, a library terminal, a phone you do not want to install anything on. It is also a reasonable way to get started before setting up a native node.
 
-For day-to-day use, and especially for anything time-sensitive, a native node or app is much better. It mines real PoW so messages live longer. It decrypts in the background without draining a browser tab. It persists your inbox and keystore properly. The web client is an on-ramp and an emergency fallback, not the intended way to rely on this network.
+For day-to-day use, and especially for anything time-sensitive, a native node or app is much better. It mines real PoW so messages live longer. It decrypts in the background without draining a browser tab. It persists your inbox and keystore properly. The web client is a way to get started and a fallback for devices you do not control, not the intended way to rely on this network.
