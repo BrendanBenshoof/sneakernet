@@ -400,16 +400,14 @@
       padding: 18px 18px 20px;
     }
 
-    .filter-notice {
+    .blocked-node {
       display: flex;
-      align-items: center;
-      gap: 6px;
-      padding: 5px 14px;
-      font-size: 11px;
+      gap: 0;
+      padding: 2px 0;
+    }
+    .blocked-node .gap-label {
       color: var(--err, #e05);
-      border-bottom: 1px solid color-mix(in srgb, var(--err, #e05) 20%, transparent);
-      background: color-mix(in srgb, var(--err, #e05) 6%, transparent);
-      flex-shrink: 0;
+      opacity: 1;
     }
 
     .empty-state {
@@ -1487,13 +1485,13 @@ function isAnonymousMsg(m) {
   return !claimedName;
 }
 
-let filteredCounts = new Map(); // channel name → count of filter-blocked messages
+let filteredMsgs = new Map(); // channel name → array of filter-blocked messages
 
 function rebuildConversations() {
   const chMap   = new Map();
   const dirMap  = new Map();
   const unknown = [];
-  filteredCounts = new Map();
+  filteredMsgs = new Map();
 
   const byIdentity = activeIdentity
     ? allMessages.filter(m => m.decrypted_by === activeIdentity.name || !m.decrypted_by)
@@ -1501,8 +1499,10 @@ function rebuildConversations() {
 
   if (_filterAnon) {
     for (const m of byIdentity) {
-      if (m.channel && isAnonymousMsg(m))
-        filteredCounts.set(m.channel, (filteredCounts.get(m.channel) || 0) + 1);
+      if (m.channel && isAnonymousMsg(m)) {
+        if (!filteredMsgs.has(m.channel)) filteredMsgs.set(m.channel, []);
+        filteredMsgs.get(m.channel).push(m);
+      }
     }
   }
 
@@ -1757,16 +1757,6 @@ function renderMessages(conv, scrollToBottom = false) {
   el('conv-empty').classList.add('hidden');
   container.innerHTML = '';
 
-  if (conv.kind === 'channel') {
-    const blocked = filteredCounts.get(conv.name) || 0;
-    if (blocked > 0) {
-      const notice = document.createElement('div');
-      notice.className = 'filter-notice';
-      notice.textContent = `⛔ ${blocked} blocked message${blocked === 1 ? '' : 's'}`;
-      container.appendChild(notice);
-    }
-  }
-
   if (!conv.messages.length) {
     const empty = document.createElement('div');
     empty.className = 'empty-state';
@@ -1795,9 +1785,22 @@ function renderMessages(conv, scrollToBottom = false) {
     }
   }
 
+  // Merge filtered (blocked) messages into the visible sequence by received_at
+  // so blocked-message chips appear at the right chronological position.
+  const blocked = conv.kind === 'channel'
+    ? (filteredMsgs.get(conv.name) || []).slice().sort((a,b) => a.received_at < b.received_at ? -1 : 1)
+    : [];
+  let bi = 0;
+
   const frag = document.createDocumentFragment();
   for (let i = 0; i < sorted.length; i++) {
     const m           = sorted[i];
+
+    // Emit a chip for any blocked messages that fall before this visible message
+    let runCount = 0;
+    while (bi < blocked.length && blocked[bi].received_at <= m.received_at) { bi++; runCount++; }
+    if (runCount > 0) frag.appendChild(makeBlockedNode(runCount));
+
     const directPred  = m.thread_refs?.[0];
     const hasRef      = directPred && directPred !== ZERO64;
     const predInConv  = hasRef && convIds.has(directPred);
@@ -1818,6 +1821,8 @@ function renderMessages(conv, scrollToBottom = false) {
       hasDirectSucc,
     }));
   }
+  // Any blocked messages after all visible messages
+  if (bi < blocked.length) frag.appendChild(makeBlockedNode(blocked.length - bi));
   container.appendChild(frag);
   if (atBottom) container.scrollTop = container.scrollHeight;
 }
@@ -1832,6 +1837,19 @@ function makeGapNode(blockId) {
       <div class="gap-line-bottom"></div>
     </div>
     <div class="gap-label">╌╌╌ gap — ${blockId.slice(0,12)}… missing</div>`;
+  return div;
+}
+
+function makeBlockedNode(count) {
+  const div = document.createElement('div');
+  div.className = 'blocked-node';
+  div.innerHTML = `
+    <div class="gap-connector-col">
+      <div class="gap-line-top"></div>
+      <div style="width:6px;height:6px;border-radius:50%;background:var(--err,#e05);flex-shrink:0"></div>
+      <div class="gap-line-bottom"></div>
+    </div>
+    <div class="gap-label">⛔ ${count} blocked message${count === 1 ? '' : 's'}</div>`;
   return div;
 }
 
