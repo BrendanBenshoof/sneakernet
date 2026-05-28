@@ -301,8 +301,9 @@
       font-family: var(--mono);
       font-size: 12px;
     }
-    .sb-item .sb-close { display: none; padding: 1px 5px; font-size: 14px; }
-    .sb-item:hover .sb-close { display: inline-flex; }
+    .sb-item .sb-close { display: inline-flex; padding: 1px 5px; font-size: 14px; opacity: 0; transition: opacity 0.15s; }
+    .sb-item:hover .sb-close { opacity: 1; }
+    @media (hover: none) { .sb-item .sb-close { opacity: 1; } }
 
     #sb-footer {
       border-top: 1px solid var(--border);
@@ -856,7 +857,7 @@
     </div>
     <div id="sb-footer">
       <button id="scrape-btn" title="Refresh — Shift+click to rescan all blocks"><span class="glyph">&#x27F3;</span> Refresh</button>
-      <button id="identities-btn"><span class="glyph">&#x2299;</span> Identities &amp; Channels</button>
+      <button id="identities-btn"><span class="glyph">&#x2299;</span> Identities &amp; Contacts</button>
       <button id="settings-btn"><span class="glyph">&#x2699;</span> Settings</button>
     </div>
   </nav>
@@ -896,11 +897,6 @@
           <input id="new-id-name" placeholder="Identity name">
           <button class="sm" id="add-id-btn">Add</button>
         </div>
-      </div>
-      <div class="panel-section">
-        <h2>Channels</h2>
-        <p class="hint">Channels use a symmetric key derived from a shared passphrase. Anyone who knows the passphrase can post and read &mdash; it is not a secret password.</p>
-        <div id="ch-list"></div>
       </div>
       <div class="panel-section">
         <h2>Contacts</h2>
@@ -2239,7 +2235,10 @@ function rebuildConversations() {
   }
 
   conversations = [];
-  for (const [name, msgs] of chMap) conversations.push({kind:'channel', name, messages:msgs});
+  for (const [name, msgs] of chMap) {
+    const conv = {kind:'channel', name, messages:msgs};
+    if (!isHidden(conv)) conversations.push(conv);
+  }
   for (const [, info] of dirMap) {
     const conv = {kind:'direct', name:info.name, pub:info.pub, messages:info.messages};
     if (!isHidden(conv)) conversations.push(conv);
@@ -2306,20 +2305,34 @@ function causalHead(msgs) {
   return sorted.length ? sorted[sorted.length - 1].block_id : null;
 }
 
-// ── hidden conversations (in-memory; resets on reload) ────────────────────
+// ── hidden conversations ───────────────────────────────────────────────────
 // Map of convKey → ISO timestamp when hidden. Auto-unhides if a message
 // arrives after that timestamp so new inbound messages always reappear.
-const hiddenConvs = new Map();
+const hiddenConvs = (function() {
+  try {
+    return new Map(Object.entries(JSON.parse(localStorage.getItem('snk_hidden_convs') || '{}')));
+  } catch { return new Map(); }
+})();
+
+function saveHiddenConvs() {
+  localStorage.setItem('snk_hidden_convs', JSON.stringify(Object.fromEntries(hiddenConvs)));
+}
 
 function hideConv(conv) {
   hiddenConvs.set(convKey(conv), new Date().toISOString());
+  saveHiddenConvs();
+}
+
+function unhideConv(conv) {
+  hiddenConvs.delete(convKey(conv));
+  saveHiddenConvs();
 }
 
 function isHidden(conv) {
   const since = hiddenConvs.get(convKey(conv));
   if (!since) return false;
   if (conv.messages.some(m => m.received_at > since)) {
-    hiddenConvs.delete(convKey(conv));
+    unhideConv(conv);
     return false;
   }
   return true;
@@ -2386,8 +2399,9 @@ function makeSbItem(conv) {
   const prefix = conv.kind === 'channel' ? '<span class="sb-hash">#</span> ' : '';
   const unread = conv.messages.filter(m => !seenBlocks.has(m.block_id) && !identities.some(id => id.public_key === m.sender_pub)).length;
   const badge     = unread > 0 ? `<span class="sb-badge">${unread}</span>` : '';
-  const closeBtn  = conv.kind === 'direct'
-    ? '<button class="icon sb-close" title="Close conversation" tabindex="-1">&times;</button>'
+  const closeTip  = conv.kind === 'channel' ? 'Leave channel' : 'Close conversation';
+  const closeBtn  = (conv.kind === 'direct' || conv.kind === 'channel')
+    ? `<button class="icon sb-close" title="${closeTip}" tabindex="-1">&times;</button>`
     : '';
   div.innerHTML = `${prefix}<span class="sb-name">${esc(conv.name)}</span>${badge}${closeBtn}`;
   div.addEventListener('click', () => openConversation(conv));
@@ -2405,6 +2419,12 @@ function makeSbItem(conv) {
       }
       rebuildConversations();
       renderSidebar();
+    });
+  } else if (conv.kind === 'channel') {
+    div.querySelector('.sb-close').addEventListener('click', e => {
+      e.stopPropagation();
+      hideConv(conv);
+      removeChannel(conv.name);
     });
   }
   return div;
@@ -2442,7 +2462,16 @@ function renderMessages(conv, scrollToBottom = false) {
   if (!conv.messages.length) {
     const empty = document.createElement('div');
     empty.className = 'empty-state';
-    empty.textContent = 'No messages yet.';
+    if (conv.kind === 'channel') {
+      empty.innerHTML = '<p>No messages yet.</p><button class="sm ghost" id="ch-history-btn">Scan for history</button>';
+      empty.querySelector('#ch-history-btn').addEventListener('click', function() {
+        this.disabled = true;
+        this.textContent = 'Scanning…';
+        scrape(true);
+      });
+    } else {
+      empty.textContent = 'No messages yet.';
+    }
     container.appendChild(empty);
     return;
   }
@@ -2703,7 +2732,7 @@ function submitDmForm() {
   const recip = parseRecipientInput(raw);
   if (!recip) { toast('Invalid recipient — paste a snk: URI or public key.', true); return; }
   closeDmForm();
-  hiddenConvs.delete(convKey({kind: 'direct', pub: recip.key}));
+  unhideConv({kind: 'direct', pub: recip.key});
   rebuildConversations();
   renderSidebar();
   const existing = conversations.find(c => c.kind !== 'channel' && c.pub === recip.key);
@@ -2844,10 +2873,9 @@ async function openPanel() {
   el('conv-view').classList.add('hidden');
   el('settings-view').classList.add('hidden');
   el('panel-view').classList.remove('hidden');
-  el('conv-title').textContent = 'Identities, Channels & Contacts';
+  el('conv-title').textContent = 'Identities & Contacts';
   el('conv-sub').textContent   = '';
   renderIdentities();
-  renderChannelList();
   await renderContacts();
   renderSidebar();
 }
@@ -3042,26 +3070,6 @@ async function loadChannels() {
   channels = await backend.listChannels();
 }
 
-function renderChannelList() {
-  const list = el('ch-list');
-  list.innerHTML = '';
-  if (!channels.length) {
-    list.innerHTML = '<div style="font-size:12px;color:var(--muted)">No channels joined yet.</div>';
-    return;
-  }
-  for (const ch of channels) {
-    const div = document.createElement('div');
-    div.className = 'card';
-    div.style.flexDirection = 'row';
-    div.style.alignItems    = 'center';
-    div.innerHTML = `
-      <span class="ch-badge">#</span>
-      <span style="flex:1;font-size:13px;font-weight:500;margin-left:6px">${esc(ch.name)}</span>
-      <button class="sm ghost" data-name="${esc(ch.name)}">Leave</button>`;
-    div.querySelector('.sm.ghost').addEventListener('click', () => removeChannel(ch.name));
-    list.appendChild(div);
-  }
-}
 
 async function joinDefaultChannel(name) {
   const existing = conversations.find(c => c.kind === 'channel' && c.name === name);
@@ -3071,9 +3079,9 @@ async function joinDefaultChannel(name) {
   } catch(e) {
     if (e.message !== 'duplicate') { toast('Failed to join channel.', true); return; }
   }
+  unhideConv({kind: 'channel', name});
   await loadChannels();
   rebuildConversations();
-  renderChannelList();
   renderSidebar();
   const conv = conversations.find(c => c.kind === 'channel' && c.name === name);
   if (conv) openConversation(conv);
@@ -3092,9 +3100,9 @@ async function addChannel() {
   }
   el('new-ch-pass').value = '';
   el('sb-ch-form').classList.add('hidden');
+  unhideConv({kind: 'channel', name});
   await loadChannels();
   rebuildConversations();
-  renderChannelList();
   renderSidebar();
   const newConv = conversations.find(c => c.kind === 'channel' && c.name === name);
   if (newConv) openConversation(newConv);
@@ -3109,7 +3117,6 @@ async function removeChannel(name) {
   }
   await loadChannels();
   rebuildConversations();
-  renderChannelList();
   renderSidebar();
   toast(`Left channel "${name}".`);
 }
