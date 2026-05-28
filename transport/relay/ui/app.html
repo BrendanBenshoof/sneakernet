@@ -496,6 +496,12 @@
       color: var(--muted);
     }
     .snk-inline-card .snk-card-uri { flex: 1; word-break: break-all; }
+    .contact-blocked-badge {
+      font-size: 10px; font-weight: 600; letter-spacing: .03em;
+      color: var(--danger, #c00); background: color-mix(in srgb, var(--danger,#c00) 12%, transparent);
+      border: 1px solid color-mix(in srgb, var(--danger,#c00) 30%, transparent);
+      border-radius: var(--r-sm, 4px); padding: 1px 6px; margin-left: 6px;
+    }
 
     .msg-time { color: var(--muted); }
     .msg-time.delayed { color: var(--warn); }
@@ -2236,6 +2242,12 @@ function isAnonymousMsg(m) {
   return !claimedName;
 }
 
+function isFilteredMsg(m) {
+  if (m.sender_pub && blockedKeys.has(m.sender_pub)) return true;
+  if (_filterAnon && isAnonymousMsg(m)) return true;
+  return false;
+}
+
 let filteredMsgs = new Map(); // channel name → array of filter-blocked messages
 
 function rebuildConversations() {
@@ -2248,16 +2260,14 @@ function rebuildConversations() {
     ? allMessages.filter(m => m.decrypted_by === activeIdentity.name || !m.decrypted_by)
     : allMessages;
 
-  if (_filterAnon) {
-    for (const m of byIdentity) {
-      if (m.channel && isAnonymousMsg(m)) {
-        if (!filteredMsgs.has(m.channel)) filteredMsgs.set(m.channel, []);
-        filteredMsgs.get(m.channel).push(m);
-      }
+  for (const m of byIdentity) {
+    if (m.channel && isFilteredMsg(m)) {
+      if (!filteredMsgs.has(m.channel)) filteredMsgs.set(m.channel, []);
+      filteredMsgs.get(m.channel).push(m);
     }
   }
 
-  const relevant = _filterAnon ? byIdentity.filter(m => !isAnonymousMsg(m)) : byIdentity;
+  const relevant = byIdentity.filter(m => !isFilteredMsg(m));
 
   for (const m of relevant) {
     if (m.channel) {
@@ -2646,8 +2656,9 @@ function toggleSnkCard(senderEl) {
   const {snkUri: uri, snkName: name, snkKey: key} = senderEl.dataset;
   const card = document.createElement('div');
   card.className = 'snk-inline-card';
-  card.innerHTML = `<span class="snk-card-uri">${esc(uri)}</span><button class="sm">Add contact</button>`;
-  card.querySelector('button').addEventListener('click', async e => {
+  card.innerHTML = `<span class="snk-card-uri">${esc(uri)}</span><button class="sm">Add contact</button><button class="sm danger">Block</button>`;
+
+  card.querySelector('.sm:not(.danger)').addEventListener('click', async e => {
     e.stopPropagation();
     try {
       await backend.addContact(name, key);
@@ -2660,6 +2671,22 @@ function toggleSnkCard(senderEl) {
       toast(err.message === 'duplicate' ? 'Already in contacts.' : 'Failed to add contact.', true);
     }
   });
+
+  card.querySelector('.sm.danger').addEventListener('click', async e => {
+    e.stopPropagation();
+    try {
+      await backend.addContact(name, key);
+    } catch(err) {
+      if (err.message !== 'duplicate') { toast('Failed to add contact.', true); return; }
+    }
+    blockKey(key);
+    card.remove(); senderEl._snkCard = null;
+    await loadContacts();
+    rebuildConversations(); renderSidebar();
+    if (currentView) rerenderCurrentView();
+    toast(`Blocked "${name}".`);
+  });
+
   senderEl._snkCard = card;
   senderEl.closest('.msg-meta').insertAdjacentElement('afterend', card);
 }
@@ -3065,15 +3092,17 @@ async function renderContacts() {
     return;
   }
   for (const c of contacts) {
-    const hash = await contactHash(c.public_key);
-    const div  = document.createElement('div');
-    div.className = 'card';
+    const hash      = await contactHash(c.public_key);
+    const isBlocked = blockedKeys.has(c.public_key);
+    const div       = document.createElement('div');
+    div.className   = 'card';
     div.innerHTML = `
       <div class="card-header">
-        <span class="card-name contact-label-${hash}">${esc(c.name)}<span class="contact-hash">#${hash}</span></span>
+        <span class="card-name contact-label-${hash}">${esc(c.name)}<span class="contact-hash">#${hash}</span>${isBlocked ? '<span class="contact-blocked-badge">blocked</span>' : ''}</span>
         <div style="display:flex;gap:4px">
           <button class="sm ghost" data-action="rename">Rename</button>
           <button class="sm ghost" data-action="copy-snk">Copy snk:</button>
+          <button class="sm ${isBlocked ? '' : 'ghost'} ${isBlocked ? 'danger' : ''}" data-action="toggle-block">${isBlocked ? 'Unblock' : 'Block'}</button>
           <button class="sm danger" data-action="remove">Remove</button>
         </div>
       </div>`;
@@ -3081,6 +3110,18 @@ async function renderContacts() {
     div.querySelector('[data-action="copy-snk"]').addEventListener('click', () => {
       copyKey(snkUri(c.name, c.public_key));
       toast('snk: URI copied.');
+    });
+    div.querySelector('[data-action="toggle-block"]').addEventListener('click', () => {
+      if (blockedKeys.has(c.public_key)) {
+        unblockKey(c.public_key);
+        toast(`Unblocked "${c.name}".`);
+      } else {
+        blockKey(c.public_key);
+        toast(`Blocked "${c.name}".`);
+      }
+      rebuildConversations(); renderSidebar();
+      if (currentView) rerenderCurrentView();
+      renderContacts();
     });
     div.querySelector('[data-action="remove"]').addEventListener('click', () => removeContact(c));
     list.appendChild(div);
@@ -3254,6 +3295,11 @@ function fmtTime(iso) {
 let _notifsEnabled  = localStorage.getItem('snk_notifs') === '1';
 let _enterToSend    = localStorage.getItem('snk_enter_send') !== '0';
 let _filterAnon     = localStorage.getItem('snk_filter_anon') === '1';
+
+const blockedKeys = new Set(JSON.parse(localStorage.getItem('snk_blocked_keys') || '[]'));
+function saveBlockedKeys() { localStorage.setItem('snk_blocked_keys', JSON.stringify([...blockedKeys])); }
+function blockKey(pub)   { blockedKeys.add(pub);    saveBlockedKeys(); }
+function unblockKey(pub) { blockedKeys.delete(pub); saveBlockedKeys(); }
 
 function getIdleRefreshMs() {
   const v = parseInt(localStorage.getItem('snk_refresh_idle') || '30', 10);
