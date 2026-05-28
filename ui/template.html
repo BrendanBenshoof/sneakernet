@@ -605,15 +605,9 @@
       gap: 8px;
       align-items: flex-end;
     }
-    .compose-bottom textarea { flex: 1; min-height: 64px; }
+    .compose-bottom textarea { flex: 1; min-height: 38px; max-height: 220px; resize: none; overflow-y: auto; }
 
     /* ── Panel view ──────────────────────────────────────────────────────── */
-    #panel-view {
-      padding: 22px;
-      overflow-y: auto;
-      flex: 1;
-    }
-
     .panel-section {
       background: var(--surface);
       border: 1px solid var(--border);
@@ -716,6 +710,58 @@
     }
     #toast.show { opacity: 1; }
 
+    /* ── Settings ────────────────────────────────────────────────────────── */
+    #panel-view, #settings-view {
+      padding: 22px;
+      overflow-y: auto;
+      flex: 1;
+    }
+
+    .setting-row {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+    .setting-info { flex: 1; }
+    .setting-info .label { font-size: 13.5px; font-weight: 500; color: var(--text); }
+    .setting-info .desc  { font-size: 12px; color: var(--muted); margin-top: 3px; line-height: 1.4; }
+
+    label.toggle {
+      position: relative;
+      display: inline-block;
+      width: 38px;
+      height: 22px;
+      flex-shrink: 0;
+      cursor: pointer;
+    }
+    label.toggle > input {
+      position: absolute;
+      opacity: 0;
+      width: 0;
+      height: 0;
+      padding: 0;
+      border: none;
+    }
+    .toggle-track {
+      position: absolute;
+      inset: 0;
+      background: var(--border-2);
+      border-radius: 11px;
+      transition: background .18s;
+    }
+    .toggle-track::after {
+      content: '';
+      position: absolute;
+      width: 16px; height: 16px;
+      background: #fff;
+      border-radius: 50%;
+      top: 3px; left: 3px;
+      transition: transform .18s;
+      box-shadow: 0 1px 3px rgba(0,0,0,.2);
+    }
+    label.toggle > input:checked + .toggle-track { background: var(--accent); }
+    label.toggle > input:checked + .toggle-track::after { transform: translateX(16px); }
+
     /* ── Scrollbar polish ─────────────────────────────────────────────── */
     ::-webkit-scrollbar { width: 10px; height: 10px; }
     ::-webkit-scrollbar-track { background: transparent; }
@@ -811,8 +857,7 @@
     <div id="sb-footer">
       <button id="scrape-btn" title="Refresh — Shift+click to rescan all blocks"><span class="glyph">&#x27F3;</span> Refresh</button>
       <button id="identities-btn"><span class="glyph">&#x2299;</span> Identities &amp; Channels</button>
-      <button id="notif-btn"><span class="glyph" id="notif-glyph">&#x1F515;</span> <span id="notif-label">Notifications off</span></button>
-      <button id="theme-btn"><span class="glyph" id="theme-glyph">&#x263D;</span> <span id="theme-label">Light mode</span></button>
+      <button id="settings-btn"><span class="glyph">&#x2699;</span> Settings</button>
     </div>
   </nav>
 
@@ -867,6 +912,56 @@
         </div>
       </div>
     </div>
+
+    <!-- settings panel -->
+    <div id="settings-view" class="hidden">
+      <div class="panel-section">
+        <h2>Appearance</h2>
+        <div class="setting-row">
+          <div class="setting-info">
+            <div class="label">Light mode</div>
+            <div class="desc">Switch between dark and light themes.</div>
+          </div>
+          <label class="toggle"><input type="checkbox" id="setting-theme"><div class="toggle-track"></div></label>
+        </div>
+      </div>
+      <div class="panel-section">
+        <h2>Notifications</h2>
+        <div class="setting-row">
+          <div class="setting-info">
+            <div class="label">Browser notifications</div>
+            <div class="desc">Show a notification when new messages arrive while the tab is in the background.</div>
+          </div>
+          <label class="toggle"><input type="checkbox" id="setting-notifs"><div class="toggle-track"></div></label>
+        </div>
+      </div>
+      <div class="panel-section">
+        <h2>Compose</h2>
+        <div class="setting-row">
+          <div class="setting-info">
+            <div class="label">Enter to send</div>
+            <div class="desc">Press Enter to send. Shift+Enter always inserts a newline.</div>
+          </div>
+          <label class="toggle"><input type="checkbox" id="setting-enter-send"><div class="toggle-track"></div></label>
+        </div>
+      </div>
+      <div class="panel-section">
+        <h2>Sync</h2>
+        <div class="setting-row">
+          <div class="setting-info">
+            <div class="label">Auto-refresh interval</div>
+            <div class="desc">How often to scan for new messages when idle.</div>
+          </div>
+          <select id="setting-refresh" style="width:auto;font-size:12px;padding:5px 24px 5px 9px">
+            <option value="15">15 seconds</option>
+            <option value="30">30 seconds</option>
+            <option value="60">1 minute</option>
+            <option value="300">5 minutes</option>
+            <option value="0">Manual only</option>
+          </select>
+        </div>
+      </div>
+    </div>
   </div>
 
 </div>
@@ -874,37 +969,6 @@
 <div id="statusbar">Ready</div>
 <div id="toast"></div>
 
-<!-- ── Theme toggle (the only new interactive bit) ─────────────────────── -->
-<script>
-  (function () {
-    function updateLabel(theme) {
-      var label = document.getElementById('theme-label');
-      var glyph = document.getElementById('theme-glyph');
-      if (!label || !glyph) return;
-      if (theme === 'light') {
-        label.textContent = 'Dark mode';
-        glyph.innerHTML = '&#x263E;';
-      } else {
-        label.textContent = 'Light mode';
-        glyph.innerHTML = '&#x263C;';
-      }
-    }
-
-    document.addEventListener('DOMContentLoaded', function () {
-      var current = document.documentElement.getAttribute('data-theme') || 'dark';
-      updateLabel(current);
-      var btn = document.getElementById('theme-btn');
-      if (!btn) return;
-      btn.addEventListener('click', function () {
-        var cur = document.documentElement.getAttribute('data-theme') || 'dark';
-        var next = cur === 'light' ? 'dark' : 'light';
-        document.documentElement.setAttribute('data-theme', next);
-        try { localStorage.setItem('snk_theme', next); } catch (e) {}
-        updateLabel(next);
-      });
-    });
-  })();
-</script>
 
 <script>
 {{BACKEND_INJECTION}}
@@ -1014,18 +1078,62 @@ document.addEventListener('DOMContentLoaded', () => {
   el('onboard-btn').addEventListener('click', onboardCreate);
   el('onboard-name').addEventListener('keydown', e => { if (e.key === 'Enter') onboardCreate(); });
 
-  el('notif-btn').addEventListener('click', toggleNotifs);
   el('scrape-btn').addEventListener('click', e => scrape(e.shiftKey));
   el('new-msg-btn').addEventListener('click', toggleDmForm);
   el('sb-dm-cancel').addEventListener('click', closeDmForm);
   el('sb-dm-open').addEventListener('click', submitDmForm);
   el('sb-dm-key').addEventListener('keydown', e => { if (e.key === 'Enter') submitDmForm(); });
   el('identities-btn').addEventListener('click', () => openPanel());
+  el('settings-btn').addEventListener('click', openSettings);
+
+  el('setting-theme').addEventListener('change', function () {
+    const next = this.checked ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', next);
+    try { localStorage.setItem('snk_theme', next); } catch(e) {}
+  });
+
+  el('setting-notifs').addEventListener('change', async function () {
+    const want = this.checked;
+    if (want) {
+      if (!('Notification' in window)) {
+        toast('Notifications not supported in this browser.', true);
+        this.checked = false; return;
+      }
+      if (Notification.permission === 'denied') {
+        toast('Notifications are blocked — allow them in browser settings.', true);
+        this.checked = false; return;
+      }
+      if (Notification.permission === 'default') {
+        const perm = await Notification.requestPermission();
+        if (perm !== 'granted') { toast('Permission not granted.', true); this.checked = false; return; }
+      }
+    }
+    _notifsEnabled = want;
+    localStorage.setItem('snk_notifs', want ? '1' : '0');
+    if (want) toast('Notifications enabled.');
+  });
+
+  el('setting-enter-send').addEventListener('change', function () {
+    _enterToSend = this.checked;
+    localStorage.setItem('snk_enter_send', this.checked ? '1' : '0');
+  });
+
+  el('setting-refresh').addEventListener('change', function () {
+    localStorage.setItem('snk_refresh_idle', this.value);
+    clearTimeout(autoScrapeTimer);
+    const idleMs = getIdleRefreshMs();
+    if (idleMs > 0) autoScrapeTimer = setTimeout(scrape, idleMs);
+  });
   el('mobile-back').addEventListener('click', openSidebar);
 
   el('send-btn').addEventListener('click', send);
+  el('compose-body').addEventListener('input', () => {
+    const ta = el('compose-body');
+    ta.style.height = 'auto';
+    ta.style.height = ta.scrollHeight + 'px';
+  });
   el('compose-body').addEventListener('keydown', e => {
-    if (e.key === 'Enter' && !e.shiftKey && !window.matchMedia('(pointer: coarse)').matches) {
+    if (e.key === 'Enter' && !e.shiftKey && _enterToSend) {
       e.preventDefault();
       send();
     }
@@ -1128,7 +1236,8 @@ async function scrape(full = false) {
   } finally {
     btn.disabled = false;
     btn.innerHTML = '<span class="glyph">&#x27F3;</span> Refresh';
-    autoScrapeTimer = setTimeout(scrape, found > 0 ? 5000 : 30000);
+    const idleMs = getIdleRefreshMs();
+    if (idleMs > 0) autoScrapeTimer = setTimeout(scrape, found > 0 ? 5000 : idleMs);
   }
 }
 
@@ -1351,23 +1460,26 @@ function openConversation(conv) {
   currentView = conv;
   closeSidebar();
   el('panel-view').classList.add('hidden');
+  el('settings-view').classList.add('hidden');
   el('conv-view').classList.remove('hidden');
   el('conv-title').textContent = conv.kind === 'channel' ? '#' + conv.name : conv.name;
   el('conv-sub').textContent   = conv.kind === 'channel' ? 'channel' : conv.kind === 'unknown' ? 'unknown senders' : 'direct';
-  renderMessages(conv);
+  renderMessages(conv, true);
   renderCompose(conv);
   renderSidebar();
 }
 
 function rerenderCurrentView() {
   if (!currentView) return;
-  if (currentView.kind === 'panel' || currentView.kind === 'new') return;
+  if (currentView.kind === 'panel' || currentView.kind === 'new' || currentView.kind === 'settings') return;
   const conv = conversations.find(c => c.kind === currentView.kind && c.name === currentView.name);
   if (conv) { currentView = conv; markSeen(conv); renderMessages(conv); updateComposeHead(conv); }
 }
 
-function renderMessages(conv) {
+function renderMessages(conv, scrollToBottom = false) {
   const container = el('conv-messages');
+  const atBottom  = scrollToBottom ||
+    container.scrollHeight - container.scrollTop - container.clientHeight < 80;
   el('conv-empty').classList.add('hidden');
   container.innerHTML = '';
 
@@ -1414,7 +1526,7 @@ function renderMessages(conv) {
     }));
   }
   container.appendChild(frag);
-  container.scrollTop = container.scrollHeight;
+  if (atBottom) container.scrollTop = container.scrollHeight;
 }
 
 function makeGapNode(blockId) {
@@ -1549,10 +1661,16 @@ function renderContent(m) {
 }
 
 // ── compose ────────────────────────────────────────────────────────────────
+function resetCompose() {
+  const ta = el('compose-body');
+  ta.value = '';
+  ta.style.height = '';
+}
+
 function renderCompose(conv) {
   el('compose-area').classList.remove('hidden');
   el('compose-extra').innerHTML = '';
-  el('compose-body').value = '';
+  resetCompose();
   if (conv.kind === 'channel') renderComposeChannel(conv);
   else renderComposeDirect(conv);
 }
@@ -1642,6 +1760,7 @@ function openNewMsg(prefilledKey = null) {
   currentView = {kind: 'new'};
   closeSidebar();
   el('panel-view').classList.add('hidden');
+  el('settings-view').classList.add('hidden');
   el('conv-view').classList.remove('hidden');
   el('conv-title').textContent = 'New Message';
   el('conv-sub').textContent   = '';
@@ -1728,7 +1847,7 @@ async function send() {
       const conv = currentView;
       const head = causalHead(conv.messages);
       const result = await backend.sendChannel(conv.name, body, senderName, head || null);
-      el('compose-body').value = '';
+      resetCompose();
       injectOptimisticMsg(result?.blockId, body, conv.name, null, head);
 
     } else if (mode === 'direct') {
@@ -1737,7 +1856,7 @@ async function send() {
       const recipKey = btn.dataset.recipKey;
       if (!recipKey) { toast('No recipient key available.', true); return; }
       const result = await backend.sendDirect(recipKey, body, senderName, head || null);
-      el('compose-body').value = '';
+      resetCompose();
       injectOptimisticMsg(result?.blockId, body, null, recipKey, head);
 
     } else { // new
@@ -1746,7 +1865,7 @@ async function send() {
       if (!recipParsed) { toast('Enter a valid snk: URI or public key.', true); return; }
       const recipKey = recipParsed.key;
       const result = await backend.sendDirect(recipKey, body, senderName, null);
-      el('compose-body').value = '';
+      resetCompose();
       injectOptimisticMsg(result?.blockId, body, null, recipKey, null);
       const conv = conversations.find(c => c.kind !== 'channel' && c.pub === recipKey);
       if (conv) { openConversation(conv); toast('Message sent.'); setStatus(UI_CONFIG.sendStatusMsg); return; }
@@ -1766,6 +1885,7 @@ async function openPanel() {
   currentView = {kind: 'panel'};
   closeSidebar();
   el('conv-view').classList.add('hidden');
+  el('settings-view').classList.add('hidden');
   el('panel-view').classList.remove('hidden');
   el('conv-title').textContent = 'Identities, Channels & Contacts';
   el('conv-sub').textContent   = '';
@@ -2089,46 +2209,34 @@ function fmtTime(iso) {
     + ' ' + d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
 }
 
-// ── notifications ──────────────────────────────────────────────────────────
+// ── notifications + settings state ─────────────────────────────────────────
 let _notifsEnabled = localStorage.getItem('snk_notifs') === '1';
+let _enterToSend   = localStorage.getItem('snk_enter_send') !== '0';
 
-function updateNotifBtn() {
-  const glyph = el('notif-glyph');
-  const label = el('notif-label');
-  if (!glyph) return;
-  if (_notifsEnabled) {
-    glyph.textContent = '🔔';
-    label.textContent = 'Notifications on';
-    el('notif-btn').style.color = 'var(--accent)';
-  } else {
-    glyph.innerHTML = '&#x1F515;';
-    label.textContent = 'Notifications off';
-    el('notif-btn').style.color = '';
-  }
+function getIdleRefreshMs() {
+  const v = parseInt(localStorage.getItem('snk_refresh_idle') || '30', 10);
+  return v > 0 ? v * 1000 : 0;
 }
 
-async function toggleNotifs() {
-  if (_notifsEnabled) {
-    _notifsEnabled = false;
-    localStorage.setItem('snk_notifs', '0');
-    updateNotifBtn();
-    return;
-  }
-  if (!('Notification' in window)) {
-    toast('Notifications not supported in this browser.', true); return;
-  }
-  if (Notification.permission === 'denied') {
-    toast('Notifications are blocked — allow them in your browser site settings.', true); return;
-  }
-  if (Notification.permission === 'default') {
-    const perm = await Notification.requestPermission();
-    if (perm !== 'granted') { toast('Permission not granted.', true); return; }
-  }
-  _notifsEnabled = true;
-  localStorage.setItem('snk_notifs', '1');
-  updateNotifBtn();
-  toast('Notifications enabled.');
+function openSettings() {
+  currentView = {kind: 'settings'};
+  closeSidebar();
+  el('conv-view').classList.add('hidden');
+  el('panel-view').classList.add('hidden');
+  el('settings-view').classList.remove('hidden');
+  el('conv-title').textContent = 'Settings';
+  el('conv-sub').textContent   = '';
+
+  const theme = document.documentElement.getAttribute('data-theme') || 'dark';
+  el('setting-theme').checked      = theme === 'light';
+  el('setting-notifs').checked     = _notifsEnabled;
+  el('setting-enter-send').checked = _enterToSend;
+  el('setting-refresh').value      = localStorage.getItem('snk_refresh_idle') || '30';
+
+  renderSidebar();
 }
+
+function updateNotifBtn() { /* no-op — notifications now live in settings panel */ }
 
 function updateTitle() {
   const seen  = loadLastSeen();
