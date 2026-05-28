@@ -4,10 +4,11 @@ import os, sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-def generate(injection_path, output_path):
+def generate(injection_path, output_path, extra_scripts=''):
     tmpl = open(os.path.join(ROOT, 'ui', 'template.html')).read()
     inj  = open(os.path.join(ROOT, injection_path)).read()
     out  = tmpl.replace('{{BACKEND_INJECTION}}', inj)
+    out  = out.replace('{{EXTRA_SCRIPTS}}', extra_scripts)
     out_abs = os.path.join(ROOT, output_path)
     os.makedirs(os.path.dirname(out_abs), exist_ok=True)
     with open(out_abs, 'w') as f:
@@ -16,4 +17,5 @@ def generate(injection_path, output_path):
 
 if __name__ == '__main__':
     generate('ui/injection-server.js',  'client/api/ui/index.html')
-    generate('ui/injection-browser.js', 'transport/relay/ui/app.html')
+    generate('ui/injection-browser.js', 'transport/relay/ui/app.html',
+             extra_scripts='<script src="/argon2.js"></script>')

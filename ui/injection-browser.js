@@ -672,18 +672,58 @@ class BrowserBackend {
     } catch { return 0; }
   }
 
-  // Ask the relay to mine a stamp for payload. Falls back to zero stamp on error.
+  // Create a short-lived Web Worker that importScripts argon2 from the relay
+  // and mines a stamp off the main thread.
+  _makePoWWorker() {
+    const argon2Url = new URL('/argon2.js', location.href).href;
+    const src = `
+importScripts(${JSON.stringify(argon2Url)});
+const _salt = new TextEncoder().encode('sneakernet-pow-v1');
+function _lz(h) {
+  let n = 0;
+  for (const b of h) {
+    if (b === 0) { n += 8; continue; }
+    let m = 0x80;
+    while (m && !(b & m)) { n++; m >>>= 1; }
+    break;
+  }
+  return n;
+}
+self.onmessage = async function(e) {
+  const {payload, target} = e.data;
+  if (target <= 0) { self.postMessage({stamp:[0,0,0,0], workFactor:0}); return; }
+  const input = new Uint8Array(2052);
+  input.set(new Uint8Array(payload), 4);
+  try {
+    while (true) {
+      crypto.getRandomValues(input.subarray(0, 4));
+      const r = await argon2.hash({
+        pass: input, salt: _salt,
+        time: 1, mem: 65536, parallelism: 1, hashLen: 32,
+        type: argon2.ArgonType.Argon2id,
+      });
+      const wf = _lz(r.hash);
+      if (wf >= target) {
+        self.postMessage({stamp: Array.from(input.subarray(0,4)), workFactor: wf});
+        return;
+      }
+    }
+  } catch { self.postMessage({stamp:[0,0,0,0], workFactor:0}); }
+};`;
+    return new Worker(URL.createObjectURL(new Blob([src], {type:'application/javascript'})));
+  }
+
+  // Mine a stamp for payload in a Worker. Falls back to zero stamp on error.
   async _mineStamp(payload) {
     try {
       const floor = await this._getPowFloor();
-      const r = await fetch('/v1/stamp', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({payload: b64enc(payload), target: floor}),
+      if (floor <= 0) return new Uint8Array(4);
+      return await new Promise(resolve => {
+        const w = this._makePoWWorker();
+        w.onmessage = e => { w.terminate(); resolve(new Uint8Array(e.data.stamp)); };
+        w.onerror   = () => { w.terminate(); resolve(new Uint8Array(4)); };
+        w.postMessage({payload: payload.slice(), target: floor});
       });
-      if (!r.ok) return new Uint8Array(4);
-      const d = await r.json();
-      return b64dec(d.stamp);
     } catch { return new Uint8Array(4); }
   }
 
@@ -701,7 +741,7 @@ class BrowserBackend {
   }
 
   // Boost a message by mining a better stamp. Returns new work_factor or null.
-  // Hard 5-second budget; gives up cleanly if no improvement is found in time.
+  // Hard 5-second budget; terminates the worker if no improvement is found in time.
   async boost(blockId) {
     const br = await fetch(`/api/blocks/${blockId}`);
     if (!br.ok) return null;
@@ -709,32 +749,30 @@ class BrowserBackend {
     const payload = b64dec(bd.payload);
     const currentWF = bd.work_factor || 0;
 
-    const abort = new AbortController();
-    const timer = setTimeout(() => abort.abort(), 5000);
-    let d;
+    const w = this._makePoWWorker();
+    let result = null;
     try {
-      const r = await fetch('/v1/stamp', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({payload: b64enc(payload), target: currentWF + 1}),
-        signal: abort.signal,
-      });
-      if (!r.ok) return null;
-      d = await r.json();
-    } catch {
-      return null;
+      result = await Promise.race([
+        new Promise(resolve => {
+          w.onmessage = e => resolve(e.data);
+          w.onerror   = ()  => resolve(null);
+          w.postMessage({payload: payload.slice(), target: currentWF + 1});
+        }),
+        new Promise(resolve => setTimeout(() => resolve(null), 5000)),
+      ]);
     } finally {
-      clearTimeout(timer);
+      w.terminate();
     }
 
-    const stamp = b64dec(d.stamp);
+    if (!result || result.workFactor <= currentWF) return null;
+    const stamp = new Uint8Array(result.stamp);
     const sr = await fetch('/api/blocks', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({stamp: b64enc(stamp), payload: b64enc(payload)}),
     });
     if (!sr.ok) return null;
-    return d.work_factor;
+    return result.workFactor;
   }
 
   // ── sent log (localStorage) ─────────────────────────────────────────
@@ -855,7 +893,7 @@ const UI_CONFIG = {
     <p style="margin-bottom:18px;font-size:15px;color:var(--text)">Select a conversation from the sidebar, or click <strong>+</strong> to send a new message.</p>
     <div style="font-size:13px;color:var(--muted);line-height:1.65;background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--accent-line);border-radius:6px;padding:14px 16px">
       <strong style="color:var(--text);display:block;margin-bottom:8px">You are using the browser client.</strong>
-      <strong style="color:var(--text)">Message lifetime scales with proof-of-work.</strong> When you send, the relay mines PoW on your behalf — this adds a second or two but extends your block's TTL beyond the 24-hour base.<br><br>
+      <strong style="color:var(--text)">Message lifetime scales with proof-of-work.</strong> When you send, your browser mines PoW locally — this may take a few seconds but extends your block's TTL beyond the 24-hour base.<br><br>
       <strong style="color:var(--text)">Your inbox is not saved.</strong> Decrypted messages live in memory and are cleared when you close or reload this tab. Re-scanning will only recover blocks still held by the relay.<br><br>
       <strong style="color:var(--text)">Keys are stored in this browser only.</strong> Your identities live in this browser's IndexedDB. A different browser, incognito window, or clearing browser data means starting over with a new identity.
     </div>

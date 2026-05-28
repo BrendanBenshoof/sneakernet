@@ -62,6 +62,7 @@ func (s *Server) routes() {
 	// Public webapp and JSON block API.
 	s.mux.HandleFunc("GET /", s.handleIndex)
 	s.mux.HandleFunc("GET /app", s.handleWebApp)
+	s.mux.HandleFunc("GET /argon2.js", s.handleArgon2JS)
 	s.mux.HandleFunc("GET /api/blocks", s.handleListBlocks)
 	s.mux.HandleFunc("GET /api/blocks/{id}", s.handleGetBlock)
 	s.mux.HandleFunc("POST /api/blocks", s.handleSubmitBlock)
@@ -71,7 +72,6 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /v1/block", s.handlePut)
 	s.mux.HandleFunc("POST /v1/delta", s.handleDelta)
 	s.mux.HandleFunc("GET /v1/pow-limit", s.handlePowLimit)
-	s.mux.HandleFunc("POST /v1/stamp", s.handleMineStamp)
 	s.mux.HandleFunc("GET /v1/peers", s.handlePeers)
 }
 
