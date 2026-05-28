@@ -7,7 +7,7 @@
 ## Build
 
 ```
-git clone <repo>
+git clone https://github.com/brendanbenshoof/sneakernet
 cd sneakernet
 go build ./cmd/snk
 ```
