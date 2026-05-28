@@ -766,6 +766,7 @@ class BrowserBackend {
         received_at:  r.sentAt || r.sent_at || null,
         sent_to:      r.recipientPub,
         decrypted_by: r.senderIdentity || '',
+        work_factor:  0,
       });
       seenIds.add(r.blockId);
     }
@@ -805,6 +806,7 @@ class BrowserBackend {
       received_at:  sentAt,
       sent_to:      recipientPublicKey,
       decrypted_by: senderIdentity || '',
+      work_factor:  0,
     });
   }
 
@@ -838,6 +840,9 @@ const UI_CONFIG = {
       <strong style="color:var(--text)">Message lifetime scales with proof-of-work.</strong> When you send, the relay mines PoW on your behalf — this adds a second or two but extends your block's TTL beyond the 24-hour base.<br><br>
       <strong style="color:var(--text)">Your inbox is not saved.</strong> Decrypted messages live in memory and are cleared when you close or reload this tab. Re-scanning will only recover blocks still held by the relay.<br><br>
       <strong style="color:var(--text)">Keys are stored in this browser only.</strong> Your identities live in this browser's IndexedDB. A different browser, incognito window, or clearing browser data means starting over with a new identity.
+    </div>
+    <div style="margin-top:16px">
+      <button class="sm ghost" data-join-channel="sneakernet-alpha">#sneakernet-alpha &rarr;</button>
     </div>
   </div>`,
 };

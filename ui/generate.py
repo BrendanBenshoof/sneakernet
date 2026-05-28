@@ -8,9 +8,12 @@ def generate(injection_path, output_path):
     tmpl = open(os.path.join(ROOT, 'ui', 'template.html')).read()
     inj  = open(os.path.join(ROOT, injection_path)).read()
     out  = tmpl.replace('{{BACKEND_INJECTION}}', inj)
-    with open(os.path.join(ROOT, output_path), 'w') as f:
+    out_abs = os.path.join(ROOT, output_path)
+    os.makedirs(os.path.dirname(out_abs), exist_ok=True)
+    with open(out_abs, 'w') as f:
         f.write(out)
     print(f'generated {output_path}')
 
-generate('ui/injection-server.js',  'client/api/ui/index.html')
-generate('ui/injection-browser.js', 'transport/relay/ui/app.html')
+if __name__ == '__main__':
+    generate('ui/injection-server.js',  'client/api/ui/index.html')
+    generate('ui/injection-browser.js', 'transport/relay/ui/app.html')

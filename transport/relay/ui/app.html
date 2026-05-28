@@ -17,10 +17,6 @@
     })();
   </script>
 
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-
   <style>
     /* ── Theme tokens ─────────────────────────────────────────────────────
        Two themes. Both ink-on-paper. Restrained terracotta accent.
@@ -1674,6 +1670,7 @@ class BrowserBackend {
         received_at:  r.sentAt || r.sent_at || null,
         sent_to:      r.recipientPub,
         decrypted_by: r.senderIdentity || '',
+        work_factor:  0,
       });
       seenIds.add(r.blockId);
     }
@@ -1713,6 +1710,7 @@ class BrowserBackend {
       received_at:  sentAt,
       sent_to:      recipientPublicKey,
       decrypted_by: senderIdentity || '',
+      work_factor:  0,
     });
   }
 
@@ -1747,6 +1745,9 @@ const UI_CONFIG = {
       <strong style="color:var(--text)">Your inbox is not saved.</strong> Decrypted messages live in memory and are cleared when you close or reload this tab. Re-scanning will only recover blocks still held by the relay.<br><br>
       <strong style="color:var(--text)">Keys are stored in this browser only.</strong> Your identities live in this browser's IndexedDB. A different browser, incognito window, or clearing browser data means starting over with a new identity.
     </div>
+    <div style="margin-top:16px">
+      <button class="sm ghost" data-join-channel="sneakernet-alpha">#sneakernet-alpha &rarr;</button>
+    </div>
   </div>`,
 };
 
@@ -1765,6 +1766,9 @@ function applyConfig() {
   el('lock-subtitle').textContent = UI_CONFIG.lockSubtitle;
   el('sb-subtitle').textContent   = UI_CONFIG.sidebarSubtitle;
   if (UI_CONFIG.welcomeHtml) el('conv-empty').innerHTML = UI_CONFIG.welcomeHtml;
+  el('conv-empty').querySelectorAll('[data-join-channel]').forEach(btn => {
+    btn.addEventListener('click', () => joinDefaultChannel(btn.dataset.joinChannel));
+  });
   if (UI_CONFIG.hasLockButton) {
     const btn = document.createElement('button');
     btn.id          = 'lock-btn';
@@ -1951,8 +1955,9 @@ async function scrape(full = false) {
   btn.disabled = true;
   btn.innerHTML = `<span class="glyph">&#x27F3;</span> ${full ? 'Full scan…' : 'Scanning…'}`;
   setStatus(full ? 'Full rescan — checking all blocks…' : 'Scanning blocks…');
+  let found = 0;
   try {
-    const {found} = await backend.scrape(full);
+    ({found} = await backend.scrape(full));
     setStatus(`Scan complete — ${found} new message${found === 1 ? '' : 's'}.`, found > 0 ? 'ok' : '');
     if (full) { allMessages = []; byBlock.clear(); }
     await loadMessages();
@@ -1961,13 +1966,13 @@ async function scrape(full = false) {
   } finally {
     btn.disabled = false;
     btn.innerHTML = '<span class="glyph">&#x27F3;</span> Refresh';
-    autoScrapeTimer = setTimeout(scrape, 5000);
+    autoScrapeTimer = setTimeout(scrape, found > 0 ? 5000 : 30000);
   }
 }
 
 // ── message loading & grouping ─────────────────────────────────────────────
 async function loadMessages() {
-  const lastID = allMessages.length ? Math.max(...allMessages.map(m => m.id)) : 0;
+  const lastID = allMessages.reduce((max, m) => m.id > max ? m.id : max, 0);
   const msgs = await backend.getMessages(lastID);
   if (!msgs?.length) return;
 
@@ -2697,6 +2702,22 @@ function renderChannelList() {
     div.querySelector('.sm.ghost').addEventListener('click', () => removeChannel(ch.name));
     list.appendChild(div);
   }
+}
+
+async function joinDefaultChannel(name) {
+  const existing = conversations.find(c => c.kind === 'channel' && c.name === name);
+  if (existing) { openConversation(existing); return; }
+  try {
+    await backend.joinChannel(name, name);
+  } catch(e) {
+    if (e.message !== 'duplicate') { toast('Failed to join channel.', true); return; }
+  }
+  await loadChannels();
+  rebuildConversations();
+  renderChannelList();
+  renderSidebar();
+  const conv = conversations.find(c => c.kind === 'channel' && c.name === name);
+  if (conv) openConversation(conv);
 }
 
 async function addChannel() {
