@@ -443,9 +443,11 @@
       flex-shrink: 0;
       margin: 3px 0;
     }
-    .bullet.fork-first { color: var(--ok); }
+    .bullet.chained    { color: var(--ok); }
+    .bullet.fork-first { color: var(--muted); }
     .bullet.fork-mid   { color: var(--muted); }
     .bullet.fork-last  { color: var(--muted); }
+    .conn-top.chained, .conn-bottom.chained { background: var(--ok); opacity: 0.55; }
 
     .msg-body-col {
       flex: 1;
@@ -1137,6 +1139,7 @@ async function loadMessages() {
   if (!msgs?.length) return;
 
   for (const m of msgs) {
+    if (byBlock.has(m.block_id)) continue;
     m.content_text = b64toText(m.content);
     allMessages.push(m);
     byBlock.set(m.block_id, m);
@@ -1394,16 +1397,20 @@ function renderMessages(conv) {
     const hasRef      = directPred && directPred !== ZERO64;
     const predInConv  = hasRef && convIds.has(directPred);
     const predMissing = hasRef && !predInConv;
-    const siblings    = hasRef ? (succMap.get(directPred) || []) : [];
-    const isFork      = siblings.length > 1;
-    const forkPos     = isFork ? siblings.indexOf(m.block_id) : -1;
+    const siblings      = hasRef ? (succMap.get(directPred) || []) : [];
+    const isFork        = siblings.length > 1;
+    const forkPos       = isFork ? siblings.indexOf(m.block_id) : -1;
+    const isChained     = predInConv && !isFork;
+    const hasDirectSucc = (succMap.get(m.block_id) || []).length === 1;
     if (predMissing) frag.appendChild(makeGapNode(directPred));
     frag.appendChild(makeMsgRow(m, {
       hasPred: predInConv || predMissing,
       hasSucc: succMap.has(m.block_id),
       isFork,
-      forkFirst: forkPos === 0,
-      forkLast:  forkPos === siblings.length - 1,
+      forkFirst:     forkPos === 0,
+      forkLast:      forkPos === siblings.length - 1,
+      isChained,
+      hasDirectSucc,
     }));
   }
   container.appendChild(frag);
@@ -1423,17 +1430,19 @@ function makeGapNode(blockId) {
   return div;
 }
 
-function makeMsgRow(m, {hasPred, hasSucc, isFork, forkFirst, forkLast}) {
+function makeMsgRow(m, {hasPred, hasSucc, isFork, forkFirst, forkLast, isChained, hasDirectSucc}) {
   const div = document.createElement('div');
   div.className = 'msg-row';
   const bulletClass = isFork
     ? (forkFirst ? 'bullet fork-first' : forkLast ? 'bullet fork-last' : 'bullet fork-mid')
-    : 'bullet';
+    : isChained ? 'bullet chained' : 'bullet';
+  const topClass    = isChained     ? 'conn-top chained'    : 'conn-top';
+  const bottomClass = hasDirectSucc ? 'conn-bottom chained' : 'conn-bottom';
   div.innerHTML = `
     <div class="connector-col">
-      ${hasPred ? '<div class="conn-top"></div>' : '<div class="conn-none"></div>'}
+      ${hasPred ? `<div class="${topClass}"></div>` : '<div class="conn-none"></div>'}
       <div class="${bulletClass}">●</div>
-      ${hasSucc ? '<div class="conn-bottom"></div>' : '<div class="conn-none"></div>'}
+      ${hasSucc ? `<div class="${bottomClass}"></div>` : '<div class="conn-none"></div>'}
     </div>
     <div class="msg-body-col">
       <div class="msg-meta">
@@ -1672,6 +1681,34 @@ function openNewMsg(prefilledKey = null) {
   renderSidebar();
 }
 
+// ── optimistic send ────────────────────────────────────────────────────────
+function injectOptimisticMsg(blockId, body, channelName, sentTo, head) {
+  if (!blockId || byBlock.has(blockId)) return;
+  const now = new Date().toISOString();
+  const enc = new TextEncoder().encode(body);
+  const content = btoa(String.fromCharCode(...enc));
+  const m = {
+    id: 0,
+    block_id: blockId,
+    channel: channelName || null,
+    sender_pub: activeIdentity?.public_key || '',
+    msg_type: 0,
+    content,
+    content_text: body,
+    thread_refs: head ? [head] : [],
+    sent_at: now,
+    received_at: now,
+    sent_to: sentTo || null,
+    decrypted_by: activeIdentity?.name || '',
+    work_factor: 0,
+  };
+  allMessages.push(m);
+  byBlock.set(blockId, m);
+  rebuildConversations();
+  renderSidebar();
+  rerenderCurrentView();
+}
+
 // ── send ───────────────────────────────────────────────────────────────────
 async function send() {
   const rawBody = el('compose-body').value.trim();
@@ -1690,26 +1727,27 @@ async function send() {
     if (mode === 'channel') {
       const conv = currentView;
       const head = causalHead(conv.messages);
-      await backend.sendChannel(conv.name, body, senderName, head || null);
+      const result = await backend.sendChannel(conv.name, body, senderName, head || null);
       el('compose-body').value = '';
+      injectOptimisticMsg(result?.blockId, body, conv.name, null, head);
 
     } else if (mode === 'direct') {
       const conv = currentView;
       const head = causalHead(conv.messages);
       const recipKey = btn.dataset.recipKey;
       if (!recipKey) { toast('No recipient key available.', true); return; }
-      await backend.sendDirect(recipKey, body, senderName, head || null);
+      const result = await backend.sendDirect(recipKey, body, senderName, head || null);
       el('compose-body').value = '';
-      await loadMessages();
+      injectOptimisticMsg(result?.blockId, body, null, recipKey, head);
 
     } else { // new
       const recipInput = el('new-recipient')?.value.trim();
       const recipParsed = parseRecipientInput(recipInput);
       if (!recipParsed) { toast('Enter a valid snk: URI or public key.', true); return; }
       const recipKey = recipParsed.key;
-      await backend.sendDirect(recipKey, body, senderName, null);
+      const result = await backend.sendDirect(recipKey, body, senderName, null);
       el('compose-body').value = '';
-      await loadMessages();
+      injectOptimisticMsg(result?.blockId, body, null, recipKey, null);
       const conv = conversations.find(c => c.kind !== 'channel' && c.pub === recipKey);
       if (conv) { openConversation(conv); toast('Message sent.'); setStatus(UI_CONFIG.sendStatusMsg); return; }
     }

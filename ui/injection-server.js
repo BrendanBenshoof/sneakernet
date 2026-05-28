@@ -138,6 +138,8 @@ class ServerBackend {
     const r = await this._req('POST', '/api/send', payload);
     if (!r) throw new Error('failed');
     if (!r.ok) { const d = await r.json(); throw new Error(d.error || 'failed'); }
+    const d = await r.json();
+    return {blockId: d.block_ids?.[0] || null};
   }
 
   async sendChannel(channelName, message, senderIdentity, replyToBlockId) {
@@ -147,6 +149,8 @@ class ServerBackend {
     const r = await this._req('POST', '/api/send-channel', payload);
     if (!r) throw new Error('failed');
     if (!r.ok) { const d = await r.json(); throw new Error(d.error || 'failed'); }
+    const d = await r.json();
+    return {blockId: d.block_id || null};
   }
 
   // Boost a message by mining a better stamp. Returns new work_factor or null.

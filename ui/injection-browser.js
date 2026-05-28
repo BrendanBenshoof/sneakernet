@@ -808,6 +808,7 @@ class BrowserBackend {
       decrypted_by: senderIdentity || '',
       work_factor:  0,
     });
+    return {blockId};
   }
 
   async sendChannel(channelName, message, senderIdentity, replyToBlockId) {
@@ -820,7 +821,24 @@ class BrowserBackend {
       : null;
     const plain   = await buildV2Plain(message, senderPubBytes, signingPrivKey, threadRefs);
     const payload = await encryptChannelRaw(b64dec(ch.keyBase64), plain);
+    const blockId = await sha256hex(payload);
     await this._postBlock(payload);
+    const sentAt = new Date().toISOString();
+    this._inbox.push({
+      id:           ++this._nextId,
+      block_id:     blockId,
+      channel:      channelName,
+      sender_pub:   senderPubBytes ? b64enc(senderPubBytes) : '',
+      msg_type:     0,
+      content:      b64enc(new TextEncoder().encode(message)),
+      thread_refs:  threadRefs || Array(8).fill('0'.repeat(64)),
+      sent_at:      sentAt,
+      received_at:  sentAt,
+      sent_to:      null,
+      decrypted_by: senderIdentity || '',
+      work_factor:  0,
+    });
+    return {blockId};
   }
 }
 
