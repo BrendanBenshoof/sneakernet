@@ -79,10 +79,8 @@ A relay is a public server. It accepts inbound block-exchange connections from n
 | `-reserve-regional` | `0` | Reserved for regional relay blocks |
 | `-reserve-global` | `0` | Reserved for global relay blocks |
 | `-region` | — | ISO 3166 codes this relay serves (e.g. `US-GA,CA`); enables regional tagging |
-| `-geoip-db` | `<blocks-dir>/geoip.mmdb` | Path to cache the GeoIP MMDB |
-| `-geoip-refresh` | `120h` | How often to refresh the GeoIP database |
 
-**Note on regional tagging:** If `-region` is set, the relay downloads a GeoLite2-City database on first start and uses it to tag blocks by origin region. This lets nodes with limited storage preferentially keep locally-produced blocks.
+**Note on regional tagging:** If `-region` is set, the relay downloads a GeoLite2-City database on first start and uses it to tag blocks by origin region. This lets nodes with limited storage preferentially keep locally-produced blocks. The GeoIP database path, source URL, and refresh interval can be customized with `-geoip-db`, `-geoip-url`, and `-geoip-refresh`; the defaults are fine for most deployments.
 
 ---
 
@@ -92,9 +90,10 @@ Copy blocks to a flat-file directory that can be carried on a USB drive and hand
 
 ```
 ./snk mass-storage -from-badger blocks.db -to /mnt/usb/sneakernet
+touch /mnt/usb/sneakernet/.sneakernet
 ```
 
-A volume synced this way contains a `.sneakernet` marker file. Any node with `-usb-dir` pointing at a parent directory will automatically detect and sync with it when plugged in.
+The `.sneakernet` marker tells a watching node that the directory is a sneakernet volume. Any node with `-usb-dir` pointing at a parent directory will automatically detect and sync with it when plugged in.
 
 **Flags:**
 
