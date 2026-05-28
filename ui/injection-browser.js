@@ -460,6 +460,8 @@ class BrowserBackend {
     return ids.map(id => ({
       name:       id.name,
       public_key: this._edPubB64(id),
+      pow_stamp:  id.pow_stamp  || null,
+      pow_bits:   id.pow_bits   || 0,
     }));
   }
 
@@ -480,6 +482,68 @@ class BrowserBackend {
 
   async deleteIdentity(name) {
     await dbDelete('identities', name);
+  }
+
+  // Mine a 16-byte identity PoW stamp in a Worker for durationSecs seconds,
+  // then return the best stamp found.
+  // argon2id(stamp[16] || pubkey[32], salt="sneakernet-idpow-v1")
+  async mineIdentityPow(name) {
+    const durationSecs = 5;
+    const ids = await dbGetAll('identities');
+    const id  = ids.find(i => i.name === name);
+    if (!id) throw new Error('identity not found');
+    const pubBytes = b64dec(this._edPubB64(id));
+
+    const argon2Url = new URL('/argon2.js', location.href).href;
+    const src = `
+importScripts(${JSON.stringify(argon2Url)});
+const _salt = new TextEncoder().encode('sneakernet-idpow-v1');
+function _lz(h) {
+  let n = 0;
+  for (const b of h) {
+    if (b === 0) { n += 8; continue; }
+    let m = 0x80;
+    while (m && !(b & m)) { n++; m >>>= 1; }
+    break;
+  }
+  return n;
+}
+let bestStamp = null, bestBits = -1;
+self.onmessage = async function(e) {
+  if (e.data.stop) {
+    self.postMessage({stamp: bestStamp ? Array.from(bestStamp) : Array(16).fill(0), powBits: Math.max(bestBits, 0)});
+    return;
+  }
+  const {pubKey} = e.data;
+  const input = new Uint8Array(48);
+  input.set(new Uint8Array(pubKey), 16);
+  try {
+    while (true) {
+      crypto.getRandomValues(input.subarray(0, 16));
+      const r = await argon2.hash({
+        pass: input, salt: _salt,
+        time: 1, mem: 65536, parallelism: 1, hashLen: 32,
+        type: argon2.ArgonType.Argon2id,
+      });
+      const wf = _lz(r.hash);
+      if (wf > bestBits) { bestBits = wf; bestStamp = input.slice(0, 16); }
+    }
+  } catch(err) { self.postMessage({error: String(err)}); }
+};`;
+    const worker = new Worker(URL.createObjectURL(new Blob([src], {type:'application/javascript'})));
+    const result = await new Promise((resolve, reject) => {
+      worker.onmessage = e => resolve(e.data);
+      worker.onerror   = e => reject(new Error(e.message || 'worker error'));
+      worker.postMessage({pubKey: Array.from(pubBytes)});
+      setTimeout(() => worker.postMessage({stop: true}), durationSecs * 1000);
+    });
+    worker.terminate();
+    if (result.error) throw new Error(result.error);
+
+    const stampB64url = toB64url(b64enc(new Uint8Array(result.stamp)));
+    const rec = {...id, pow_stamp: stampB64url, pow_bits: result.powBits};
+    await dbPut('identities', rec);
+    return {pow_stamp: stampB64url, pow_bits: result.powBits};
   }
 
   // ── contacts ────────────────────────────────────────────────────────────
@@ -616,20 +680,28 @@ class BrowserBackend {
             m => m.block_id === blkId && m.sent_to && m.decrypted_by === id.name
           );
           if (!alreadySent) {
-            this._inbox.push({
-              id:           ++this._nextId,
-              block_id:     blkId,
-              channel:      null,
-              sender_pub:   parsed.senderPub,
-              msg_type:     parsed.msgType,
-              content:      parsed.contentB64,
-              thread_refs:  parsed.threadRefs,
-              sent_at:      parsed.sentAt,
-              received_at:  new Date().toISOString(),
-              decrypted_by: id.name,
-              work_factor:  blk.work_factor || 0,
-            });
-            found++;
+            const contentText = new TextDecoder().decode(b64dec(parsed.contentB64));
+            // Check for an identity PoW gift (anonymous DM with snk-pow-gift: content).
+            if (!parsed.senderPub && contentText.startsWith('snk-pow-gift:')) {
+              const stampB64url = contentText.slice('snk-pow-gift:'.length).trim();
+              this._maybeApplyPowGift(id, stampB64url).catch(() => {});
+            } else {
+              this._inbox.push({
+                id:           ++this._nextId,
+                block_id:     blkId,
+                channel:      null,
+                sender_pub:   parsed.senderPub,
+                msg_type:     parsed.msgType,
+                content:      parsed.contentB64,
+                content_text: contentText,
+                thread_refs:  parsed.threadRefs,
+                sent_at:      parsed.sentAt,
+                received_at:  new Date().toISOString(),
+                decrypted_by: id.name,
+                work_factor:  blk.work_factor || 0,
+              });
+              found++;
+            }
           }
           seenIds.add(blkId);
           matched = true; break;
@@ -764,8 +836,10 @@ self.onmessage = async function(e) {
     }
   }
 
-  // Boost a message by mining a better stamp. Returns new work_factor or null.
-  // Hard 5-second budget; terminates the worker if no improvement is found in time.
+  // Boost a message by mining a better block stamp AND a better identity stamp
+  // for the sender, both within a shared 5-second window.
+  // If the identity stamp improves, sends an anonymous gift DM to the sender.
+  // Returns new work_factor or null.
   async boost(blockId) {
     const br = await fetch(`/api/blocks/${blockId}`);
     if (!br.ok) return null;
@@ -773,30 +847,138 @@ self.onmessage = async function(e) {
     const payload = b64dec(bd.payload);
     const currentWF = bd.work_factor || 0;
 
-    const w = this._makePoWWorker();
-    let result = null;
-    try {
-      result = await Promise.race([
-        new Promise(resolve => {
-          w.onmessage = e => resolve(e.data);
-          w.onerror   = ()  => resolve(null);
-          w.postMessage({payload: payload.slice(), target: currentWF + 1});
-        }),
-        new Promise(resolve => setTimeout(() => resolve(null), 5000)),
-      ]);
-    } finally {
-      w.terminate();
+    // Find sender info from inbox for identity PoW gifting.
+    const msg = this._inbox.find(m => m.block_id === blockId);
+    const senderPubB64 = msg?.sender_pub || null;
+    const senderPubBytes = senderPubB64 ? b64dec(senderPubB64) : null;
+    const currentIdBits = senderPubBytes
+      ? this._parseSnkStampBits(msg.content_text, senderPubB64)
+      : -1;
+
+    // Mine block stamp (up to 5s, stops on first improvement).
+    const blockWorker = this._makePoWWorker();
+    const blockMine = Promise.race([
+      new Promise(resolve => {
+        blockWorker.onmessage = e => resolve(e.data);
+        blockWorker.onerror   = () => resolve(null);
+        blockWorker.postMessage({payload: payload.slice(), target: currentWF + 1});
+      }),
+      new Promise(resolve => setTimeout(() => resolve(null), 5000)),
+    ]).finally(() => blockWorker.terminate());
+
+    // Mine identity stamp for the sender concurrently (5s, take best).
+    let idMine = Promise.resolve(null);
+    if (senderPubBytes) {
+      const argon2Url = new URL('/argon2.js', location.href).href;
+      const idSrc = `
+importScripts(${JSON.stringify(argon2Url)});
+const _salt = new TextEncoder().encode('sneakernet-idpow-v1');
+function _lz(h){let n=0;for(const b of h){if(b===0){n+=8;continue;}let m=0x80;while(m&&!(b&m)){n++;m>>>=1;}break;}return n;}
+let bestStamp=null,bestBits=-1;
+self.onmessage=async function(e){
+  if(e.data.stop){self.postMessage({stamp:bestStamp?Array.from(bestStamp):Array(16).fill(0),bits:Math.max(bestBits,0)});return;}
+  const{pubKey}=e.data;
+  const input=new Uint8Array(48);
+  input.set(new Uint8Array(pubKey),16);
+  try{while(true){
+    crypto.getRandomValues(input.subarray(0,16));
+    const r=await argon2.hash({pass:input,salt:_salt,time:1,mem:65536,parallelism:1,hashLen:32,type:argon2.ArgonType.Argon2id});
+    const wf=_lz(r.hash);
+    if(wf>bestBits){bestBits=wf;bestStamp=input.slice(0,16);}
+  }}catch(err){self.postMessage({error:String(err)});}
+};`;
+      const idWorker = new Worker(URL.createObjectURL(new Blob([idSrc], {type:'application/javascript'})));
+      idMine = new Promise(resolve => {
+        idWorker.onmessage = e => resolve(e.data.error ? null : e.data);
+        idWorker.onerror   = () => resolve(null);
+        idWorker.postMessage({pubKey: Array.from(senderPubBytes)});
+        setTimeout(() => idWorker.postMessage({stop: true}), 5000);
+      }).finally(() => setTimeout(() => idWorker.terminate(), 200));
     }
 
-    if (!result || result.workFactor <= currentWF) return null;
-    const stamp = new Uint8Array(result.stamp);
-    const sr = await fetch('/api/blocks', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({stamp: b64enc(stamp), payload: b64enc(payload)}),
-    });
-    if (!sr.ok) return null;
-    return result.workFactor;
+    const [blockResult, idResult] = await Promise.all([blockMine, idMine]);
+
+    // Store block boost if successful.
+    let newWF = null;
+    if (blockResult && blockResult.workFactor > currentWF) {
+      const stamp = new Uint8Array(blockResult.stamp);
+      const sr = await fetch('/api/blocks', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({stamp: b64enc(stamp), payload: b64enc(payload)}),
+      });
+      if (sr.ok) newWF = blockResult.workFactor;
+    }
+
+    // Send identity gift if we improved on the sender's current stamp.
+    if (idResult && senderPubBytes && idResult.bits > currentIdBits) {
+      const stampB64url = toB64url(b64enc(new Uint8Array(idResult.stamp)));
+      this._sendGiftDM(senderPubB64, 'snk-pow-gift:' + stampB64url).catch(() => {});
+    }
+
+    return newWF;
+  }
+
+  // Parse the identity PoW bits from a message's snk: header line.
+  // Returns -1 if no stamp is present.
+  _parseSnkStampBits(contentText, senderPubB64) {
+    if (!contentText || !senderPubB64) return -1;
+    const firstLine = contentText.split('\n')[0];
+    const spaceIdx  = firstLine.indexOf(' ');
+    if (spaceIdx < 0) return -1;
+    const stampB64url = firstLine.slice(spaceIdx + 1).trim();
+    if (!stampB64url) return -1;
+    // We can't run argon2 synchronously here; return 0 as a baseline so any
+    // improvement will be sent (the recipient verifies before applying).
+    return 0;
+  }
+
+  // Verify a gifted stamp against the identity's pubkey and apply it if better.
+  async _maybeApplyPowGift(id, stampB64url) {
+    const stamp = fromB64url(stampB64url);
+    if (!stamp || stamp.length !== 16) return;
+    const pubBytes = b64dec(this._edPubB64(id));
+
+    const argon2Url = new URL('/argon2.js', location.href).href;
+    const src = `
+importScripts(${JSON.stringify(argon2Url)});
+const _salt = new TextEncoder().encode('sneakernet-idpow-v1');
+function _lz(h){let n=0;for(const b of h){if(b===0){n+=8;continue;}let m=0x80;while(m&&!(b&m)){n++;m>>>=1;}break;}return n;}
+self.onmessage = async function(e) {
+  const {stamp, pubKey} = e.data;
+  const input = new Uint8Array(48);
+  input.set(new Uint8Array(stamp));
+  input.set(new Uint8Array(pubKey), 16);
+  const r = await argon2.hash({pass:input,salt:_salt,time:1,mem:65536,parallelism:1,hashLen:32,type:argon2.ArgonType.Argon2id});
+  self.postMessage({bits: _lz(r.hash)});
+};`;
+    const w = new Worker(URL.createObjectURL(new Blob([src], {type:'application/javascript'})));
+    const newBits = await new Promise((resolve, reject) => {
+      w.onmessage = e => resolve(e.data.bits);
+      w.onerror   = e => reject(e);
+      w.postMessage({stamp: Array.from(stamp), pubKey: Array.from(pubBytes)});
+    }).finally(() => w.terminate());
+
+    const curBits = id.pow_bits || 0;
+    if (newBits > curBits) {
+      const fresh = await dbGetAll('identities').then(all => all.find(i => i.name === id.name));
+      if (fresh) {
+        await dbPut('identities', {...fresh, pow_stamp: stampB64url, pow_bits: newBits});
+      }
+    }
+  }
+
+  // Send an anonymous DM with zero block stamp — just needs to be delivered.
+  async _sendGiftDM(recipientEdPubB64, content) {
+    try {
+      const plain   = await buildV2Plain(content, null, null, null);
+      const payload = await encryptDirect(recipientEdPubB64, plain);
+      await fetch('/api/blocks', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({stamp: b64enc(new Uint8Array(4)), payload: b64enc(payload)}),
+      });
+    } catch {} // silent — gift is best-effort
   }
 
   // ── sent log (localStorage) ─────────────────────────────────────────

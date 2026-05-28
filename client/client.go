@@ -15,6 +15,11 @@ type Client struct {
 	messages   *MessageStore
 	identities []*Identity
 	channels   []Channel
+
+	// OnPowGift is called when a PoW gift DM arrives during Scrape.
+	// identityName is the local identity that decrypted the message;
+	// stamp is the offered proof-of-work for that identity's pubkey.
+	OnPowGift func(identityName string, stamp []byte)
 }
 
 // New creates a Client. All identity and channel keys are tried on every block.
@@ -69,6 +74,12 @@ func (c *Client) Scrape(ctx context.Context) (int, error) {
 			}
 			if inserted {
 				found++
+				// Check for an identity PoW gift in new direct messages.
+				if c.OnPowGift != nil && identityName != "" && mp.Channel == "" {
+					if stamp, ok := ParsePowGift(mp.Content); ok {
+						c.OnPowGift(identityName, stamp)
+					}
+				}
 			}
 		}
 

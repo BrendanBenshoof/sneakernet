@@ -90,6 +90,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/identities", s.auth(s.handleAddIdentity))
 	s.mux.HandleFunc("POST /api/identities/import", s.auth(s.handleImportIdentity))
 	s.mux.HandleFunc("POST /api/identities/{name}/export", s.auth(s.handleExportIdentity))
+	s.mux.HandleFunc("POST /api/identities/{name}/mine-pow", s.auth(s.handleMineIdentityPoW))
 	s.mux.HandleFunc("DELETE /api/identities/{name}", s.auth(s.handleRemoveIdentity))
 	s.mux.HandleFunc("GET /api/channels", s.auth(s.handleListChannels))
 	s.mux.HandleFunc("POST /api/channels", s.auth(s.handleAddChannel))
@@ -125,7 +126,32 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 // rebuildScraper recreates the Client from the current keystore identities and channels.
 // Caller must hold s.mu write lock.
 func (s *Server) rebuildScraper() {
-	s.scraper = client.New(s.blocks, s.msgs, s.ks.Identities(), s.ks.Channels())
+	cl := client.New(s.blocks, s.msgs, s.ks.Identities(), s.ks.Channels())
+	cl.OnPowGift = s.applyPowGift
+	s.scraper = cl
+}
+
+// applyPowGift updates the keystore if the gifted stamp improves the named identity.
+// Safe to call from any goroutine; acquires s.mu internally.
+func (s *Server) applyPowGift(identityName string, stamp []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	id := s.ks.GetIdentity(identityName)
+	if id == nil {
+		return
+	}
+	var pub [32]byte
+	copy(pub[:], id.PublicKey())
+	newBits := client.IdentityWorkFactor(stamp, pub)
+	curBits := 0
+	if len(id.IDPowStamp) > 0 {
+		curBits = client.IdentityWorkFactor(id.IDPowStamp, pub)
+	}
+	if newBits <= curBits {
+		return
+	}
+	_ = s.ks.SetIdentityPoW(identityName, stamp)
+	_ = s.ks.Save(s.ksPath)
 }
 
 func newToken() (string, error) {

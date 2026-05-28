@@ -30,8 +30,9 @@ const (
 // SignKey is the Ed25519 private key; the X25519 key for encryption is derived
 // from it on demand via EdPubToX25519 / edPrivToX25519.
 type Identity struct {
-	Name    string
-	SignKey ed25519.PrivateKey
+	Name       string
+	SignKey    ed25519.PrivateKey
+	IDPowStamp []byte // 16-byte argon2id nonce; nil = no PoW mined
 }
 
 // PublicKey returns the Ed25519 public key for this identity.
@@ -160,7 +161,7 @@ func LoadKeystore(path string, password []byte) (*Keystore, error) {
 			}
 			needsSave = true
 		}
-		k.identities = append(k.identities, &Identity{Name: rec.Name, SignKey: signKey})
+		k.identities = append(k.identities, &Identity{Name: rec.Name, SignKey: signKey, IDPowStamp: rec.IDPowStamp})
 	}
 
 	if needsSave {
@@ -230,6 +231,7 @@ func (k *Keystore) Save(path string) error {
 			Name:           id.Name,
 			SignNonce:      sNonce,
 			SignCiphertext: sCT,
+			IDPowStamp:     id.IDPowStamp,
 		})
 	}
 
@@ -284,6 +286,17 @@ func (k *Keystore) Add(name string) (*Identity, error) {
 	id := &Identity{Name: name, SignKey: signKey}
 	k.identities = append(k.identities, id)
 	return id, nil
+}
+
+// SetIdentityPoW stores a PoW stamp for the named identity.
+// Returns an error if the identity does not exist.
+func (k *Keystore) SetIdentityPoW(name string, stamp []byte) error {
+	id := k.get(name)
+	if id == nil {
+		return fmt.Errorf("client: identity %q not found", name)
+	}
+	id.IDPowStamp = append([]byte(nil), stamp...)
+	return nil
 }
 
 // Remove deletes the identity with the given name.
@@ -546,6 +559,7 @@ type identityRecord struct {
 	// SignNonce/SignCiphertext hold the Ed25519 private key (v1 and v2).
 	SignNonce      []byte `json:"sign_nonce,omitempty"`
 	SignCiphertext []byte `json:"sign_ciphertext,omitempty"`
+	IDPowStamp     []byte `json:"id_pow_stamp,omitempty"`
 }
 
 type channelRecord struct {
