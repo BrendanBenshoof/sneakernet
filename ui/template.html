@@ -942,6 +942,16 @@
         </div>
       </div>
       <div class="panel-section">
+        <h2>Content Filters</h2>
+        <div class="setting-row">
+          <div class="setting-info">
+            <div class="label">Hide anonymous messages</div>
+            <div class="desc">Hide messages with no identity claim — no snk: header and no known sender key.</div>
+          </div>
+          <label class="toggle"><input type="checkbox" id="setting-filter-anon"><div class="toggle-track"></div></label>
+        </div>
+      </div>
+      <div class="panel-section">
         <h2>Sync</h2>
         <div class="setting-row">
           <div class="setting-info">
@@ -1115,6 +1125,14 @@ document.addEventListener('DOMContentLoaded', () => {
     localStorage.setItem('snk_enter_send', this.checked ? '1' : '0');
   });
 
+  el('setting-filter-anon').addEventListener('change', function () {
+    _filterAnon = this.checked;
+    localStorage.setItem('snk_filter_anon', this.checked ? '1' : '0');
+    rebuildConversations();
+    rerenderCurrentView();
+    renderSidebar();
+  });
+
   el('setting-refresh').addEventListener('change', function () {
     localStorage.setItem('snk_refresh_idle', this.value);
     clearTimeout(autoScrapeTimer);
@@ -1273,14 +1291,22 @@ async function loadMessages() {
   maybeNotify(msgs);
 }
 
+function isAnonymousMsg(m) {
+  if (!m.sender_pub) return true;
+  if (resolveByPub(m.sender_pub)) return false;
+  const {claimedName} = parseSnkHeader(m.content_text, m.sender_pub);
+  return !claimedName;
+}
+
 function rebuildConversations() {
   const chMap   = new Map();
   const dirMap  = new Map();
   const unknown = [];
 
-  const relevant = activeIdentity
+  const byIdentity = activeIdentity
     ? allMessages.filter(m => m.decrypted_by === activeIdentity.name || !m.decrypted_by)
     : allMessages;
+  const relevant = _filterAnon ? byIdentity.filter(m => !isAnonymousMsg(m)) : byIdentity;
 
   for (const m of relevant) {
     if (m.channel) {
@@ -2246,8 +2272,9 @@ function fmtTime(iso) {
 }
 
 // ── notifications + settings state ─────────────────────────────────────────
-let _notifsEnabled = localStorage.getItem('snk_notifs') === '1';
-let _enterToSend   = localStorage.getItem('snk_enter_send') !== '0';
+let _notifsEnabled  = localStorage.getItem('snk_notifs') === '1';
+let _enterToSend    = localStorage.getItem('snk_enter_send') !== '0';
+let _filterAnon     = localStorage.getItem('snk_filter_anon') === '1';
 
 function getIdleRefreshMs() {
   const v = parseInt(localStorage.getItem('snk_refresh_idle') || '30', 10);
@@ -2264,10 +2291,11 @@ function openSettings() {
   el('conv-sub').textContent   = '';
 
   const theme = document.documentElement.getAttribute('data-theme') || 'dark';
-  el('setting-theme').checked      = theme === 'light';
-  el('setting-notifs').checked     = _notifsEnabled;
-  el('setting-enter-send').checked = _enterToSend;
-  el('setting-refresh').value      = localStorage.getItem('snk_refresh_idle') || '30';
+  el('setting-theme').checked         = theme === 'light';
+  el('setting-notifs').checked        = _notifsEnabled;
+  el('setting-enter-send').checked    = _enterToSend;
+  el('setting-filter-anon').checked   = _filterAnon;
+  el('setting-refresh').value         = localStorage.getItem('snk_refresh_idle') || '30';
 
   renderSidebar();
 }
