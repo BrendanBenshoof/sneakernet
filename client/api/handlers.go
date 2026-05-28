@@ -142,7 +142,7 @@ func (s *Server) handleMineIdentityPoW(w http.ResponseWriter, r *http.Request) {
 	var pub [32]byte
 	copy(pub[:], id.PublicKey())
 
-	stamp, bits, err := client.MineIdentityPoW(r.Context(), pub, 5*time.Second)
+	stamp, bits, err := client.MineIdentityPoW(r.Context(), pub, 5*time.Second, id.IDPowStamp)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "mining cancelled or failed: "+err.Error())
 		return
@@ -1049,7 +1049,8 @@ func (s *Server) handleBoost(w http.ResponseWriter, r *http.Request) {
 	}()
 	if hasSender {
 		go func() {
-			s, bits, _ := client.MineIdentityPoW(ctx, senderPub, 5*time.Second)
+			existingStamp, _ := client.ParseSnkStamp(msgContent, senderPub)
+			s, bits, _ := client.MineIdentityPoW(ctx, senderPub, 5*time.Second, existingStamp)
 			idCh <- idRes{s, bits}
 		}()
 	} else {
