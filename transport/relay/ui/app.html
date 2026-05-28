@@ -2267,21 +2267,29 @@ function convKey(conv) {
   return 'dm:__unknown__';
 }
 
+const SEEN_MAX = 5000;
+
+// Map<block_id, true> in insertion order — oldest (LRU) first, newest (MRU) last.
 let seenBlocks = (function () {
-  try { return new Set(JSON.parse(localStorage.getItem('snk_seen_blocks') || '[]')); }
-  catch { return new Set(); }
+  try {
+    const arr = JSON.parse(localStorage.getItem('snk_seen_blocks') || '[]');
+    return new Map(arr.map(id => [id, true]));
+  } catch { return new Map(); }
 })();
 
 function saveSeenBlocks() {
-  localStorage.setItem('snk_seen_blocks', JSON.stringify([...seenBlocks]));
+  localStorage.setItem('snk_seen_blocks', JSON.stringify([...seenBlocks.keys()]));
 }
 
 function markSeen(conv) {
-  let dirty = false;
+  if (!conv.messages.length) return;
   for (const m of conv.messages) {
-    if (!seenBlocks.has(m.block_id)) { seenBlocks.add(m.block_id); dirty = true; }
+    seenBlocks.delete(m.block_id);        // re-insert at MRU end
+    seenBlocks.set(m.block_id, true);
+    if (seenBlocks.size > SEEN_MAX)
+      seenBlocks.delete(seenBlocks.keys().next().value); // evict LRU
   }
-  if (dirty) saveSeenBlocks();
+  saveSeenBlocks();
 }
 
 // ── sidebar ────────────────────────────────────────────────────────────────
