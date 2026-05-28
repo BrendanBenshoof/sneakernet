@@ -1405,9 +1405,10 @@ async function dbDelete(store, key) {
 
 class BrowserBackend {
   constructor() {
-    this._inbox   = [];  // decrypted messages, server-compatible shape
-    this._nextId  = 0;
-    this._resumeToken = localStorage.getItem('snk_resume_token') || '';
+    this._inbox        = [];  // decrypted messages, server-compatible shape
+    this._nextId       = 0;
+    this._resumeToken  = localStorage.getItem('snk_resume_token') || '';
+    this._wfUpdatedIds = new Set(); // block IDs whose work_factor improved this scrape cycle
     this._loadSentIntoInbox();  // hydrate sent messages before first getMessages() call
   }
 
@@ -1566,7 +1567,10 @@ class BrowserBackend {
           const wf = blk.work_factor || 0;
           if (wf > 0) {
             const existing = this._inbox.find(m => m.block_id === blkId);
-            if (existing && wf > (existing.work_factor || 0)) existing.work_factor = wf;
+            if (existing && wf > (existing.work_factor || 0)) {
+              existing.work_factor = wf;
+              this._wfUpdatedIds.add(blkId);
+            }
           }
           continue;
         }
@@ -1636,7 +1640,11 @@ class BrowserBackend {
   }
 
   async getMessages(afterId, _wfUpdatedSince = 0) {
-    return this._inbox.filter(m => m.id > afterId);
+    const newMsgs = this._inbox.filter(m => m.id > afterId);
+    const newIds  = new Set(newMsgs.map(m => m.block_id));
+    const wfMsgs  = this._inbox.filter(m => !newIds.has(m.block_id) && this._wfUpdatedIds.has(m.block_id));
+    this._wfUpdatedIds.clear();
+    return [...newMsgs, ...wfMsgs];
   }
 
   // ── send ────────────────────────────────────────────────────────────────
