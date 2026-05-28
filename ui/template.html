@@ -1401,16 +1401,21 @@ function convKey(conv) {
   return 'dm:__unknown__';
 }
 
-function loadLastSeen() {
-  try { return JSON.parse(localStorage.getItem('snk_last_seen') || '{}'); }
-  catch { return {}; }
+let seenBlocks = (function () {
+  try { return new Set(JSON.parse(localStorage.getItem('snk_seen_blocks') || '[]')); }
+  catch { return new Set(); }
+})();
+
+function saveSeenBlocks() {
+  localStorage.setItem('snk_seen_blocks', JSON.stringify([...seenBlocks]));
 }
 
 function markSeen(conv) {
-  const seen  = loadLastSeen();
-  const maxId = conv.messages.reduce((max, m) => m.id > 0 && m.id > max ? m.id : max, 0);
-  seen[convKey(conv)] = maxId;
-  localStorage.setItem('snk_last_seen', JSON.stringify(seen));
+  let dirty = false;
+  for (const m of conv.messages) {
+    if (!seenBlocks.has(m.block_id)) { seenBlocks.add(m.block_id); dirty = true; }
+  }
+  if (dirty) saveSeenBlocks();
 }
 
 // ── sidebar ────────────────────────────────────────────────────────────────
@@ -1420,32 +1425,27 @@ function renderSidebar() {
   chContainer.innerHTML  = '';
   dirContainer.innerHTML = '';
 
-  const lastSeen = loadLastSeen();
   const chConvs  = conversations.filter(c => c.kind === 'channel');
   const dirConvs = conversations.filter(c => c.kind !== 'channel');
 
   if (!chConvs.length) {
     chContainer.innerHTML = '<div style="padding:6px 14px;font-size:11px;color:var(--muted)">No channels joined</div>';
   }
-  for (const conv of chConvs) chContainer.appendChild(makeSbItem(conv, lastSeen));
+  for (const conv of chConvs) chContainer.appendChild(makeSbItem(conv));
 
   if (!dirConvs.length) {
     dirContainer.innerHTML = '<div style="padding:6px 14px;font-size:11px;color:var(--muted)">No messages yet</div>';
   }
-  for (const conv of dirConvs) dirContainer.appendChild(makeSbItem(conv, lastSeen));
+  for (const conv of dirConvs) dirContainer.appendChild(makeSbItem(conv));
   updateTitle();
 }
 
-function makeSbItem(conv, lastSeen) {
+function makeSbItem(conv) {
   const div = document.createElement('div');
   div.className = 'sb-item';
   if (currentView && currentView.kind === conv.kind && currentView.name === conv.name) div.classList.add('active');
   const prefix = conv.kind === 'channel' ? '<span class="sb-hash">#</span> ' : '';
-  const raw    = lastSeen[convKey(conv)];
-  const since  = typeof raw === 'number' ? raw : null;
-  const unread = since != null
-    ? conv.messages.filter(m => m.id > since).length
-    : conv.messages.length;
+  const unread = conv.messages.filter(m => !seenBlocks.has(m.block_id)).length;
   const badge     = unread > 0 ? `<span class="sb-badge">${unread}</span>` : '';
   const closeBtn  = conv.kind === 'direct'
     ? '<button class="icon sb-close" title="Close conversation" tabindex="-1">&times;</button>'
@@ -2257,14 +2257,8 @@ function openSettings() {
 function updateNotifBtn() { /* no-op — notifications now live in settings panel */ }
 
 function updateTitle() {
-  const seen  = loadLastSeen();
-  const total = conversations.reduce((n, c) => {
-    const raw   = seen[convKey(c)];
-    const since = typeof raw === 'number' ? raw : null;
-    return n + (since != null
-      ? c.messages.filter(m => m.id > since).length
-      : c.messages.length);
-  }, 0);
+  const total = conversations.reduce((n, c) =>
+    n + c.messages.filter(m => !seenBlocks.has(m.block_id)).length, 0);
   document.title = total > 0
     ? `(${total}) Sneakernet — ${UI_CONFIG.pageTitle}`
     : `Sneakernet — ${UI_CONFIG.pageTitle}`;
