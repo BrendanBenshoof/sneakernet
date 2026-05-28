@@ -561,6 +561,12 @@ class BrowserBackend {
     // Only seed seenIds from received blocks, not sent-log entries.
     // Sent-log entries must not block decryption of those same blocks by recipient identities.
     const seenIds  = new Set(this._inbox.filter(m => !m.sent_to).map(m => m.block_id));
+
+    // If there are no received messages in memory (fresh page load), discard
+    // the persisted resume token so we re-fetch from defaultSince rather than
+    // starting at the end of the block list and finding nothing.
+    if (seenIds.size === 0) this._resumeToken = '';
+
     let found = 0;
     let pageToken = this._resumeToken;
     let latestResumeToken = this._resumeToken;
