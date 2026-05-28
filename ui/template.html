@@ -1534,7 +1534,16 @@ function renderMessages(conv, scrollToBottom = false) {
   if (!conv.messages.length) {
     const empty = document.createElement('div');
     empty.className = 'empty-state';
-    empty.textContent = 'No messages yet.';
+    if (conv.kind === 'channel') {
+      empty.innerHTML = '<p>No messages yet.</p><button class="sm ghost" id="ch-history-btn">Scan for history</button>';
+      empty.querySelector('#ch-history-btn').addEventListener('click', function() {
+        this.disabled = true;
+        this.textContent = 'Scanning…';
+        scrape(true);
+      });
+    } else {
+      empty.textContent = 'No messages yet.';
+    }
     container.appendChild(empty);
     return;
   }
