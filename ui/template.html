@@ -1237,6 +1237,24 @@ function causalHead(msgs) {
   return sorted.length ? sorted[sorted.length - 1].block_id : null;
 }
 
+// ── read state ─────────────────────────────────────────────────────────────
+function convKey(conv) {
+  if (conv.kind === 'channel') return 'ch:' + conv.name;
+  if (conv.kind === 'direct')  return 'dm:' + (conv.pub || conv.name);
+  return 'dm:__unknown__';
+}
+
+function loadLastSeen() {
+  try { return JSON.parse(localStorage.getItem('snk_last_seen') || '{}'); }
+  catch { return {}; }
+}
+
+function markSeen(conv) {
+  const seen = loadLastSeen();
+  seen[convKey(conv)] = new Date().toISOString();
+  localStorage.setItem('snk_last_seen', JSON.stringify(seen));
+}
+
 // ── sidebar ────────────────────────────────────────────────────────────────
 function renderSidebar() {
   const chContainer  = el('sb-channels');
@@ -1244,32 +1262,39 @@ function renderSidebar() {
   chContainer.innerHTML  = '';
   dirContainer.innerHTML = '';
 
+  const lastSeen = loadLastSeen();
   const chConvs  = conversations.filter(c => c.kind === 'channel');
   const dirConvs = conversations.filter(c => c.kind !== 'channel');
 
   if (!chConvs.length) {
     chContainer.innerHTML = '<div style="padding:6px 14px;font-size:11px;color:var(--muted)">No channels joined</div>';
   }
-  for (const conv of chConvs) chContainer.appendChild(makeSbItem(conv));
+  for (const conv of chConvs) chContainer.appendChild(makeSbItem(conv, lastSeen));
 
   if (!dirConvs.length) {
     dirContainer.innerHTML = '<div style="padding:6px 14px;font-size:11px;color:var(--muted)">No messages yet</div>';
   }
-  for (const conv of dirConvs) dirContainer.appendChild(makeSbItem(conv));
+  for (const conv of dirConvs) dirContainer.appendChild(makeSbItem(conv, lastSeen));
 }
 
-function makeSbItem(conv) {
+function makeSbItem(conv, lastSeen) {
   const div = document.createElement('div');
   div.className = 'sb-item';
   if (currentView && currentView.kind === conv.kind && currentView.name === conv.name) div.classList.add('active');
   const prefix = conv.kind === 'channel' ? '<span class="sb-hash">#</span> ' : '';
-  div.innerHTML = `${prefix}<span class="sb-name">${esc(conv.name)}</span>`;
+  const since  = lastSeen[convKey(conv)];
+  const unread = since
+    ? conv.messages.filter(m => m.received_at > since).length
+    : conv.messages.length;
+  const badge  = unread > 0 ? `<span class="sb-badge">${unread}</span>` : '';
+  div.innerHTML = `${prefix}<span class="sb-name">${esc(conv.name)}</span>${badge}`;
   div.addEventListener('click', () => openConversation(conv));
   return div;
 }
 
 // ── conversation view ──────────────────────────────────────────────────────
 function openConversation(conv) {
+  markSeen(conv);
   currentView = conv;
   closeSidebar();
   el('panel-view').classList.add('hidden');
@@ -1285,7 +1310,7 @@ function rerenderCurrentView() {
   if (!currentView) return;
   if (currentView.kind === 'panel' || currentView.kind === 'new') return;
   const conv = conversations.find(c => c.kind === currentView.kind && c.name === currentView.name);
-  if (conv) { currentView = conv; renderMessages(conv); updateComposeHead(conv); }
+  if (conv) { currentView = conv; markSeen(conv); renderMessages(conv); updateComposeHead(conv); }
 }
 
 function renderMessages(conv) {
