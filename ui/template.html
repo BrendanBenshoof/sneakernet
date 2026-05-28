@@ -989,6 +989,13 @@
           </div>
           <label class="toggle"><input type="checkbox" id="setting-filter-anon"><div class="toggle-track"></div></label>
         </div>
+        <div class="setting-row">
+          <div class="setting-info">
+            <div class="label">Require identity PoW stamp</div>
+            <div class="desc">Hide messages from identities with no proof-of-work stamp. Encourages effort investment before posting.</div>
+          </div>
+          <label class="toggle"><input type="checkbox" id="setting-filter-no-pow"><div class="toggle-track"></div></label>
+        </div>
       </div>
       <div class="panel-section">
         <h2>Sync</h2>
@@ -1088,26 +1095,30 @@ function fromB64url(b64url) {
   const b64 = b64url.replace(/-/g, '+').replace(/_/g, '/');
   return b64 + '='.repeat((4 - b64.length % 4) % 4);
 }
-function snkUri(name, pubKey) {
-  return `snk:${encodeURIComponent(name)}/${toB64url(pubKey)}`;
+function snkUri(name, pubKey, powStamp) {
+  const base = `snk:${encodeURIComponent(name)}/${toB64url(pubKey)}`;
+  return powStamp ? `${base} ${powStamp}` : base;
 }
 function parseSnkUri(uri) {
   if (!uri.startsWith('snk:')) return null;
   const rest = uri.slice(4);
   const i1 = rest.indexOf('/');
   if (i1 < 0) return null;
-  const name    = decodeURIComponent(rest.slice(0, i1));
-  const pubPart = rest.slice(i1 + 1);
+  const name       = decodeURIComponent(rest.slice(0, i1));
+  const afterSlash = rest.slice(i1 + 1);
+  const spaceIdx   = afterSlash.indexOf(' ');
+  const pubPart    = spaceIdx >= 0 ? afterSlash.slice(0, spaceIdx) : afterSlash;
+  const stampPart  = spaceIdx >= 0 ? afterSlash.slice(spaceIdx + 1).trim() : null;
   if (pubPart.length !== 43) return null;
-  return {name, public_key: fromB64url(pubPart)};
+  return {name, public_key: fromB64url(pubPart), pow_stamp: stampPart || null};
 }
 function parseSnkHeader(contentText, senderPub) {
-  if (!contentText || !senderPub) return {claimedName: null, bodyText: contentText || ''};
+  if (!contentText || !senderPub) return {claimedName: null, powStamp: null, bodyText: contentText || ''};
   const nl = contentText.indexOf('\n');
   const firstLine = nl >= 0 ? contentText.slice(0, nl) : contentText;
   const parsed = parseSnkUri(firstLine);
-  if (!parsed || parsed.public_key !== senderPub) return {claimedName: null, bodyText: contentText};
-  return {claimedName: parsed.name, bodyText: nl >= 0 ? contentText.slice(nl + 1) : ''};
+  if (!parsed || parsed.public_key !== senderPub) return {claimedName: null, powStamp: null, bodyText: contentText};
+  return {claimedName: parsed.name, powStamp: parsed.pow_stamp, bodyText: nl >= 0 ? contentText.slice(nl + 1) : ''};
 }
 async function contactHash(pubKeyB64) {
   const bytes = Uint8Array.from(atob(pubKeyB64), c => c.charCodeAt(0));
@@ -1179,6 +1190,13 @@ document.addEventListener('DOMContentLoaded', () => {
   el('setting-filter-anon').addEventListener('change', function () {
     _filterAnon = this.checked;
     localStorage.setItem('snk_filter_anon', this.checked ? '1' : '0');
+    rebuildConversations();
+    rerenderCurrentView();
+    renderSidebar();
+  });
+  el('setting-filter-no-pow').addEventListener('change', function () {
+    _filterNoPow = this.checked;
+    localStorage.setItem('snk_filter_no_pow', this.checked ? '1' : '0');
     rebuildConversations();
     rerenderCurrentView();
     renderSidebar();
@@ -1355,10 +1373,16 @@ function isAnonymousMsg(m) {
   const {claimedName} = parseSnkHeader(m.content_text, m.sender_pub);
   return !claimedName;
 }
+function hasPoWStamp(m) {
+  if (!m.sender_pub) return false;
+  const {claimedName, powStamp} = parseSnkHeader(m.content_text, m.sender_pub);
+  return claimedName !== null && powStamp !== null;
+}
 
 function isFilteredMsg(m) {
   if (m.sender_pub && blockedKeys.has(m.sender_pub)) return true;
   if (_filterAnon && isAnonymousMsg(m)) return true;
+  if (_filterNoPow && m.sender_pub && !hasPoWStamp(m)) return true;
   return false;
 }
 
@@ -1807,14 +1831,15 @@ function toggleSnkCard(senderEl) {
 
 function renderSenderMeta(m) {
   if (!m.sender_pub) return '<span class="msg-sender anon">anon</span>';
-  const {claimedName} = parseSnkHeader(m.content_text, m.sender_pub);
+  const {claimedName, powStamp} = parseSnkHeader(m.content_text, m.sender_pub);
   const knownName = resolveByPub(m.sender_pub);
   const name = knownName || claimedName || (m.sender_pub.slice(0, 8) + '…');
+  const powBadge = powStamp ? ' <span class="pow-badge" title="Identity has proof-of-work stamp">⚡</span>' : '';
   if (claimedName && !knownName) {
     const uri = esc(snkUri(claimedName, m.sender_pub));
-    return `<span class="msg-sender addable" data-snk-uri="${uri}" data-snk-name="${esc(claimedName)}" data-snk-key="${esc(m.sender_pub)}">${esc(name)} <span class="snk-hint">+</span></span>`;
+    return `<span class="msg-sender addable" data-snk-uri="${uri}" data-snk-name="${esc(claimedName)}" data-snk-key="${esc(m.sender_pub)}">${esc(name)} <span class="snk-hint">+</span></span>${powBadge}`;
   }
-  return `<span class="msg-sender">${esc(name)}</span>`;
+  return `<span class="msg-sender">${esc(name)}</span>${powBadge}`;
 }
 
 function renderTimeMeta(m) {
@@ -2037,7 +2062,7 @@ async function send() {
   const rawBody = el('compose-body').value.trim();
   if (!rawBody) { toast('Enter a message.'); return; }
   const body = activeIdentity
-    ? snkUri(activeIdentity.name, activeIdentity.public_key) + '\n' + rawBody
+    ? snkUri(activeIdentity.name, activeIdentity.public_key, activeIdentity.pow_stamp || null) + '\n' + rawBody
     : rawBody;
 
   const mode = el('send-btn').dataset.mode;
@@ -2132,10 +2157,15 @@ function renderIdentities() {
   for (const id of identities) {
     const div = document.createElement('div');
     div.className = 'card';
+    const powInfo = id.pow_stamp
+      ? `<span class="pow-badge" title="PoW stamp: ${esc(id.pow_stamp)}">⚡ ${id.pow_bits} bits</span>`
+      : `<span style="font-size:11px;color:var(--muted)">No PoW</span>`;
     div.innerHTML = `
       <div class="card-header">
         <span class="card-name">${esc(id.name)}</span>
-        <div style="display:flex;gap:4px">
+        <div style="display:flex;gap:4px;align-items:center">
+          ${powInfo}
+          <button class="sm ghost" data-mine>Mine PoW</button>
           <button class="sm ghost" data-share>Share snk:</button>
           <button class="sm danger" data-name="${esc(id.name)}">Delete</button>
         </div>
@@ -2148,8 +2178,9 @@ function renderIdentities() {
         <button class="sm ghost" data-copy="${esc(id.public_key)}" title="Copy public key">Copy</button>
       </div>`;
     div.querySelector('[data-share]').addEventListener('click', () => {
-      showQR(snkUri(id.name, id.public_key), id.name);
+      showQR(snkUri(id.name, id.public_key, id.pow_stamp || null), id.name);
     });
+    div.querySelector('[data-mine]').addEventListener('click', function() { mineIdentityPoW(id.name, this); });
     div.querySelector('.sm.danger').addEventListener('click', () => deleteIdentity(id.name));
     div.querySelectorAll('[data-copy]').forEach(btn => {
       btn.addEventListener('click', () => copyKey(btn.dataset.copy));
@@ -2175,6 +2206,26 @@ async function addIdentity() {
   rebuildConversations();
   renderSidebar();
   toast(`Identity "${name}" created.`);
+}
+
+async function mineIdentityPoW(name, btn) {
+  if (btn.dataset.mining) return;
+  btn.dataset.mining = '1';
+  btn.disabled = true;
+  btn.textContent = 'Mining…';
+  try {
+    const result = await backend.mineIdentityPow(name);
+    await loadIdentities();
+    renderIdentities();
+    rebuildConversations();
+    renderSidebar();
+    if (result) toast(`PoW stamp: ${result.pow_bits} bits.`);
+  } catch {
+    // silent
+  } finally {
+    btn.disabled = false;
+    delete btn.dataset.mining;
+  }
 }
 
 async function deleteIdentity(name) {
@@ -2419,6 +2470,7 @@ function fmtTime(iso) {
 let _notifsEnabled  = localStorage.getItem('snk_notifs') === '1';
 let _enterToSend    = localStorage.getItem('snk_enter_send') !== '0';
 let _filterAnon     = localStorage.getItem('snk_filter_anon') === '1';
+let _filterNoPow    = localStorage.getItem('snk_filter_no_pow') === '1';
 
 const blockedKeys = new Set(JSON.parse(localStorage.getItem('snk_blocked_keys') || '[]'));
 function saveBlockedKeys() { localStorage.setItem('snk_blocked_keys', JSON.stringify([...blockedKeys])); }
@@ -2444,6 +2496,7 @@ function openSettings() {
   el('setting-notifs').checked        = _notifsEnabled;
   el('setting-enter-send').checked    = _enterToSend;
   el('setting-filter-anon').checked   = _filterAnon;
+  el('setting-filter-no-pow').checked = _filterNoPow;
   el('setting-refresh').value         = localStorage.getItem('snk_refresh_idle') || '30';
 
   renderSidebar();

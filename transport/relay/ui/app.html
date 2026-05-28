@@ -989,6 +989,13 @@
           </div>
           <label class="toggle"><input type="checkbox" id="setting-filter-anon"><div class="toggle-track"></div></label>
         </div>
+        <div class="setting-row">
+          <div class="setting-info">
+            <div class="label">Require identity PoW stamp</div>
+            <div class="desc">Hide messages from identities with no proof-of-work stamp. Encourages effort investment before posting.</div>
+          </div>
+          <label class="toggle"><input type="checkbox" id="setting-filter-no-pow"><div class="toggle-track"></div></label>
+        </div>
       </div>
       <div class="panel-section">
         <h2>Sync</h2>
@@ -1490,6 +1497,8 @@ class BrowserBackend {
     return ids.map(id => ({
       name:       id.name,
       public_key: this._edPubB64(id),
+      pow_stamp:  id.pow_stamp  || null,
+      pow_bits:   id.pow_bits   || 0,
     }));
   }
 
@@ -1510,6 +1519,68 @@ class BrowserBackend {
 
   async deleteIdentity(name) {
     await dbDelete('identities', name);
+  }
+
+  // Mine a 16-byte identity PoW stamp in a Worker for durationSecs seconds,
+  // then return the best stamp found.
+  // argon2id(stamp[16] || pubkey[32], salt="sneakernet-idpow-v1")
+  async mineIdentityPow(name) {
+    const durationSecs = 5;
+    const ids = await dbGetAll('identities');
+    const id  = ids.find(i => i.name === name);
+    if (!id) throw new Error('identity not found');
+    const pubBytes = b64dec(this._edPubB64(id));
+
+    const argon2Url = new URL('/argon2.js', location.href).href;
+    const src = `
+importScripts(${JSON.stringify(argon2Url)});
+const _salt = new TextEncoder().encode('sneakernet-idpow-v1');
+function _lz(h) {
+  let n = 0;
+  for (const b of h) {
+    if (b === 0) { n += 8; continue; }
+    let m = 0x80;
+    while (m && !(b & m)) { n++; m >>>= 1; }
+    break;
+  }
+  return n;
+}
+let bestStamp = null, bestBits = -1;
+self.onmessage = async function(e) {
+  if (e.data.stop) {
+    self.postMessage({stamp: bestStamp ? Array.from(bestStamp) : Array(16).fill(0), powBits: Math.max(bestBits, 0)});
+    return;
+  }
+  const {pubKey} = e.data;
+  const input = new Uint8Array(48);
+  input.set(new Uint8Array(pubKey), 16);
+  try {
+    while (true) {
+      crypto.getRandomValues(input.subarray(0, 16));
+      const r = await argon2.hash({
+        pass: input, salt: _salt,
+        time: 1, mem: 65536, parallelism: 1, hashLen: 32,
+        type: argon2.ArgonType.Argon2id,
+      });
+      const wf = _lz(r.hash);
+      if (wf > bestBits) { bestBits = wf; bestStamp = input.slice(0, 16); }
+    }
+  } catch(err) { self.postMessage({error: String(err)}); }
+};`;
+    const worker = new Worker(URL.createObjectURL(new Blob([src], {type:'application/javascript'})));
+    const result = await new Promise((resolve, reject) => {
+      worker.onmessage = e => resolve(e.data);
+      worker.onerror   = e => reject(new Error(e.message || 'worker error'));
+      worker.postMessage({pubKey: Array.from(pubBytes)});
+      setTimeout(() => worker.postMessage({stop: true}), durationSecs * 1000);
+    });
+    worker.terminate();
+    if (result.error) throw new Error(result.error);
+
+    const stampB64url = toB64url(b64enc(new Uint8Array(result.stamp)));
+    const rec = {...id, pow_stamp: stampB64url, pow_bits: result.powBits};
+    await dbPut('identities', rec);
+    return {pow_stamp: stampB64url, pow_bits: result.powBits};
   }
 
   // ── contacts ────────────────────────────────────────────────────────────
@@ -1646,20 +1717,28 @@ class BrowserBackend {
             m => m.block_id === blkId && m.sent_to && m.decrypted_by === id.name
           );
           if (!alreadySent) {
-            this._inbox.push({
-              id:           ++this._nextId,
-              block_id:     blkId,
-              channel:      null,
-              sender_pub:   parsed.senderPub,
-              msg_type:     parsed.msgType,
-              content:      parsed.contentB64,
-              thread_refs:  parsed.threadRefs,
-              sent_at:      parsed.sentAt,
-              received_at:  new Date().toISOString(),
-              decrypted_by: id.name,
-              work_factor:  blk.work_factor || 0,
-            });
-            found++;
+            const contentText = new TextDecoder().decode(b64dec(parsed.contentB64));
+            // Check for an identity PoW gift (anonymous DM with snk-pow-gift: content).
+            if (!parsed.senderPub && contentText.startsWith('snk-pow-gift:')) {
+              const stampB64url = contentText.slice('snk-pow-gift:'.length).trim();
+              this._maybeApplyPowGift(id, stampB64url).catch(() => {});
+            } else {
+              this._inbox.push({
+                id:           ++this._nextId,
+                block_id:     blkId,
+                channel:      null,
+                sender_pub:   parsed.senderPub,
+                msg_type:     parsed.msgType,
+                content:      parsed.contentB64,
+                content_text: contentText,
+                thread_refs:  parsed.threadRefs,
+                sent_at:      parsed.sentAt,
+                received_at:  new Date().toISOString(),
+                decrypted_by: id.name,
+                work_factor:  blk.work_factor || 0,
+              });
+              found++;
+            }
           }
           seenIds.add(blkId);
           matched = true; break;
@@ -1794,8 +1873,10 @@ self.onmessage = async function(e) {
     }
   }
 
-  // Boost a message by mining a better stamp. Returns new work_factor or null.
-  // Hard 5-second budget; terminates the worker if no improvement is found in time.
+  // Boost a message by mining a better block stamp AND a better identity stamp
+  // for the sender, both within a shared 5-second window.
+  // If the identity stamp improves, sends an anonymous gift DM to the sender.
+  // Returns new work_factor or null.
   async boost(blockId) {
     const br = await fetch(`/api/blocks/${blockId}`);
     if (!br.ok) return null;
@@ -1803,30 +1884,138 @@ self.onmessage = async function(e) {
     const payload = b64dec(bd.payload);
     const currentWF = bd.work_factor || 0;
 
-    const w = this._makePoWWorker();
-    let result = null;
-    try {
-      result = await Promise.race([
-        new Promise(resolve => {
-          w.onmessage = e => resolve(e.data);
-          w.onerror   = ()  => resolve(null);
-          w.postMessage({payload: payload.slice(), target: currentWF + 1});
-        }),
-        new Promise(resolve => setTimeout(() => resolve(null), 5000)),
-      ]);
-    } finally {
-      w.terminate();
+    // Find sender info from inbox for identity PoW gifting.
+    const msg = this._inbox.find(m => m.block_id === blockId);
+    const senderPubB64 = msg?.sender_pub || null;
+    const senderPubBytes = senderPubB64 ? b64dec(senderPubB64) : null;
+    const currentIdBits = senderPubBytes
+      ? this._parseSnkStampBits(msg.content_text, senderPubB64)
+      : -1;
+
+    // Mine block stamp (up to 5s, stops on first improvement).
+    const blockWorker = this._makePoWWorker();
+    const blockMine = Promise.race([
+      new Promise(resolve => {
+        blockWorker.onmessage = e => resolve(e.data);
+        blockWorker.onerror   = () => resolve(null);
+        blockWorker.postMessage({payload: payload.slice(), target: currentWF + 1});
+      }),
+      new Promise(resolve => setTimeout(() => resolve(null), 5000)),
+    ]).finally(() => blockWorker.terminate());
+
+    // Mine identity stamp for the sender concurrently (5s, take best).
+    let idMine = Promise.resolve(null);
+    if (senderPubBytes) {
+      const argon2Url = new URL('/argon2.js', location.href).href;
+      const idSrc = `
+importScripts(${JSON.stringify(argon2Url)});
+const _salt = new TextEncoder().encode('sneakernet-idpow-v1');
+function _lz(h){let n=0;for(const b of h){if(b===0){n+=8;continue;}let m=0x80;while(m&&!(b&m)){n++;m>>>=1;}break;}return n;}
+let bestStamp=null,bestBits=-1;
+self.onmessage=async function(e){
+  if(e.data.stop){self.postMessage({stamp:bestStamp?Array.from(bestStamp):Array(16).fill(0),bits:Math.max(bestBits,0)});return;}
+  const{pubKey}=e.data;
+  const input=new Uint8Array(48);
+  input.set(new Uint8Array(pubKey),16);
+  try{while(true){
+    crypto.getRandomValues(input.subarray(0,16));
+    const r=await argon2.hash({pass:input,salt:_salt,time:1,mem:65536,parallelism:1,hashLen:32,type:argon2.ArgonType.Argon2id});
+    const wf=_lz(r.hash);
+    if(wf>bestBits){bestBits=wf;bestStamp=input.slice(0,16);}
+  }}catch(err){self.postMessage({error:String(err)});}
+};`;
+      const idWorker = new Worker(URL.createObjectURL(new Blob([idSrc], {type:'application/javascript'})));
+      idMine = new Promise(resolve => {
+        idWorker.onmessage = e => resolve(e.data.error ? null : e.data);
+        idWorker.onerror   = () => resolve(null);
+        idWorker.postMessage({pubKey: Array.from(senderPubBytes)});
+        setTimeout(() => idWorker.postMessage({stop: true}), 5000);
+      }).finally(() => setTimeout(() => idWorker.terminate(), 200));
     }
 
-    if (!result || result.workFactor <= currentWF) return null;
-    const stamp = new Uint8Array(result.stamp);
-    const sr = await fetch('/api/blocks', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({stamp: b64enc(stamp), payload: b64enc(payload)}),
-    });
-    if (!sr.ok) return null;
-    return result.workFactor;
+    const [blockResult, idResult] = await Promise.all([blockMine, idMine]);
+
+    // Store block boost if successful.
+    let newWF = null;
+    if (blockResult && blockResult.workFactor > currentWF) {
+      const stamp = new Uint8Array(blockResult.stamp);
+      const sr = await fetch('/api/blocks', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({stamp: b64enc(stamp), payload: b64enc(payload)}),
+      });
+      if (sr.ok) newWF = blockResult.workFactor;
+    }
+
+    // Send identity gift if we improved on the sender's current stamp.
+    if (idResult && senderPubBytes && idResult.bits > currentIdBits) {
+      const stampB64url = toB64url(b64enc(new Uint8Array(idResult.stamp)));
+      this._sendGiftDM(senderPubB64, 'snk-pow-gift:' + stampB64url).catch(() => {});
+    }
+
+    return newWF;
+  }
+
+  // Parse the identity PoW bits from a message's snk: header line.
+  // Returns -1 if no stamp is present.
+  _parseSnkStampBits(contentText, senderPubB64) {
+    if (!contentText || !senderPubB64) return -1;
+    const firstLine = contentText.split('\n')[0];
+    const spaceIdx  = firstLine.indexOf(' ');
+    if (spaceIdx < 0) return -1;
+    const stampB64url = firstLine.slice(spaceIdx + 1).trim();
+    if (!stampB64url) return -1;
+    // We can't run argon2 synchronously here; return 0 as a baseline so any
+    // improvement will be sent (the recipient verifies before applying).
+    return 0;
+  }
+
+  // Verify a gifted stamp against the identity's pubkey and apply it if better.
+  async _maybeApplyPowGift(id, stampB64url) {
+    const stamp = fromB64url(stampB64url);
+    if (!stamp || stamp.length !== 16) return;
+    const pubBytes = b64dec(this._edPubB64(id));
+
+    const argon2Url = new URL('/argon2.js', location.href).href;
+    const src = `
+importScripts(${JSON.stringify(argon2Url)});
+const _salt = new TextEncoder().encode('sneakernet-idpow-v1');
+function _lz(h){let n=0;for(const b of h){if(b===0){n+=8;continue;}let m=0x80;while(m&&!(b&m)){n++;m>>>=1;}break;}return n;}
+self.onmessage = async function(e) {
+  const {stamp, pubKey} = e.data;
+  const input = new Uint8Array(48);
+  input.set(new Uint8Array(stamp));
+  input.set(new Uint8Array(pubKey), 16);
+  const r = await argon2.hash({pass:input,salt:_salt,time:1,mem:65536,parallelism:1,hashLen:32,type:argon2.ArgonType.Argon2id});
+  self.postMessage({bits: _lz(r.hash)});
+};`;
+    const w = new Worker(URL.createObjectURL(new Blob([src], {type:'application/javascript'})));
+    const newBits = await new Promise((resolve, reject) => {
+      w.onmessage = e => resolve(e.data.bits);
+      w.onerror   = e => reject(e);
+      w.postMessage({stamp: Array.from(stamp), pubKey: Array.from(pubBytes)});
+    }).finally(() => w.terminate());
+
+    const curBits = id.pow_bits || 0;
+    if (newBits > curBits) {
+      const fresh = await dbGetAll('identities').then(all => all.find(i => i.name === id.name));
+      if (fresh) {
+        await dbPut('identities', {...fresh, pow_stamp: stampB64url, pow_bits: newBits});
+      }
+    }
+  }
+
+  // Send an anonymous DM with zero block stamp — just needs to be delivered.
+  async _sendGiftDM(recipientEdPubB64, content) {
+    try {
+      const plain   = await buildV2Plain(content, null, null, null);
+      const payload = await encryptDirect(recipientEdPubB64, plain);
+      await fetch('/api/blocks', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({stamp: b64enc(new Uint8Array(4)), payload: b64enc(payload)}),
+      });
+    } catch {} // silent — gift is best-effort
   }
 
   // ── sent log (localStorage) ─────────────────────────────────────────
@@ -2016,26 +2205,30 @@ function fromB64url(b64url) {
   const b64 = b64url.replace(/-/g, '+').replace(/_/g, '/');
   return b64 + '='.repeat((4 - b64.length % 4) % 4);
 }
-function snkUri(name, pubKey) {
-  return `snk:${encodeURIComponent(name)}/${toB64url(pubKey)}`;
+function snkUri(name, pubKey, powStamp) {
+  const base = `snk:${encodeURIComponent(name)}/${toB64url(pubKey)}`;
+  return powStamp ? `${base} ${powStamp}` : base;
 }
 function parseSnkUri(uri) {
   if (!uri.startsWith('snk:')) return null;
   const rest = uri.slice(4);
   const i1 = rest.indexOf('/');
   if (i1 < 0) return null;
-  const name    = decodeURIComponent(rest.slice(0, i1));
-  const pubPart = rest.slice(i1 + 1);
+  const name       = decodeURIComponent(rest.slice(0, i1));
+  const afterSlash = rest.slice(i1 + 1);
+  const spaceIdx   = afterSlash.indexOf(' ');
+  const pubPart    = spaceIdx >= 0 ? afterSlash.slice(0, spaceIdx) : afterSlash;
+  const stampPart  = spaceIdx >= 0 ? afterSlash.slice(spaceIdx + 1).trim() : null;
   if (pubPart.length !== 43) return null;
-  return {name, public_key: fromB64url(pubPart)};
+  return {name, public_key: fromB64url(pubPart), pow_stamp: stampPart || null};
 }
 function parseSnkHeader(contentText, senderPub) {
-  if (!contentText || !senderPub) return {claimedName: null, bodyText: contentText || ''};
+  if (!contentText || !senderPub) return {claimedName: null, powStamp: null, bodyText: contentText || ''};
   const nl = contentText.indexOf('\n');
   const firstLine = nl >= 0 ? contentText.slice(0, nl) : contentText;
   const parsed = parseSnkUri(firstLine);
-  if (!parsed || parsed.public_key !== senderPub) return {claimedName: null, bodyText: contentText};
-  return {claimedName: parsed.name, bodyText: nl >= 0 ? contentText.slice(nl + 1) : ''};
+  if (!parsed || parsed.public_key !== senderPub) return {claimedName: null, powStamp: null, bodyText: contentText};
+  return {claimedName: parsed.name, powStamp: parsed.pow_stamp, bodyText: nl >= 0 ? contentText.slice(nl + 1) : ''};
 }
 async function contactHash(pubKeyB64) {
   const bytes = Uint8Array.from(atob(pubKeyB64), c => c.charCodeAt(0));
@@ -2107,6 +2300,13 @@ document.addEventListener('DOMContentLoaded', () => {
   el('setting-filter-anon').addEventListener('change', function () {
     _filterAnon = this.checked;
     localStorage.setItem('snk_filter_anon', this.checked ? '1' : '0');
+    rebuildConversations();
+    rerenderCurrentView();
+    renderSidebar();
+  });
+  el('setting-filter-no-pow').addEventListener('change', function () {
+    _filterNoPow = this.checked;
+    localStorage.setItem('snk_filter_no_pow', this.checked ? '1' : '0');
     rebuildConversations();
     rerenderCurrentView();
     renderSidebar();
@@ -2283,10 +2483,16 @@ function isAnonymousMsg(m) {
   const {claimedName} = parseSnkHeader(m.content_text, m.sender_pub);
   return !claimedName;
 }
+function hasPoWStamp(m) {
+  if (!m.sender_pub) return false;
+  const {claimedName, powStamp} = parseSnkHeader(m.content_text, m.sender_pub);
+  return claimedName !== null && powStamp !== null;
+}
 
 function isFilteredMsg(m) {
   if (m.sender_pub && blockedKeys.has(m.sender_pub)) return true;
   if (_filterAnon && isAnonymousMsg(m)) return true;
+  if (_filterNoPow && m.sender_pub && !hasPoWStamp(m)) return true;
   return false;
 }
 
@@ -2735,14 +2941,15 @@ function toggleSnkCard(senderEl) {
 
 function renderSenderMeta(m) {
   if (!m.sender_pub) return '<span class="msg-sender anon">anon</span>';
-  const {claimedName} = parseSnkHeader(m.content_text, m.sender_pub);
+  const {claimedName, powStamp} = parseSnkHeader(m.content_text, m.sender_pub);
   const knownName = resolveByPub(m.sender_pub);
   const name = knownName || claimedName || (m.sender_pub.slice(0, 8) + '…');
+  const powBadge = powStamp ? ' <span class="pow-badge" title="Identity has proof-of-work stamp">⚡</span>' : '';
   if (claimedName && !knownName) {
     const uri = esc(snkUri(claimedName, m.sender_pub));
-    return `<span class="msg-sender addable" data-snk-uri="${uri}" data-snk-name="${esc(claimedName)}" data-snk-key="${esc(m.sender_pub)}">${esc(name)} <span class="snk-hint">+</span></span>`;
+    return `<span class="msg-sender addable" data-snk-uri="${uri}" data-snk-name="${esc(claimedName)}" data-snk-key="${esc(m.sender_pub)}">${esc(name)} <span class="snk-hint">+</span></span>${powBadge}`;
   }
-  return `<span class="msg-sender">${esc(name)}</span>`;
+  return `<span class="msg-sender">${esc(name)}</span>${powBadge}`;
 }
 
 function renderTimeMeta(m) {
@@ -2965,7 +3172,7 @@ async function send() {
   const rawBody = el('compose-body').value.trim();
   if (!rawBody) { toast('Enter a message.'); return; }
   const body = activeIdentity
-    ? snkUri(activeIdentity.name, activeIdentity.public_key) + '\n' + rawBody
+    ? snkUri(activeIdentity.name, activeIdentity.public_key, activeIdentity.pow_stamp || null) + '\n' + rawBody
     : rawBody;
 
   const mode = el('send-btn').dataset.mode;
@@ -3060,10 +3267,15 @@ function renderIdentities() {
   for (const id of identities) {
     const div = document.createElement('div');
     div.className = 'card';
+    const powInfo = id.pow_stamp
+      ? `<span class="pow-badge" title="PoW stamp: ${esc(id.pow_stamp)}">⚡ ${id.pow_bits} bits</span>`
+      : `<span style="font-size:11px;color:var(--muted)">No PoW</span>`;
     div.innerHTML = `
       <div class="card-header">
         <span class="card-name">${esc(id.name)}</span>
-        <div style="display:flex;gap:4px">
+        <div style="display:flex;gap:4px;align-items:center">
+          ${powInfo}
+          <button class="sm ghost" data-mine>Mine PoW</button>
           <button class="sm ghost" data-share>Share snk:</button>
           <button class="sm danger" data-name="${esc(id.name)}">Delete</button>
         </div>
@@ -3076,8 +3288,9 @@ function renderIdentities() {
         <button class="sm ghost" data-copy="${esc(id.public_key)}" title="Copy public key">Copy</button>
       </div>`;
     div.querySelector('[data-share]').addEventListener('click', () => {
-      showQR(snkUri(id.name, id.public_key), id.name);
+      showQR(snkUri(id.name, id.public_key, id.pow_stamp || null), id.name);
     });
+    div.querySelector('[data-mine]').addEventListener('click', function() { mineIdentityPoW(id.name, this); });
     div.querySelector('.sm.danger').addEventListener('click', () => deleteIdentity(id.name));
     div.querySelectorAll('[data-copy]').forEach(btn => {
       btn.addEventListener('click', () => copyKey(btn.dataset.copy));
@@ -3103,6 +3316,26 @@ async function addIdentity() {
   rebuildConversations();
   renderSidebar();
   toast(`Identity "${name}" created.`);
+}
+
+async function mineIdentityPoW(name, btn) {
+  if (btn.dataset.mining) return;
+  btn.dataset.mining = '1';
+  btn.disabled = true;
+  btn.textContent = 'Mining…';
+  try {
+    const result = await backend.mineIdentityPow(name);
+    await loadIdentities();
+    renderIdentities();
+    rebuildConversations();
+    renderSidebar();
+    if (result) toast(`PoW stamp: ${result.pow_bits} bits.`);
+  } catch {
+    // silent
+  } finally {
+    btn.disabled = false;
+    delete btn.dataset.mining;
+  }
 }
 
 async function deleteIdentity(name) {
@@ -3347,6 +3580,7 @@ function fmtTime(iso) {
 let _notifsEnabled  = localStorage.getItem('snk_notifs') === '1';
 let _enterToSend    = localStorage.getItem('snk_enter_send') !== '0';
 let _filterAnon     = localStorage.getItem('snk_filter_anon') === '1';
+let _filterNoPow    = localStorage.getItem('snk_filter_no_pow') === '1';
 
 const blockedKeys = new Set(JSON.parse(localStorage.getItem('snk_blocked_keys') || '[]'));
 function saveBlockedKeys() { localStorage.setItem('snk_blocked_keys', JSON.stringify([...blockedKeys])); }
@@ -3372,6 +3606,7 @@ function openSettings() {
   el('setting-notifs').checked        = _notifsEnabled;
   el('setting-enter-send').checked    = _enterToSend;
   el('setting-filter-anon').checked   = _filterAnon;
+  el('setting-filter-no-pow').checked = _filterNoPow;
   el('setting-refresh').value         = localStorage.getItem('snk_refresh_idle') || '30';
 
   renderSidebar();

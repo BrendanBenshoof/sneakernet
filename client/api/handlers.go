@@ -105,15 +105,65 @@ func (s *Server) handleListIdentities(w http.ResponseWriter, r *http.Request) {
 	type identityResp struct {
 		Name      string `json:"name"`
 		PublicKey string `json:"public_key"`
+		PowStamp  string `json:"pow_stamp,omitempty"` // base64url, 16 bytes if mined
+		PowBits   int    `json:"pow_bits,omitempty"`  // leading zero bits; 0 if no stamp
 	}
 	out := make([]identityResp, len(ids))
 	for i, id := range ids {
-		out[i] = identityResp{
+		r := identityResp{
 			Name:      id.Name,
 			PublicKey: base64.StdEncoding.EncodeToString(id.PublicKey()),
 		}
+		if len(id.IDPowStamp) > 0 {
+			r.PowStamp = base64.RawURLEncoding.EncodeToString(id.IDPowStamp)
+			var pub [32]byte
+			copy(pub[:], id.PublicKey())
+			r.PowBits = client.IdentityWorkFactor(id.IDPowStamp, pub)
+		}
+		out[i] = r
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// POST /api/identities/{name}/mine-pow
+// Mines for 5 seconds and returns the best identity PoW stamp found.
+// Uses request context so an HTTP disconnect cancels early.
+func (s *Server) handleMineIdentityPoW(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+
+	s.mu.RLock()
+	id := s.ks.GetIdentity(name)
+	s.mu.RUnlock()
+	if id == nil {
+		writeError(w, http.StatusNotFound, "identity not found")
+		return
+	}
+
+	var pub [32]byte
+	copy(pub[:], id.PublicKey())
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	stamp, bits, err := client.MineIdentityPoW(ctx, pub, 5*time.Second)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "mining cancelled or failed: "+err.Error())
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.ks.SetIdentityPoW(name, stamp); err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if err := s.ks.Save(s.ksPath); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to save keystore")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"pow_stamp": base64.RawURLEncoding.EncodeToString(stamp),
+		"pow_bits":  bits,
+	})
 }
 
 // POST /api/identities  {"name":"alice"}
@@ -950,15 +1000,53 @@ func (s *Server) handleBoost(w http.ResponseWriter, r *http.Request) {
 	currentWF, _ := s.blocks.GetWorkFactor(id)
 	target := currentWF + 1
 
+	// Look up the stored message to attempt identity PoW gifting for the sender.
+	var senderPub [32]byte
+	var msgContent []byte
+	if msg, found, err := s.msgs.GetMessage(id); err == nil && found {
+		senderPub = msg.SenderPub
+		msgContent = msg.Content
+	}
+	hasSender := senderPub != [32]byte{}
+
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	stamp, newWF, err := blockstore.MineStamp(ctx, payload, target)
-	if err != nil {
+
+	// Mine block stamp and identity stamp concurrently within the 5s window.
+	type blockRes struct {
+		stamp blockstore.Stamp
+		wf    int
+		err   error
+	}
+	type idRes struct {
+		stamp []byte
+		bits  int
+	}
+	blockCh := make(chan blockRes, 1)
+	idCh    := make(chan idRes, 1)
+
+	go func() {
+		s, wf, err := blockstore.MineStamp(ctx, payload, target)
+		blockCh <- blockRes{s, wf, err}
+	}()
+	if hasSender {
+		go func() {
+			s, bits, _ := client.MineIdentityPoW(ctx, senderPub, 5*time.Second)
+			idCh <- idRes{s, bits}
+		}()
+	} else {
+		idCh <- idRes{}
+	}
+
+	bRes := <-blockCh
+	iRes := <-idCh
+
+	if bRes.err != nil {
 		writeError(w, http.StatusGatewayTimeout, "no improvement found in 5s — try again")
 		return
 	}
 
-	if _, err := s.blocks.Put(stamp, payload, blockstore.TagPhysical); err != nil {
+	if _, err := s.blocks.Put(bRes.stamp, payload, blockstore.TagPhysical); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to store boosted block")
 		return
 	}
@@ -966,14 +1054,40 @@ func (s *Server) handleBoost(w http.ResponseWriter, r *http.Request) {
 	// Re-read from the blockstore: Put silently ignores a lower-WF stamp (if
 	// a concurrent boost already stored a higher one), so the mined newWF may
 	// not match what is actually stored. Always return the live value.
+	newWF := bRes.wf
 	if actualWF, err := s.blocks.GetWorkFactor(id); err == nil {
 		newWF = actualWF
 	}
 
+	// Send identity PoW gift if we found an improvement over the sender's current stamp.
+	if hasSender && len(iRes.stamp) > 0 {
+		_, currentBits := client.ParseSnkStamp(msgContent, senderPub)
+		if iRes.bits > currentBits {
+			go s.sendPowGift(senderPub, iRes.stamp)
+		}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"work_factor": newWF,
-		"stamp":       base64.StdEncoding.EncodeToString(stamp[:]),
+		"stamp":       base64.StdEncoding.EncodeToString(bRes.stamp[:]),
 	})
+}
+
+// sendPowGift sends an anonymous DM to recipientPub containing a PoW gift stamp.
+// Uses a zero block stamp — the message just needs to be delivered, not persist long.
+func (s *Server) sendPowGift(recipientPub [32]byte, stamp []byte) {
+	mp := client.MessagePayload{
+		MsgType:   client.MsgTypeText,
+		Timestamp: time.Now().Unix(),
+		Content:   []byte(client.FormatPowGift(stamp)),
+		FragTotal: 1,
+	}
+	payload, err := client.Encrypt(ed25519.PublicKey(recipientPub[:]), mp)
+	if err != nil {
+		return
+	}
+	var zeroStamp blockstore.Stamp
+	_, _ = s.blocks.Put(zeroStamp, payload, blockstore.TagPhysical)
 }
 
 // --- helpers ---

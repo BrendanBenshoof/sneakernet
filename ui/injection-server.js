@@ -78,6 +78,13 @@ class ServerBackend {
     if (!r || !r.ok) throw new Error('failed');
   }
 
+  async mineIdentityPow(name) {
+    const r = await this._req('POST', `/api/identities/${encodeURIComponent(name)}/mine-pow`);
+    if (!r) throw new Error('cancelled');
+    if (!r.ok) { const d = await r.json(); throw new Error(d.error || 'failed'); }
+    return await r.json(); // {pow_stamp, pow_bits}
+  }
+
   async listContacts() {
     const r = await this._req('GET', '/api/contacts');
     if (!r || !r.ok) return [];
