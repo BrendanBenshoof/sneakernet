@@ -1010,6 +1010,7 @@ let contacts       = [];
 let currentView    = null;
 let conversations  = [];
 let activeIdentity = null;
+let lastMsgLoadSec = 0; // unix timestamp of last loadMessages call, for wf_updated_since
 
 // ── recipient input helpers ────────────────────────────────────────────────
 function parseRecipientInput(str) {
@@ -1244,7 +1245,9 @@ async function scrape(full = false) {
 // ── message loading & grouping ─────────────────────────────────────────────
 async function loadMessages() {
   const lastID = allMessages.reduce((max, m) => m.id > max ? m.id : max, 0);
-  const msgs = await backend.getMessages(lastID);
+  const nowSec = Math.floor(Date.now() / 1000);
+  const msgs = await backend.getMessages(lastID, lastMsgLoadSec);
+  lastMsgLoadSec = nowSec;
   if (!msgs?.length) return;
 
   for (const m of msgs) {

@@ -125,8 +125,10 @@ class ServerBackend {
     return await r.json(); // {found: N}
   }
 
-  async getMessages(afterId) {
-    const r = await this._req('GET', `/api/messages?after_id=${afterId}`);
+  async getMessages(afterId, wfUpdatedSince = 0) {
+    let url = `/api/messages?after_id=${afterId}`;
+    if (wfUpdatedSince > 0) url += `&wf_updated_since=${wfUpdatedSince}`;
+    const r = await this._req('GET', url);
     if (!r || !r.ok) return [];
     return await r.json() || [];
   }

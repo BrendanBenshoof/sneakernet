@@ -248,10 +248,15 @@ func (s *Server) mineWithDeadline(r *http.Request, payload blockstore.Payload) (
 	return stamp, err
 }
 
-// GET /api/messages?after_id=N
+// GET /api/messages?after_id=N&wf_updated_since=T
 // Returns messages with id > after_id (default 0).
+// If wf_updated_since is a non-zero unix timestamp, also returns existing
+// messages whose block was re-stored (boosted) in the blockstore at or after
+// that time, so callers can update their local work_factor display.
 func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
-	afterID, _ := strconv.ParseInt(r.URL.Query().Get("after_id"), 10, 64)
+	q := r.URL.Query()
+	afterID, _ := strconv.ParseInt(q.Get("after_id"), 10, 64)
+	wfSinceUnix, _ := strconv.ParseInt(q.Get("wf_updated_since"), 10, 64)
 
 	msgs, err := s.msgs.ListMessagesAfter(afterID)
 	if err != nil {
@@ -259,10 +264,42 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	out := make([]msgResp, len(msgs))
-	for i, m := range msgs {
-		out[i] = s.buildMsgResp(m)
+	out := make([]msgResp, 0, len(msgs))
+	for _, m := range msgs {
+		out = append(out, s.buildMsgResp(m))
 	}
+
+	// Include any existing messages whose block was recently boosted.
+	if wfSinceUnix > 0 {
+		seen := make(map[blockstore.ID]struct{}, len(msgs))
+		for _, m := range msgs {
+			seen[m.BlockID] = struct{}{}
+		}
+		since := time.Unix(wfSinceUnix, 0)
+		pageToken := ""
+		for {
+			next, refs, err := s.blocks.ListBlocks(pageToken, 200, 0, since)
+			if err != nil {
+				break
+			}
+			for _, ref := range refs {
+				if _, already := seen[ref.ID]; already {
+					continue
+				}
+				m, found, err := s.msgs.GetMessage(ref.ID)
+				if err != nil || !found {
+					continue
+				}
+				seen[ref.ID] = struct{}{}
+				out = append(out, s.buildMsgResp(m))
+			}
+			if next == "" {
+				break
+			}
+			pageToken = next
+		}
+	}
+
 	writeJSON(w, http.StatusOK, out)
 }
 

@@ -582,7 +582,15 @@ class BrowserBackend {
       for (const blk of (data.blocks || [])) {
         const payloadBytes = b64dec(blk.payload);
         const blkId = await sha256hex(payloadBytes);
-        if (seenIds.has(blkId)) continue;
+        if (seenIds.has(blkId)) {
+          // Update work_factor if this block was boosted since we last saw it.
+          const wf = blk.work_factor || 0;
+          if (wf > 0) {
+            const existing = this._inbox.find(m => m.block_id === blkId);
+            if (existing && wf > (existing.work_factor || 0)) existing.work_factor = wf;
+          }
+          continue;
+        }
 
         let matched = false;
 
@@ -609,6 +617,7 @@ class BrowserBackend {
               sent_at:      parsed.sentAt,
               received_at:  new Date().toISOString(),
               decrypted_by: id.name,
+              work_factor:  blk.work_factor || 0,
             });
             found++;
           }
@@ -633,6 +642,7 @@ class BrowserBackend {
               thread_refs: parsed.threadRefs,
               sent_at:     parsed.sentAt,
               received_at: new Date().toISOString(),
+              work_factor: blk.work_factor || 0,
             });
             seenIds.add(blkId);
             found++; break;
@@ -646,7 +656,7 @@ class BrowserBackend {
     return {found};
   }
 
-  async getMessages(afterId) {
+  async getMessages(afterId, _wfUpdatedSince = 0) {
     return this._inbox.filter(m => m.id > afterId);
   }
 

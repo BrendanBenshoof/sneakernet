@@ -301,15 +301,17 @@ func syncStores(src, dst blockstore.Store) error {
 				errs++
 				continue
 			}
-			already, err := dst.Has(ref.ID)
-			if err != nil {
+			if already, err := dst.Has(ref.ID); err != nil {
 				log.Printf("sync: has %x: %v", ref.ID, err)
 				errs++
 				continue
-			}
-			if already {
-				skipped++
-				continue
+			} else if already {
+				// Still copy if src has a higher work_factor (boosted block).
+				dstWF, err := dst.GetWorkFactor(ref.ID)
+				if err != nil || ref.WorkFactor <= dstWF {
+					skipped++
+					continue
+				}
 			}
 			if _, err := dst.Put(stamp, payload, blockstore.TagPhysical); err != nil {
 				log.Printf("sync: put %x: %v", ref.ID, err)
