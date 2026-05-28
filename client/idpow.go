@@ -86,14 +86,20 @@ func IdentityWorkFactor(stamp []byte, pubkey [32]byte) int {
 
 // MineIdentityPoW mines random 16-byte stamps for the given duration, returning
 // the stamp with the highest work factor found. Returns early with an error if
-// ctx is cancelled before the duration elapses. Always returns at least one
-// candidate (the first random stamp tried).
-func MineIdentityPoW(ctx context.Context, pubkey [32]byte, duration time.Duration) ([]byte, int, error) {
+// ctx is cancelled before the duration elapses. If seed is a valid 16-byte
+// stamp it is used as the initial best, so the result is always >= seed's bits.
+func MineIdentityPoW(ctx context.Context, pubkey [32]byte, duration time.Duration, seed []byte) ([]byte, int, error) {
 	best := make([]byte, idPowStampSize)
-	if _, err := rand.Read(best); err != nil {
-		return nil, 0, err
+	var bestBits int
+	if len(seed) == idPowStampSize {
+		copy(best, seed)
+		bestBits = IdentityWorkFactor(best, pubkey)
+	} else {
+		if _, err := rand.Read(best); err != nil {
+			return nil, 0, err
+		}
+		bestBits = IdentityWorkFactor(best, pubkey)
 	}
-	bestBits := IdentityWorkFactor(best, pubkey)
 
 	deadline := time.After(duration)
 	stamp := make([]byte, idPowStampSize)

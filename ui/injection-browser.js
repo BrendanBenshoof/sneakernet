@@ -511,7 +511,8 @@ function _lz(h) {
 let bestStamp = null, bestBits = -1, _stop = false;
 self.onmessage = async function(e) {
   if (e.data.stop) { _stop = true; return; }
-  const {pubKey} = e.data;
+  const {pubKey, seedStamp, seedBits} = e.data;
+  if (seedStamp && seedBits > bestBits) { bestStamp = new Uint8Array(seedStamp); bestBits = seedBits; }
   const input = new Uint8Array(48);
   input.set(new Uint8Array(pubKey), 16);
   try {
@@ -533,15 +534,18 @@ self.onmessage = async function(e) {
     const result = await new Promise((resolve, reject) => {
       worker.onmessage = e => resolve(e.data);
       worker.onerror   = e => reject(new Error(e.message || 'worker error'));
-      worker.postMessage({pubKey: Array.from(pubBytes)});
+      const seedStamp = id.pow_stamp ? Array.from(b64dec(fromB64url(id.pow_stamp))) : null;
+      const seedBits  = id.pow_bits || 0;
+      worker.postMessage({pubKey: Array.from(pubBytes), seedStamp, seedBits});
       setTimeout(() => worker.postMessage({stop: true}), durationSecs * 1000);
     });
     worker.terminate();
     if (result.error) throw new Error(result.error);
 
     const stampB64url = toB64url(b64enc(new Uint8Array(result.stamp)));
-    const rec = {...id, pow_stamp: stampB64url, pow_bits: result.powBits};
-    await dbPut('identities', rec);
+    if (result.powBits > (id.pow_bits || 0)) {
+      await dbPut('identities', {...id, pow_stamp: stampB64url, pow_bits: result.powBits});
+    }
     return {pow_stamp: stampB64url, pow_bits: result.powBits};
   }
 
@@ -934,7 +938,7 @@ self.onmessage=async function(e){
 
   // Verify a gifted stamp against the identity's pubkey and apply it if better.
   async _maybeApplyPowGift(id, stampB64url) {
-    const stamp = fromB64url(stampB64url);
+    const stamp = b64dec(fromB64url(stampB64url)); // decode to bytes, not base64 string
     if (!stamp || stamp.length !== 16) return;
     const pubBytes = b64dec(this._edPubB64(id));
 
@@ -958,12 +962,14 @@ self.onmessage = async function(e) {
       w.postMessage({stamp: Array.from(stamp), pubKey: Array.from(pubBytes)});
     }).finally(() => w.terminate());
 
-    const curBits = id.pow_bits || 0;
+    const fresh = await dbGetAll('identities').then(all => all.find(i => i.name === id.name));
+    if (!fresh) return;
+    const curBits = fresh.pow_bits || 0;
     if (newBits > curBits) {
-      const fresh = await dbGetAll('identities').then(all => all.find(i => i.name === id.name));
-      if (fresh) {
-        await dbPut('identities', {...fresh, pow_stamp: stampB64url, pow_bits: newBits});
-      }
+      await dbPut('identities', {...fresh, pow_stamp: stampB64url, pow_bits: newBits});
+      await loadIdentities();
+      renderIdentities();
+      toast(`Identity "${id.name}" received a PoW upgrade: ${newBits} bits.`);
     }
   }
 
