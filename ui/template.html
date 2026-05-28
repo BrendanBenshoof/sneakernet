@@ -809,6 +809,7 @@
     <div id="sb-footer">
       <button id="scrape-btn" title="Refresh — Shift+click to rescan all blocks"><span class="glyph">&#x27F3;</span> Refresh</button>
       <button id="identities-btn"><span class="glyph">&#x2299;</span> Identities &amp; Channels</button>
+      <button id="notif-btn"><span class="glyph" id="notif-glyph">&#x1F515;</span> <span id="notif-label">Notifications off</span></button>
       <button id="theme-btn"><span class="glyph" id="theme-glyph">&#x263D;</span> <span id="theme-label">Light mode</span></button>
     </div>
   </nav>
@@ -923,6 +924,7 @@ function applyConfig() {
   el('conv-empty').querySelectorAll('[data-join-channel]').forEach(btn => {
     btn.addEventListener('click', () => joinDefaultChannel(btn.dataset.joinChannel));
   });
+  updateNotifBtn();
   if (UI_CONFIG.hasLockButton) {
     const btn = document.createElement('button');
     btn.id          = 'lock-btn';
@@ -1010,6 +1012,7 @@ document.addEventListener('DOMContentLoaded', () => {
   el('onboard-btn').addEventListener('click', onboardCreate);
   el('onboard-name').addEventListener('keydown', e => { if (e.key === 'Enter') onboardCreate(); });
 
+  el('notif-btn').addEventListener('click', toggleNotifs);
   el('scrape-btn').addEventListener('click', e => scrape(e.shiftKey));
   el('new-msg-btn').addEventListener('click', toggleDmForm);
   el('sb-dm-cancel').addEventListener('click', closeDmForm);
@@ -1141,6 +1144,7 @@ async function loadMessages() {
   rebuildConversations();
   renderSidebar();
   if (currentView) rerenderCurrentView();
+  maybeNotify(msgs);
 }
 
 function rebuildConversations() {
@@ -1301,6 +1305,7 @@ function renderSidebar() {
     dirContainer.innerHTML = '<div style="padding:6px 14px;font-size:11px;color:var(--muted)">No messages yet</div>';
   }
   for (const conv of dirConvs) dirContainer.appendChild(makeSbItem(conv, lastSeen));
+  updateTitle();
 }
 
 function makeSbItem(conv, lastSeen) {
@@ -2046,6 +2051,78 @@ function fmtTime(iso) {
     + ' ' + d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
 }
 
+// ── notifications ──────────────────────────────────────────────────────────
+let _notifsEnabled = localStorage.getItem('snk_notifs') === '1';
+
+function updateNotifBtn() {
+  const glyph = el('notif-glyph');
+  const label = el('notif-label');
+  if (!glyph) return;
+  if (_notifsEnabled) {
+    glyph.textContent = '🔔';
+    label.textContent = 'Notifications on';
+    el('notif-btn').style.color = 'var(--accent)';
+  } else {
+    glyph.innerHTML = '&#x1F515;';
+    label.textContent = 'Notifications off';
+    el('notif-btn').style.color = '';
+  }
+}
+
+async function toggleNotifs() {
+  if (_notifsEnabled) {
+    _notifsEnabled = false;
+    localStorage.setItem('snk_notifs', '0');
+    updateNotifBtn();
+    return;
+  }
+  if (!('Notification' in window)) {
+    toast('Notifications not supported in this browser.', true); return;
+  }
+  if (Notification.permission === 'denied') {
+    toast('Notifications are blocked — allow them in your browser site settings.', true); return;
+  }
+  if (Notification.permission === 'default') {
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') { toast('Permission not granted.', true); return; }
+  }
+  _notifsEnabled = true;
+  localStorage.setItem('snk_notifs', '1');
+  updateNotifBtn();
+  toast('Notifications enabled.');
+}
+
+function updateTitle() {
+  const seen  = loadLastSeen();
+  const total = conversations.reduce((n, c) => {
+    const since = seen[convKey(c)];
+    return n + (since
+      ? c.messages.filter(m => m.received_at > since).length
+      : c.messages.length);
+  }, 0);
+  document.title = total > 0
+    ? `(${total}) Sneakernet — ${UI_CONFIG.pageTitle}`
+    : `Sneakernet — ${UI_CONFIG.pageTitle}`;
+}
+
+function maybeNotify(newMsgs) {
+  if (!_notifsEnabled || !document.hidden) return;
+  const novel = newMsgs.filter(m => {
+    if (m.sent_to) return false; // skip outbound
+    if (!currentView) return true;
+    if (currentView.kind === 'channel') return m.channel !== currentView.name;
+    if (currentView.kind === 'direct')  return m.sender_pub !== currentView.pub;
+    return true;
+  });
+  if (!novel.length) return;
+  new Notification('Sneakernet', {
+    body:   novel.length === 1 ? 'New message' : `${novel.length} new messages`,
+    silent: true,
+    tag:    'sneakernet-new',
+  });
+}
+
+// ── validation ─────────────────────────────────────────────────────────────
 const NAME_RE  = /^[a-zA-Z0-9._-]+$/;
 const NAME_MAX = 32;
 function validateName(name) {
