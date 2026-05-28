@@ -692,7 +692,7 @@ function _lz(h) {
 self.onmessage = async function(e) {
   const {payload, target} = e.data;
   if (target <= 0) { self.postMessage({stamp:[0,0,0,0], workFactor:0}); return; }
-  const input = new Uint8Array(2052);
+  const input = new Uint8Array(4100);
   input.set(new Uint8Array(payload), 4);
   try {
     while (true) {
