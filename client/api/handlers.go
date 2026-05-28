@@ -926,6 +926,13 @@ func (s *Server) handleBoost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Re-read from the blockstore: Put silently ignores a lower-WF stamp (if
+	// a concurrent boost already stored a higher one), so the mined newWF may
+	// not match what is actually stored. Always return the live value.
+	if actualWF, err := s.blocks.GetWorkFactor(id); err == nil {
+		newWF = actualWF
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"work_factor": newWF,
 		"stamp":       base64.StdEncoding.EncodeToString(stamp[:]),

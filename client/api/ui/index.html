@@ -1104,6 +1104,7 @@ function applyConfig() {
 // ── state ──────────────────────────────────────────────────────────────────
 let allMessages    = [];
 let byBlock        = new Map();
+const boostingIds  = new Set(); // block IDs with a boost in-flight
 let identities     = [];
 let channels       = [];
 let contacts       = [];
@@ -1544,7 +1545,10 @@ function makeMsgRow(m, {hasPred, hasSucc, isFork, forkFirst, forkLast}) {
   if (senderEl) senderEl.addEventListener('click', () => toggleSnkCard(senderEl));
 
   const barsEl = div.querySelector('.pow-widget');
-  if (barsEl) barsEl.addEventListener('click', () => handleBoost(barsEl, m));
+  if (barsEl) {
+    if (boostingIds.has(m.block_id)) barsEl.dataset.boosting = '1';
+    barsEl.addEventListener('click', () => handleBoost(barsEl, m));
+  }
 
   return div;
 }
@@ -1602,19 +1606,25 @@ function signalBars(wf) {
 }
 
 async function handleBoost(barsEl, m) {
+  if (boostingIds.has(m.block_id)) return;
+  boostingIds.add(m.block_id);
   barsEl.dataset.boosting = '1';
   try {
     const result = await backend.boost(m.block_id);
     if (result !== null) {
       const newWF = typeof result === 'number' ? result : result.work_factor;
-      m.work_factor = newWF;
-      barsEl.dataset.level = newWF >= 15 ? 4 : newWF >= 10 ? 3 : newWF >= 6 ? 2 : newWF >= 3 ? 1 : 0;
-      barsEl.title = `${newWF} PoW bits · click to boost`;
-      toast(`Boosted to ${newWF} PoW bit${newWF !== 1 ? 's' : ''} — block TTL extended.`);
+      // Only move the model forward — never let a stale response lower the WF.
+      if (newWF > (m.work_factor || 0)) {
+        m.work_factor = newWF;
+        barsEl.dataset.level = newWF >= 15 ? 4 : newWF >= 10 ? 3 : newWF >= 6 ? 2 : newWF >= 3 ? 1 : 0;
+        barsEl.title = `${newWF} PoW bits · click to boost`;
+      }
+      toast(`Boosted to ${m.work_factor} PoW bit${m.work_factor !== 1 ? 's' : ''} — block TTL extended.`);
     }
   } catch {
     // silent
   } finally {
+    boostingIds.delete(m.block_id);
     delete barsEl.dataset.boosting;
   }
 }
