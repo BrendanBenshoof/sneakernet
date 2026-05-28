@@ -1745,6 +1745,9 @@ const UI_CONFIG = {
       <strong style="color:var(--text)">Your inbox is not saved.</strong> Decrypted messages live in memory and are cleared when you close or reload this tab. Re-scanning will only recover blocks still held by the relay.<br><br>
       <strong style="color:var(--text)">Keys are stored in this browser only.</strong> Your identities live in this browser's IndexedDB. A different browser, incognito window, or clearing browser data means starting over with a new identity.
     </div>
+    <div style="margin-top:16px">
+      <button class="sm ghost" data-join-channel="sneakernet-alpha">#sneakernet-alpha &rarr;</button>
+    </div>
   </div>`,
 };
 
@@ -1763,6 +1766,9 @@ function applyConfig() {
   el('lock-subtitle').textContent = UI_CONFIG.lockSubtitle;
   el('sb-subtitle').textContent   = UI_CONFIG.sidebarSubtitle;
   if (UI_CONFIG.welcomeHtml) el('conv-empty').innerHTML = UI_CONFIG.welcomeHtml;
+  el('conv-empty').querySelectorAll('[data-join-channel]').forEach(btn => {
+    btn.addEventListener('click', () => joinDefaultChannel(btn.dataset.joinChannel));
+  });
   if (UI_CONFIG.hasLockButton) {
     const btn = document.createElement('button');
     btn.id          = 'lock-btn';
@@ -2696,6 +2702,22 @@ function renderChannelList() {
     div.querySelector('.sm.ghost').addEventListener('click', () => removeChannel(ch.name));
     list.appendChild(div);
   }
+}
+
+async function joinDefaultChannel(name) {
+  const existing = conversations.find(c => c.kind === 'channel' && c.name === name);
+  if (existing) { openConversation(existing); return; }
+  try {
+    await backend.joinChannel(name, name);
+  } catch(e) {
+    if (e.message !== 'duplicate') { toast('Failed to join channel.', true); return; }
+  }
+  await loadChannels();
+  rebuildConversations();
+  renderChannelList();
+  renderSidebar();
+  const conv = conversations.find(c => c.kind === 'channel' && c.name === name);
+  if (conv) openConversation(conv);
 }
 
 async function addChannel() {

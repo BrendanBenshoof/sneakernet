@@ -1071,7 +1071,7 @@ const UI_CONFIG = {
   hasLockButton:   true,
   identitiesHint:  'Stored in the server-side encrypted keystore. Share your <strong>public key</strong> so others can send you messages and verify your identity — one key does both.',
   sendStatusMsg:   'Message stored in blockstore.',
-  welcomeHtml:     'Select a conversation from the sidebar, or click <strong>+</strong> to send a new message.',
+  welcomeHtml:     'Select a conversation from the sidebar, or click <strong>+</strong> to send a new message.<br><br><button class="sm ghost" data-join-channel="sneakernet-alpha">#sneakernet-alpha &rarr;</button>',
 };
 
 </script>
@@ -1089,6 +1089,9 @@ function applyConfig() {
   el('lock-subtitle').textContent = UI_CONFIG.lockSubtitle;
   el('sb-subtitle').textContent   = UI_CONFIG.sidebarSubtitle;
   if (UI_CONFIG.welcomeHtml) el('conv-empty').innerHTML = UI_CONFIG.welcomeHtml;
+  el('conv-empty').querySelectorAll('[data-join-channel]').forEach(btn => {
+    btn.addEventListener('click', () => joinDefaultChannel(btn.dataset.joinChannel));
+  });
   if (UI_CONFIG.hasLockButton) {
     const btn = document.createElement('button');
     btn.id          = 'lock-btn';
@@ -2022,6 +2025,22 @@ function renderChannelList() {
     div.querySelector('.sm.ghost').addEventListener('click', () => removeChannel(ch.name));
     list.appendChild(div);
   }
+}
+
+async function joinDefaultChannel(name) {
+  const existing = conversations.find(c => c.kind === 'channel' && c.name === name);
+  if (existing) { openConversation(existing); return; }
+  try {
+    await backend.joinChannel(name, name);
+  } catch(e) {
+    if (e.message !== 'duplicate') { toast('Failed to join channel.', true); return; }
+  }
+  await loadChannels();
+  rebuildConversations();
+  renderChannelList();
+  renderSidebar();
+  const conv = conversations.find(c => c.kind === 'channel' && c.name === name);
+  if (conv) openConversation(conv);
 }
 
 async function addChannel() {
