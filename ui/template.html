@@ -400,6 +400,18 @@
       padding: 18px 18px 20px;
     }
 
+    .filter-notice {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 14px;
+      font-size: 11px;
+      color: var(--err, #e05);
+      border-bottom: 1px solid color-mix(in srgb, var(--err, #e05) 20%, transparent);
+      background: color-mix(in srgb, var(--err, #e05) 6%, transparent);
+      flex-shrink: 0;
+    }
+
     .empty-state {
       display: flex;
       align-items: center;
@@ -1298,14 +1310,25 @@ function isAnonymousMsg(m) {
   return !claimedName;
 }
 
+let filteredCounts = new Map(); // channel name → count of filter-blocked messages
+
 function rebuildConversations() {
   const chMap   = new Map();
   const dirMap  = new Map();
   const unknown = [];
+  filteredCounts = new Map();
 
   const byIdentity = activeIdentity
     ? allMessages.filter(m => m.decrypted_by === activeIdentity.name || !m.decrypted_by)
     : allMessages;
+
+  if (_filterAnon) {
+    for (const m of byIdentity) {
+      if (m.channel && isAnonymousMsg(m))
+        filteredCounts.set(m.channel, (filteredCounts.get(m.channel) || 0) + 1);
+    }
+  }
+
   const relevant = _filterAnon ? byIdentity.filter(m => !isAnonymousMsg(m)) : byIdentity;
 
   for (const m of relevant) {
@@ -1556,6 +1579,16 @@ function renderMessages(conv, scrollToBottom = false) {
     container.scrollHeight - container.scrollTop - container.clientHeight < 80;
   el('conv-empty').classList.add('hidden');
   container.innerHTML = '';
+
+  if (conv.kind === 'channel') {
+    const blocked = filteredCounts.get(conv.name) || 0;
+    if (blocked > 0) {
+      const notice = document.createElement('div');
+      notice.className = 'filter-notice';
+      notice.textContent = `⛔ ${blocked} blocked message${blocked === 1 ? '' : 's'}`;
+      container.appendChild(notice);
+    }
+  }
 
   if (!conv.messages.length) {
     const empty = document.createElement('div');
