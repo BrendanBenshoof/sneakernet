@@ -783,7 +783,7 @@
       <div class="sb-section">
         <div class="sb-section-title">Channels <button class="icon" id="new-ch-btn" title="Join channel">+</button></div>
         <div id="sb-ch-form" class="hidden">
-          <input id="new-ch-pass" placeholder="Passphrase" autocomplete="off">
+          <input id="new-ch-pass" placeholder="Channel name" autocomplete="off">
           <div class="row">
             <button class="sm ghost" id="sb-ch-cancel">Cancel</button>
             <button class="sm" id="sb-ch-join">Join</button>
@@ -1936,6 +1936,8 @@ async function lock() {
 async function onboardCreate() {
   const name = el('onboard-name').value.trim();
   if (!name) { el('onboard-err').textContent = 'Enter a name.'; return; }
+  const nameErr = validateName(name);
+  if (nameErr) { el('onboard-err').textContent = nameErr; return; }
   el('onboard-err').textContent = '';
   try {
     await backend.addIdentity(name);
@@ -2596,6 +2598,8 @@ function renderIdentities() {
 async function addIdentity() {
   const name = el('new-id-name').value.trim();
   if (!name) return;
+  const nameErr = validateName(name);
+  if (nameErr) { toast(nameErr, true); return; }
   try {
     await backend.addIdentity(name);
   } catch(e) {
@@ -2671,6 +2675,8 @@ function startRenameContact(c, hash, card) {
     if (committed) return; committed = true;
     const newName = input.value.trim();
     if (!newName || newName === current) { await renderContacts(); return; }
+    const nameErr = validateName(newName);
+    if (nameErr) { toast(nameErr, true); await renderContacts(); return; }
     try {
       await backend.renameContact(toB64url(c.public_key), newName);
       toast(`Renamed to "${newName}".`);
@@ -2756,10 +2762,12 @@ async function joinDefaultChannel(name) {
 }
 
 async function addChannel() {
-  const pass = el('new-ch-pass').value.trim();
-  if (!pass) { toast('Enter a passphrase.', true); return; }
+  const name = el('new-ch-pass').value.trim().toLowerCase();
+  if (!name) { toast('Enter a channel name.', true); return; }
+  const nameErr = validateName(name);
+  if (nameErr) { toast(nameErr, true); return; }
   try {
-    await backend.joinChannel(pass, pass);
+    await backend.joinChannel(name, name);
   } catch(e) {
     toast(e.message === 'duplicate' ? 'Already joined that channel.' : 'Failed to join channel.', true);
     return;
@@ -2770,9 +2778,9 @@ async function addChannel() {
   rebuildConversations();
   renderChannelList();
   renderSidebar();
-  const newConv = conversations.find(c => c.kind === 'channel' && c.name === pass);
+  const newConv = conversations.find(c => c.kind === 'channel' && c.name === name);
   if (newConv) openConversation(newConv);
-  toast(`Joined channel "${pass}".`);
+  toast(`Joined channel "${name}".`);
 }
 
 async function removeChannel(name) {
@@ -2838,6 +2846,14 @@ function fmtTime(iso) {
   if (isNaN(d.getTime())) return '—';
   return d.toLocaleDateString([], {month:'short', day:'numeric'})
     + ' ' + d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+}
+
+const NAME_RE  = /^[a-zA-Z0-9._-]+$/;
+const NAME_MAX = 32;
+function validateName(name) {
+  if (name.length > NAME_MAX) return `Must be ${NAME_MAX} characters or fewer.`;
+  if (!NAME_RE.test(name))    return 'Only letters, digits, . _ - allowed.';
+  return null;
 }
 
 function esc(s) {
