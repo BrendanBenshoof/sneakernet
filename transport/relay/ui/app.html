@@ -2114,7 +2114,22 @@ async function loadMessages() {
   if (!msgs?.length) return;
 
   for (const m of msgs) {
-    if (byBlock.has(m.block_id)) continue;
+    if (byBlock.has(m.block_id)) {
+      const existing = byBlock.get(m.block_id);
+      const newWF = m.work_factor || 0;
+      if (newWF > (existing.work_factor || 0)) {
+        existing.work_factor = newWF;
+        const row = el('conv-messages').querySelector(`[data-block="${m.block_id}"]`);
+        if (row) {
+          const widget = row.querySelector('.pow-widget');
+          if (widget && !widget.dataset.boosting) {
+            widget.dataset.level = newWF >= 15 ? 4 : newWF >= 10 ? 3 : newWF >= 6 ? 2 : newWF >= 3 ? 1 : 0;
+            widget.title = `${newWF} PoW bits · click to boost`;
+          }
+        }
+      }
+      continue;
+    }
     m.content_text = b64toText(m.content);
     allMessages.push(m);
     byBlock.set(m.block_id, m);
@@ -2411,6 +2426,7 @@ function makeGapNode(blockId) {
 function makeMsgRow(m, {hasPred, hasSucc, isFork, forkFirst, forkLast, isChained, hasDirectSucc}) {
   const div = document.createElement('div');
   div.className = 'msg-row';
+  div.dataset.block = m.block_id;
   const bulletClass = isFork
     ? (forkFirst ? 'bullet fork-first' : forkLast ? 'bullet fork-last' : 'bullet fork-mid')
     : isChained ? 'bullet chained' : 'bullet';
