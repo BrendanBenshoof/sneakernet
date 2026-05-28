@@ -2135,8 +2135,8 @@ async function loadMessages() {
     byBlock.set(m.block_id, m);
   }
   rebuildConversations();
-  renderSidebar();
   if (currentView) rerenderCurrentView();
+  renderSidebar();
   maybeNotify(msgs);
 }
 
@@ -2716,8 +2716,8 @@ function injectOptimisticMsg(blockId, body, channelName, sentTo, head) {
   allMessages.push(m);
   byBlock.set(blockId, m);
   rebuildConversations();
-  renderSidebar();
   rerenderCurrentView();
+  renderSidebar();
 }
 
 // ── send ───────────────────────────────────────────────────────────────────
