@@ -1555,7 +1555,15 @@ class BrowserBackend {
       for (const blk of (data.blocks || [])) {
         const payloadBytes = b64dec(blk.payload);
         const blkId = await sha256hex(payloadBytes);
-        if (seenIds.has(blkId)) continue;
+        if (seenIds.has(blkId)) {
+          // Update work_factor if this block was boosted since we last saw it.
+          const wf = blk.work_factor || 0;
+          if (wf > 0) {
+            const existing = this._inbox.find(m => m.block_id === blkId);
+            if (existing && wf > (existing.work_factor || 0)) existing.work_factor = wf;
+          }
+          continue;
+        }
 
         let matched = false;
 
@@ -1582,6 +1590,7 @@ class BrowserBackend {
               sent_at:      parsed.sentAt,
               received_at:  new Date().toISOString(),
               decrypted_by: id.name,
+              work_factor:  blk.work_factor || 0,
             });
             found++;
           }
@@ -1606,6 +1615,7 @@ class BrowserBackend {
               thread_refs: parsed.threadRefs,
               sent_at:     parsed.sentAt,
               received_at: new Date().toISOString(),
+              work_factor: blk.work_factor || 0,
             });
             seenIds.add(blkId);
             found++; break;
@@ -1619,7 +1629,7 @@ class BrowserBackend {
     return {found};
   }
 
-  async getMessages(afterId) {
+  async getMessages(afterId, _wfUpdatedSince = 0) {
     return this._inbox.filter(m => m.id > afterId);
   }
 
@@ -1914,6 +1924,7 @@ let contacts       = [];
 let currentView    = null;
 let conversations  = [];
 let activeIdentity = null;
+let lastMsgLoadSec = 0; // unix timestamp of last loadMessages call, for wf_updated_since
 
 // ── recipient input helpers ────────────────────────────────────────────────
 function parseRecipientInput(str) {
@@ -2148,7 +2159,9 @@ async function scrape(full = false) {
 // ── message loading & grouping ─────────────────────────────────────────────
 async function loadMessages() {
   const lastID = allMessages.reduce((max, m) => m.id > max ? m.id : max, 0);
-  const msgs = await backend.getMessages(lastID);
+  const nowSec = Math.floor(Date.now() / 1000);
+  const msgs = await backend.getMessages(lastID, lastMsgLoadSec);
+  lastMsgLoadSec = nowSec;
   if (!msgs?.length) return;
 
   for (const m of msgs) {

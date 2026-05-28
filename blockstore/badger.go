@@ -421,7 +421,7 @@ func (s *BadgerStore) ListBlocks(pageToken string, limit int, powFloor int, sinc
 				continue
 			}
 
-			refs = append(refs, BlockRef{ID: id, WorkFactor: wf, Tag: tag})
+			refs = append(refs, BlockRef{ID: id, WorkFactor: wf, Tag: tag, CreatedAt: createdAt})
 			last.createdAt = createdAt
 			last.id = id
 		}
