@@ -967,6 +967,34 @@ self.onmessage = async function(e) {
     }
   }
 
+  // Compute the identity PoW bits for an arbitrary (senderPub, stamp) pair using
+  // argon2id in a Worker. Used to populate powBitsCache for the floor filter.
+  async computeIdPoW(senderPubB64, stampB64url) {
+    const pubBytes  = b64dec(senderPubB64);
+    const stamp     = b64dec(fromB64url(stampB64url));
+    if (!stamp || stamp.length !== 16) return 0;
+
+    const argon2Url = new URL('/argon2.js', location.href).href;
+    const src = `
+importScripts(${JSON.stringify(argon2Url)});
+const _salt = new TextEncoder().encode('sneakernet-idpow-v1');
+function _lz(h){let n=0;for(const b of h){if(b===0){n+=8;continue;}let m=0x80;while(m&&!(b&m)){n++;m>>>=1;}break;}return n;}
+self.onmessage = async function(e) {
+  const {stamp, pubKey} = e.data;
+  const input = new Uint8Array(48);
+  input.set(new Uint8Array(stamp));
+  input.set(new Uint8Array(pubKey), 16);
+  const r = await argon2.hash({pass:input,salt:_salt,time:1,mem:65536,parallelism:1,hashLen:32,type:argon2.ArgonType.Argon2id});
+  self.postMessage({bits: _lz(r.hash)});
+};`;
+    const w = new Worker(URL.createObjectURL(new Blob([src], {type:'application/javascript'})));
+    return new Promise(resolve => {
+      w.onmessage = e => resolve(e.data.bits ?? 0);
+      w.onerror   = ()  => resolve(0);
+      w.postMessage({stamp: Array.from(stamp), pubKey: Array.from(pubBytes)});
+    }).finally(() => w.terminate());
+  }
+
   // Send an anonymous DM with zero block stamp — just needs to be delivered.
   async _sendGiftDM(recipientEdPubB64, content) {
     try {

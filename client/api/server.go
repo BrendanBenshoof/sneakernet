@@ -46,8 +46,9 @@ type Server struct {
 	scraper  *client.Client   // nil when locked
 	tokens   map[string]struct{}
 
-	scrapeMu sync.Mutex // one scrape at a time
-	mux      *http.ServeMux
+	scrapeMu   sync.Mutex // one scrape at a time
+	idPowCache sync.Map   // "senderPub:stamp" → int; caches expensive argon2 computation
+	mux        *http.ServeMux
 }
 
 // New creates an API server. blocks and msgs must already be open;
