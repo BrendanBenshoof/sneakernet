@@ -301,6 +301,8 @@
       font-family: var(--mono);
       font-size: 12px;
     }
+    .sb-item .sb-close { display: none; padding: 1px 5px; font-size: 14px; }
+    .sb-item:hover .sb-close { display: inline-flex; }
 
     #sb-footer {
       border-top: 1px solid var(--border);
@@ -1347,7 +1349,10 @@ function rebuildConversations() {
 
   conversations = [];
   for (const [name, msgs] of chMap) conversations.push({kind:'channel', name, messages:msgs});
-  for (const [, info] of dirMap) conversations.push({kind:'direct', name:info.name, pub:info.pub, messages:info.messages});
+  for (const [, info] of dirMap) {
+    const conv = {kind:'direct', name:info.name, pub:info.pub, messages:info.messages};
+    if (!isHidden(conv)) conversations.push(conv);
+  }
   if (unknown.length) conversations.push({kind:'unknown', name:'Unknown senders', messages:unknown});
 }
 
@@ -1410,6 +1415,25 @@ function causalHead(msgs) {
   return sorted.length ? sorted[sorted.length - 1].block_id : null;
 }
 
+// ── hidden conversations (in-memory; resets on reload) ────────────────────
+// Map of convKey → ISO timestamp when hidden. Auto-unhides if a message
+// arrives after that timestamp so new inbound messages always reappear.
+const hiddenConvs = new Map();
+
+function hideConv(conv) {
+  hiddenConvs.set(convKey(conv), new Date().toISOString());
+}
+
+function isHidden(conv) {
+  const since = hiddenConvs.get(convKey(conv));
+  if (!since) return false;
+  if (conv.messages.some(m => m.received_at > since)) {
+    hiddenConvs.delete(convKey(conv));
+    return false;
+  }
+  return true;
+}
+
 // ── read state ─────────────────────────────────────────────────────────────
 function convKey(conv) {
   if (conv.kind === 'channel') return 'ch:' + conv.name;
@@ -1459,9 +1483,28 @@ function makeSbItem(conv, lastSeen) {
   const unread = since
     ? conv.messages.filter(m => m.received_at > since).length
     : conv.messages.length;
-  const badge  = unread > 0 ? `<span class="sb-badge">${unread}</span>` : '';
-  div.innerHTML = `${prefix}<span class="sb-name">${esc(conv.name)}</span>${badge}`;
+  const badge     = unread > 0 ? `<span class="sb-badge">${unread}</span>` : '';
+  const closeBtn  = conv.kind === 'direct'
+    ? '<button class="icon sb-close" title="Close conversation" tabindex="-1">&times;</button>'
+    : '';
+  div.innerHTML = `${prefix}<span class="sb-name">${esc(conv.name)}</span>${badge}${closeBtn}`;
   div.addEventListener('click', () => openConversation(conv));
+  if (conv.kind === 'direct') {
+    div.querySelector('.sb-close').addEventListener('click', e => {
+      e.stopPropagation();
+      hideConv(conv);
+      if (currentView && currentView.kind === conv.kind && currentView.name === conv.name) {
+        currentView = null;
+        el('conv-messages').innerHTML = '';
+        el('conv-empty').classList.remove('hidden');
+        el('compose-area').classList.add('hidden');
+        el('conv-title').textContent = 'Select a conversation';
+        el('conv-sub').textContent   = '';
+      }
+      rebuildConversations();
+      renderSidebar();
+    });
+  }
   return div;
 }
 
@@ -1742,6 +1785,9 @@ function submitDmForm() {
   const recip = parseRecipientInput(raw);
   if (!recip) { toast('Invalid recipient — paste a snk: URI or public key.', true); return; }
   closeDmForm();
+  hiddenConvs.delete(convKey({kind: 'direct', pub: recip.key}));
+  rebuildConversations();
+  renderSidebar();
   const existing = conversations.find(c => c.kind !== 'channel' && c.pub === recip.key);
   if (existing) { openConversation(existing); return; }
   const resolvedName = resolveByPub(recip.key) || recip.name;
