@@ -1628,7 +1628,7 @@ function makeSbItem(conv) {
   div.className = 'sb-item';
   if (currentView && currentView.kind === conv.kind && currentView.name === conv.name) div.classList.add('active');
   const prefix = conv.kind === 'channel' ? '<span class="sb-hash">#</span> ' : '';
-  const unread = conv.messages.filter(m => !seenBlocks.has(m.block_id)).length;
+  const unread = conv.messages.filter(m => !seenBlocks.has(m.block_id) && !identities.some(id => id.public_key === m.sender_pub)).length;
   const badge     = unread > 0 ? `<span class="sb-badge">${unread}</span>` : '';
   const closeBtn  = conv.kind === 'direct'
     ? '<button class="icon sb-close" title="Close conversation" tabindex="-1">&times;</button>'
@@ -2441,7 +2441,7 @@ function updateNotifBtn() { /* no-op — notifications now live in settings pane
 
 function updateTitle() {
   const total = conversations.reduce((n, c) =>
-    n + c.messages.filter(m => !seenBlocks.has(m.block_id)).length, 0);
+    n + c.messages.filter(m => !seenBlocks.has(m.block_id) && !identities.some(id => id.public_key === m.sender_pub)).length, 0);
   document.title = total > 0
     ? `(${total}) Sneakernet — ${UI_CONFIG.pageTitle}`
     : `Sneakernet — ${UI_CONFIG.pageTitle}`;
