@@ -234,6 +234,23 @@ type msgResp struct {
 	SentTo      string   `json:"sent_to,omitempty"`      // base64 Ed25519 pub of recipient; set for sent messages
 	DecryptedBy string   `json:"decrypted_by,omitempty"` // local identity name that decrypted or sent the message
 	WorkFactor  int      `json:"work_factor"`
+	IdPowBits   int      `json:"id_pow_bits,omitempty"` // leading zero bits of sender's identity PoW stamp; 0 if absent
+}
+
+// getIdPowBits returns the leading-zero-bit count of the sender's identity PoW
+// stamp embedded in the message content. Results are cached so argon2id is only
+// run once per unique (senderPub, stamp) pair.
+func (s *Server) getIdPowBits(content []byte, senderPub [32]byte) int {
+	stamp, bits := client.ParseSnkStamp(content, senderPub)
+	if stamp == nil {
+		return 0
+	}
+	key := base64.StdEncoding.EncodeToString(senderPub[:]) + ":" + base64.RawURLEncoding.EncodeToString(stamp)
+	if v, ok := s.idPowCache.Load(key); ok {
+		return v.(int)
+	}
+	s.idPowCache.Store(key, bits)
+	return bits
 }
 
 func (s *Server) buildMsgResp(m client.Message) msgResp {
@@ -273,6 +290,9 @@ func (s *Server) buildMsgResp(m client.Message) msgResp {
 	// best-effort work factor lookup; 0 on miss (expired or not yet synced)
 	if wf, err := s.blocks.GetWorkFactor(m.BlockID); err == nil {
 		resp.WorkFactor = wf
+	}
+	if m.SenderPub != ([32]byte{}) {
+		resp.IdPowBits = s.getIdPowBits(m.Content, m.SenderPub)
 	}
 	return resp
 }

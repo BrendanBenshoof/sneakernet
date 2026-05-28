@@ -991,10 +991,10 @@
         </div>
         <div class="setting-row">
           <div class="setting-info">
-            <div class="label">Require identity PoW stamp</div>
-            <div class="desc">Hide messages from identities with no proof-of-work stamp. Encourages effort investment before posting.</div>
+            <div class="label">Identity PoW floor: <span id="setting-pow-floor-val">0</span> bits</div>
+            <div class="desc">Hide messages from identified senders whose proof-of-work stamp is below this threshold. 0 = off.</div>
           </div>
-          <label class="toggle"><input type="checkbox" id="setting-filter-no-pow"><div class="toggle-track"></div></label>
+          <input type="range" id="setting-pow-floor" min="0" max="20" step="1" style="width:80px;cursor:pointer">
         </div>
       </div>
       <div class="panel-section">
@@ -1194,9 +1194,10 @@ document.addEventListener('DOMContentLoaded', () => {
     rerenderCurrentView();
     renderSidebar();
   });
-  el('setting-filter-no-pow').addEventListener('change', function () {
-    _filterNoPow = this.checked;
-    localStorage.setItem('snk_filter_no_pow', this.checked ? '1' : '0');
+  el('setting-pow-floor').addEventListener('input', function () {
+    _powFloor = parseInt(this.value, 10) || 0;
+    el('setting-pow-floor-val').textContent = _powFloor;
+    localStorage.setItem('snk_pow_floor', String(_powFloor));
     rebuildConversations();
     rerenderCurrentView();
     renderSidebar();
@@ -1340,6 +1341,7 @@ async function loadMessages() {
   lastMsgLoadSec = nowSec;
   if (!msgs?.length) return;
 
+  const fresh = [];
   for (const m of msgs) {
     if (byBlock.has(m.block_id)) {
       const existing = byBlock.get(m.block_id);
@@ -1360,7 +1362,9 @@ async function loadMessages() {
     m.content_text = b64toText(m.content);
     allMessages.push(m);
     byBlock.set(m.block_id, m);
+    fresh.push(m);
   }
+  scheduleNovelPoWComputes(fresh);
   rebuildConversations();
   if (currentView) rerenderCurrentView();
   renderSidebar();
@@ -1373,16 +1377,54 @@ function isAnonymousMsg(m) {
   const {claimedName} = parseSnkHeader(m.content_text, m.sender_pub);
   return !claimedName;
 }
-function hasPoWStamp(m) {
-  if (!m.sender_pub) return false;
+// ── identity PoW bits cache ─────────────────────────────────────────────────
+// key: "senderPub:stampB64url" → computed bits (int)
+// Populated lazily: server provides id_pow_bits on messages; browser computes
+// via scheduleNovelPoWComputes() using argon2 in a Worker.
+const powBitsCache   = new Map();
+const powBitsPending = new Set();
+
+function powBitsForMsg(m) {
+  if (m.id_pow_bits > 0) return m.id_pow_bits;
+  if (!m.sender_pub) return 0;
   const {claimedName, powStamp} = parseSnkHeader(m.content_text, m.sender_pub);
-  return claimedName !== null && powStamp !== null;
+  if (!claimedName || !powStamp) return 0;
+  const key = m.sender_pub + ':' + powStamp;
+  if (powBitsCache.has(key)) return powBitsCache.get(key);
+  return null; // unknown — async computation pending
+}
+
+function scheduleNovelPoWComputes(msgs) {
+  if (!backend.computeIdPoW) return;
+  for (const m of msgs) {
+    if (!m.sender_pub || m.id_pow_bits > 0) continue;
+    const {claimedName, powStamp} = parseSnkHeader(m.content_text, m.sender_pub);
+    if (!claimedName || !powStamp) continue;
+    const key = m.sender_pub + ':' + powStamp;
+    if (powBitsCache.has(key) || powBitsPending.has(key)) continue;
+    powBitsPending.add(key);
+    backend.computeIdPoW(m.sender_pub, powStamp)
+      .then(bits => {
+        powBitsCache.set(key, bits);
+        powBitsPending.delete(key);
+        rebuildConversations();
+        rerenderCurrentView();
+        renderSidebar();
+      })
+      .catch(() => {
+        powBitsPending.delete(key);
+        powBitsCache.set(key, 0);
+      });
+  }
 }
 
 function isFilteredMsg(m) {
   if (m.sender_pub && blockedKeys.has(m.sender_pub)) return true;
   if (_filterAnon && isAnonymousMsg(m)) return true;
-  if (_filterNoPow && m.sender_pub && !hasPoWStamp(m)) return true;
+  if (_powFloor > 0 && m.sender_pub) {
+    const bits = powBitsForMsg(m);
+    if (bits !== null && bits < _powFloor) return true;
+  }
   return false;
 }
 
@@ -2469,8 +2511,8 @@ function fmtTime(iso) {
 // ── notifications + settings state ─────────────────────────────────────────
 let _notifsEnabled  = localStorage.getItem('snk_notifs') === '1';
 let _enterToSend    = localStorage.getItem('snk_enter_send') !== '0';
-let _filterAnon     = localStorage.getItem('snk_filter_anon') === '1';
-let _filterNoPow    = localStorage.getItem('snk_filter_no_pow') === '1';
+let _filterAnon  = localStorage.getItem('snk_filter_anon') === '1';
+let _powFloor    = parseInt(localStorage.getItem('snk_pow_floor') || '0', 10) || 0;
 
 const blockedKeys = new Set(JSON.parse(localStorage.getItem('snk_blocked_keys') || '[]'));
 function saveBlockedKeys() { localStorage.setItem('snk_blocked_keys', JSON.stringify([...blockedKeys])); }
@@ -2495,8 +2537,9 @@ function openSettings() {
   el('setting-theme').checked         = theme === 'light';
   el('setting-notifs').checked        = _notifsEnabled;
   el('setting-enter-send').checked    = _enterToSend;
-  el('setting-filter-anon').checked   = _filterAnon;
-  el('setting-filter-no-pow').checked = _filterNoPow;
+  el('setting-filter-anon').checked    = _filterAnon;
+  el('setting-pow-floor').value        = _powFloor;
+  el('setting-pow-floor-val').textContent = _powFloor;
   el('setting-refresh').value         = localStorage.getItem('snk_refresh_idle') || '30';
 
   renderSidebar();
