@@ -142,9 +142,7 @@ func (s *Server) handleMineIdentityPoW(w http.ResponseWriter, r *http.Request) {
 	var pub [32]byte
 	copy(pub[:], id.PublicKey())
 
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-	defer cancel()
-	stamp, bits, err := client.MineIdentityPoW(ctx, pub, 5*time.Second)
+	stamp, bits, err := client.MineIdentityPoW(r.Context(), pub, 5*time.Second)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "mining cancelled or failed: "+err.Error())
 		return
