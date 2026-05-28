@@ -5,9 +5,7 @@ SNEAKERNET
 > Never underestimate the bandwidth of a station wagon full of tapes hurtling down the highway.
 > - Andrew S. Tanenbaum
 
-### WARNING This repo is not ready for release ###
-
-please don't share it yet further than yourself. That moment will come in a few weeks.
+*This repository is not yet ready for public release. Please do not share it beyond yourself for now — that moment is coming soon.*
 
 # What is this?
 
@@ -55,6 +53,12 @@ Senders can optionally sign messages with an Ed25519 identity key, which lets re
 
 Messages can span multiple blocks via fragmentation, and replies carry a skip-list of thread references so conversations can be reconstructed without requiring access to the full history — important when messages arrive out of order or some blocks have already expired.
 
+## Getting started
+
+See **[RUNNING.md](RUNNING.md)** for build instructions and how to run a personal node, a relay, or sync to a USB volume.
+
+Every relay node also serves a browser UI at `/app` — no installation required, works from any device with a browser. Read **[web_client.md](web_client.md)** for what it can and cannot do.
+
 ## Why it matters
 
 The right to communicate privately is not a product feature. It is something people need to support each other, organize, stay safe, and maintain dignity. That right is routinely attacked — by states, by platforms, by network operators who surveil or throttle traffic.
@@ -73,5 +77,5 @@ transport/
 client/         Message encryption/decryption, keystore, inbox, message format
 client/api/     HTTP API for local node access (used by web UI and mobile clients)
 ui/             Web interface (browser-side and server-side rendering modes)
-cmd/snk/        CLI: `snk relay` to run a node, `snk mass-storage` to sync to a USB volume
+cmd/snk/        CLI: `snk node` (personal), `snk relay` (public relay), `snk mass-storage` (USB sync)
 ```
