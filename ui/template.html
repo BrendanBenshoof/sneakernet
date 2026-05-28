@@ -2105,21 +2105,32 @@ function updateTitle() {
     : `Sneakernet — ${UI_CONFIG.pageTitle}`;
 }
 
+function convForMsg(m) {
+  if (m.channel) return conversations.find(c => c.kind === 'channel' && c.name === m.channel);
+  return conversations.find(c => c.kind !== 'channel' && (c.pub === m.sender_pub || c.pub === m.sent_to));
+}
+
 function maybeNotify(newMsgs) {
   if (!_notifsEnabled || !document.hidden) return;
   const novel = newMsgs.filter(m => {
-    if (m.sent_to) return false; // skip outbound
+    if (m.sent_to) return false;
     if (!currentView) return true;
     if (currentView.kind === 'channel') return m.channel !== currentView.name;
     if (currentView.kind === 'direct')  return m.sender_pub !== currentView.pub;
     return true;
   });
   if (!novel.length) return;
-  new Notification('Sneakernet', {
-    body:   novel.length === 1 ? 'New message' : `${novel.length} new messages`,
-    silent: true,
-    tag:    'sneakernet-new',
-  });
+  const conv      = convForMsg(novel[0]);
+  const convLabel = conv ? (conv.kind === 'channel' ? `#${conv.name}` : conv.name) : null;
+  const body      = novel.length === 1
+    ? (convLabel ? `New message in ${convLabel}` : 'New message')
+    : `${novel.length} new messages${convLabel ? ` in ${convLabel}` : ''}`;
+  const n = new Notification('Sneakernet', {body, silent: true, tag: 'sneakernet-new'});
+  n.onclick = () => {
+    window.focus();
+    if (conv) openConversation(conv);
+    n.close();
+  };
 }
 
 // ── validation ─────────────────────────────────────────────────────────────
