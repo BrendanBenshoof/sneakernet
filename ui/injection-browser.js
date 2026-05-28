@@ -766,6 +766,7 @@ class BrowserBackend {
         received_at:  r.sentAt || r.sent_at || null,
         sent_to:      r.recipientPub,
         decrypted_by: r.senderIdentity || '',
+        work_factor:  0,
       });
       seenIds.add(r.blockId);
     }
@@ -805,6 +806,7 @@ class BrowserBackend {
       received_at:  sentAt,
       sent_to:      recipientPublicKey,
       decrypted_by: senderIdentity || '',
+      work_factor:  0,
     });
   }
 
