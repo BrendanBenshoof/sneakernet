@@ -857,7 +857,7 @@
     </div>
     <div id="sb-footer">
       <button id="scrape-btn" title="Refresh — Shift+click to rescan all blocks"><span class="glyph">&#x27F3;</span> Refresh</button>
-      <button id="identities-btn"><span class="glyph">&#x2299;</span> Identities &amp; Channels</button>
+      <button id="identities-btn"><span class="glyph">&#x2299;</span> Identities &amp; Contacts</button>
       <button id="settings-btn"><span class="glyph">&#x2699;</span> Settings</button>
     </div>
   </nav>
@@ -897,11 +897,6 @@
           <input id="new-id-name" placeholder="Identity name">
           <button class="sm" id="add-id-btn">Add</button>
         </div>
-      </div>
-      <div class="panel-section">
-        <h2>Channels</h2>
-        <p class="hint">Channels use a symmetric key derived from a shared passphrase. Anyone who knows the passphrase can post and read &mdash; it is not a secret password.</p>
-        <div id="ch-list"></div>
       </div>
       <div class="panel-section">
         <h2>Contacts</h2>
@@ -1459,8 +1454,9 @@ function makeSbItem(conv) {
   const prefix = conv.kind === 'channel' ? '<span class="sb-hash">#</span> ' : '';
   const unread = conv.messages.filter(m => !seenBlocks.has(m.block_id) && !identities.some(id => id.public_key === m.sender_pub)).length;
   const badge     = unread > 0 ? `<span class="sb-badge">${unread}</span>` : '';
-  const closeBtn  = conv.kind === 'direct'
-    ? '<button class="icon sb-close" title="Close conversation" tabindex="-1">&times;</button>'
+  const closeTip  = conv.kind === 'channel' ? 'Leave channel' : 'Close conversation';
+  const closeBtn  = (conv.kind === 'direct' || conv.kind === 'channel')
+    ? `<button class="icon sb-close" title="${closeTip}" tabindex="-1">&times;</button>`
     : '';
   div.innerHTML = `${prefix}<span class="sb-name">${esc(conv.name)}</span>${badge}${closeBtn}`;
   div.addEventListener('click', () => openConversation(conv));
@@ -1478,6 +1474,11 @@ function makeSbItem(conv) {
       }
       rebuildConversations();
       renderSidebar();
+    });
+  } else if (conv.kind === 'channel') {
+    div.querySelector('.sb-close').addEventListener('click', e => {
+      e.stopPropagation();
+      removeChannel(conv.name);
     });
   }
   return div;
@@ -1917,10 +1918,9 @@ async function openPanel() {
   el('conv-view').classList.add('hidden');
   el('settings-view').classList.add('hidden');
   el('panel-view').classList.remove('hidden');
-  el('conv-title').textContent = 'Identities, Channels & Contacts';
+  el('conv-title').textContent = 'Identities & Contacts';
   el('conv-sub').textContent   = '';
   renderIdentities();
-  renderChannelList();
   await renderContacts();
   renderSidebar();
 }
@@ -2115,26 +2115,6 @@ async function loadChannels() {
   channels = await backend.listChannels();
 }
 
-function renderChannelList() {
-  const list = el('ch-list');
-  list.innerHTML = '';
-  if (!channels.length) {
-    list.innerHTML = '<div style="font-size:12px;color:var(--muted)">No channels joined yet.</div>';
-    return;
-  }
-  for (const ch of channels) {
-    const div = document.createElement('div');
-    div.className = 'card';
-    div.style.flexDirection = 'row';
-    div.style.alignItems    = 'center';
-    div.innerHTML = `
-      <span class="ch-badge">#</span>
-      <span style="flex:1;font-size:13px;font-weight:500;margin-left:6px">${esc(ch.name)}</span>
-      <button class="sm ghost" data-name="${esc(ch.name)}">Leave</button>`;
-    div.querySelector('.sm.ghost').addEventListener('click', () => removeChannel(ch.name));
-    list.appendChild(div);
-  }
-}
 
 async function joinDefaultChannel(name) {
   const existing = conversations.find(c => c.kind === 'channel' && c.name === name);
@@ -2146,7 +2126,6 @@ async function joinDefaultChannel(name) {
   }
   await loadChannels();
   rebuildConversations();
-  renderChannelList();
   renderSidebar();
   const conv = conversations.find(c => c.kind === 'channel' && c.name === name);
   if (conv) openConversation(conv);
@@ -2167,7 +2146,6 @@ async function addChannel() {
   el('sb-ch-form').classList.add('hidden');
   await loadChannels();
   rebuildConversations();
-  renderChannelList();
   renderSidebar();
   const newConv = conversations.find(c => c.kind === 'channel' && c.name === name);
   if (newConv) openConversation(newConv);
@@ -2182,7 +2160,6 @@ async function removeChannel(name) {
   }
   await loadChannels();
   rebuildConversations();
-  renderChannelList();
   renderSidebar();
   toast(`Left channel "${name}".`);
 }
