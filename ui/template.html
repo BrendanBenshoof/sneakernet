@@ -605,7 +605,7 @@
       gap: 8px;
       align-items: flex-end;
     }
-    .compose-bottom textarea { flex: 1; min-height: 64px; }
+    .compose-bottom textarea { flex: 1; min-height: 38px; max-height: 220px; resize: none; overflow-y: auto; }
 
     /* ── Panel view ──────────────────────────────────────────────────────── */
     #panel-view {
@@ -1024,6 +1024,11 @@ document.addEventListener('DOMContentLoaded', () => {
   el('mobile-back').addEventListener('click', openSidebar);
 
   el('send-btn').addEventListener('click', send);
+  el('compose-body').addEventListener('input', () => {
+    const ta = el('compose-body');
+    ta.style.height = 'auto';
+    ta.style.height = ta.scrollHeight + 'px';
+  });
   el('compose-body').addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey && !window.matchMedia('(pointer: coarse)').matches) {
       e.preventDefault();
@@ -1354,7 +1359,7 @@ function openConversation(conv) {
   el('conv-view').classList.remove('hidden');
   el('conv-title').textContent = conv.kind === 'channel' ? '#' + conv.name : conv.name;
   el('conv-sub').textContent   = conv.kind === 'channel' ? 'channel' : conv.kind === 'unknown' ? 'unknown senders' : 'direct';
-  renderMessages(conv);
+  renderMessages(conv, true);
   renderCompose(conv);
   renderSidebar();
 }
@@ -1366,8 +1371,10 @@ function rerenderCurrentView() {
   if (conv) { currentView = conv; markSeen(conv); renderMessages(conv); updateComposeHead(conv); }
 }
 
-function renderMessages(conv) {
+function renderMessages(conv, scrollToBottom = false) {
   const container = el('conv-messages');
+  const atBottom  = scrollToBottom ||
+    container.scrollHeight - container.scrollTop - container.clientHeight < 80;
   el('conv-empty').classList.add('hidden');
   container.innerHTML = '';
 
@@ -1414,7 +1421,7 @@ function renderMessages(conv) {
     }));
   }
   container.appendChild(frag);
-  container.scrollTop = container.scrollHeight;
+  if (atBottom) container.scrollTop = container.scrollHeight;
 }
 
 function makeGapNode(blockId) {
@@ -1549,10 +1556,16 @@ function renderContent(m) {
 }
 
 // ── compose ────────────────────────────────────────────────────────────────
+function resetCompose() {
+  const ta = el('compose-body');
+  ta.value = '';
+  ta.style.height = '';
+}
+
 function renderCompose(conv) {
   el('compose-area').classList.remove('hidden');
   el('compose-extra').innerHTML = '';
-  el('compose-body').value = '';
+  resetCompose();
   if (conv.kind === 'channel') renderComposeChannel(conv);
   else renderComposeDirect(conv);
 }
@@ -1728,7 +1741,7 @@ async function send() {
       const conv = currentView;
       const head = causalHead(conv.messages);
       const result = await backend.sendChannel(conv.name, body, senderName, head || null);
-      el('compose-body').value = '';
+      resetCompose();
       injectOptimisticMsg(result?.blockId, body, conv.name, null, head);
 
     } else if (mode === 'direct') {
@@ -1737,7 +1750,7 @@ async function send() {
       const recipKey = btn.dataset.recipKey;
       if (!recipKey) { toast('No recipient key available.', true); return; }
       const result = await backend.sendDirect(recipKey, body, senderName, head || null);
-      el('compose-body').value = '';
+      resetCompose();
       injectOptimisticMsg(result?.blockId, body, null, recipKey, head);
 
     } else { // new
@@ -1746,7 +1759,7 @@ async function send() {
       if (!recipParsed) { toast('Enter a valid snk: URI or public key.', true); return; }
       const recipKey = recipParsed.key;
       const result = await backend.sendDirect(recipKey, body, senderName, null);
-      el('compose-body').value = '';
+      resetCompose();
       injectOptimisticMsg(result?.blockId, body, null, recipKey, null);
       const conv = conversations.find(c => c.kind !== 'channel' && c.pub === recipKey);
       if (conv) { openConversation(conv); toast('Message sent.'); setStatus(UI_CONFIG.sendStatusMsg); return; }
