@@ -9,9 +9,9 @@ Models BadgerStore / FlatFileStore semantics:
   - Eviction picks the tag furthest over its reservation, then that tag's
     soonest-logicalExpiry block.
   - StorageLimit triggers eviction after each Put (evictBatch=10 extra per trigger).
-  - Tombstones block re-acceptance until the block's logical expiry (remaining
-    TTL at eviction time). If a block is already overdue when evicted, no
-    tombstone is written — a fresh copy with a new stamp is welcome.
+  - Tombstones last 2×TTL(wf) from eviction time: long enough that peers still
+    circulating the block will have dropped it, but bounded so even high-PoW
+    blocks eventually become re-acceptable.
 
 Run:  python3 sim/blockstore_sim.py [scenario ...]
 Available scenarios: default  reservation_pressure  high_load  high_pow  low_pow
@@ -212,12 +212,8 @@ class SimStore:
             tag_usage[target] -= BLOCK_SIZE_BYTES
             if victim.id in self.blocks:
                 del self.blocks[victim.id]
-                # Tombstone lives until the block's logical expiry so it
-                # cannot be re-accepted before it would have naturally expired.
-                # If already overdue, no tombstone — a fresh copy is welcome.
-                remaining = victim.logical_expiry() - now
-                if remaining > 0:
-                    self.tombstones[victim.id] = victim.logical_expiry()
+                # Tombstone lasts 2×TTL(wf) from eviction time.
+                self.tombstones[victim.id] = now + 2 * ttl_hours(victim.wf)
                 self.evictions_total += 1
                 self.eviction_log.append((now, victim.wf, victim.tag))
                 evicted += 1

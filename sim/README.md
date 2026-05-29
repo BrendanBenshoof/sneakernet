@@ -27,8 +27,9 @@ evicted block's wf. This is wrong in both directions: a wf=0 block has a 24h
 TTL so its tombstone needs only 24h, not 14 days; a wf=12 block has an 18-day
 TTL so a 14-day tombstone lets it be re-introduced 4 days early.
 
-Fix: compute `remainingTTL = logicalExpiry - now`. If already overdue, write
-no tombstone — a fresh copy with a new stamp is welcome.
+Fix: tombstone TTL = `2 × TTL(wf)` from eviction time. This is long enough
+that peers still circulating the block will have dropped it naturally, but
+bounded so even high-PoW blocks eventually become re-acceptable.
 
 **1. `computeMedianWorkFactor` indexes the wrong position**
 
