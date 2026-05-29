@@ -177,6 +177,40 @@ func (c *Client) Delta(ctx context.Context, bloom *Bloom, powFloor int, since ti
 	return ids, nil
 }
 
+// Hello announces this client's public URL to the peer and returns their known
+// peer list. myURL may be empty if this node has no public address to advertise.
+// This is the preferred way to do peer discovery — it combines self-registration
+// and bootstrap into one round trip.
+func (c *Client) Hello(ctx context.Context, myURL string) ([]string, error) {
+	var body []byte
+	if myURL != "" {
+		body, _ = json.Marshal(map[string]string{"url": myURL})
+	} else {
+		body = []byte("{}")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		c.baseURL+"/v1/hello", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("relay hello: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("relay hello: status %d", resp.StatusCode)
+	}
+	var result struct {
+		Peers []string `json:"peers"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("relay hello: decode: %w", err)
+	}
+	return result.Peers, nil
+}
+
 // GetPeers fetches the list of healthy (non-penalized) peer URLs from the relay.
 // Used for gossip: callers should attempt to add any returned URLs as new peers.
 func (c *Client) GetPeers(ctx context.Context) ([]string, error) {
