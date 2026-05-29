@@ -100,9 +100,8 @@ const (
 
 	defaultStorageLimit = int64(10 * 1024 * 1024 * 1024) // 10 GiB, used when no limit is configured
 
-	evictBatch     = int64(10)           // extra blocks to evict beyond the immediate minimum
-	tombstoneTTL   = 14 * 24 * time.Hour // how long eviction tombstones block re-acceptance
-	medianCacheTTL = 5 * time.Minute     // how often MedianWorkFactor recomputes
+	evictBatch     = int64(10)          // extra blocks to evict beyond the immediate minimum
+	medianCacheTTL = 5 * time.Minute   // how often MedianWorkFactor recomputes
 )
 
 // BadgerStore is a BadgerDB-backed implementation of Store.
@@ -557,6 +556,12 @@ func (s *BadgerStore) Evict(n int) (int, error) {
 		perTag[target] = perTag[target][1:]
 		tagUsage[target] -= blockSize
 
+		// Tombstone lives until the block's logical expiry so it cannot be
+		// re-accepted before it would have naturally expired. If the block is
+		// already overdue, no tombstone is needed — a fresh copy is welcome.
+		logicalExpiry := time.Unix(c.createdAt, 0).Add(TTLFromWorkFactor(c.wf))
+		remainingTTL := time.Until(logicalExpiry)
+
 		if err := s.db.Update(func(txn *badger.Txn) error {
 			if err := txn.Delete(s.blockKey(c.id)); err != nil && err != badger.ErrKeyNotFound {
 				return err
@@ -564,7 +569,10 @@ func (s *BadgerStore) Evict(n int) (int, error) {
 			if err := txn.Delete(s.travKey(c.createdAt, c.id)); err != nil && err != badger.ErrKeyNotFound {
 				return err
 			}
-			tomb := badger.NewEntry(s.tombKey(c.id), []byte{}).WithTTL(tombstoneTTL)
+			if remainingTTL <= 0 {
+				return nil // block already overdue; fresh copy is welcome
+			}
+			tomb := badger.NewEntry(s.tombKey(c.id), []byte{}).WithTTL(remainingTTL)
 			return txn.SetEntry(tomb)
 		}); err != nil {
 			return evicted, fmt.Errorf("blockstore: evict: %w", err)
