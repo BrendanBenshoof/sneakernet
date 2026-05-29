@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -66,6 +67,7 @@ func cmdNode(args []string) {
 	syncInterval := fs.Duration("sync-interval", 5*time.Minute, "interval between peer sync rounds")
 	peersFlag    := fs.String("peers", "", "comma-separated relay base URLs to sync with (e.g. https://relay.example.com)")
 	advertiseURL := fs.String("advertise-url", "", "public address of this node (e.g. node.example.com:8081 or https://node.example.com); announced to peers on hello")
+	peerCache    := fs.String("peer-cache", "peers.json", "file to persist discovered peers across restarts")
 	lanScan      := fs.Bool("lan", false, fmt.Sprintf("scan LAN for sneakernet peers on port %d", lan.Port))
 	usbDir       := fs.String("usb-dir", "", "path to sneakernet USB volume root; syncs when .sneakernet marker is present (empty = disabled)")
 	usbInterval  := fs.Duration("usb-interval", 30*time.Second, "how often to check and sync the USB volume")
@@ -112,6 +114,7 @@ func cmdNode(args []string) {
 	if *advertiseURL != "" {
 		pt.advertiseURL = peerURL(*advertiseURL)
 	}
+	pt.peersFile = *peerCache
 
 	var peerSources []<-chan string
 	if *lanScan {
@@ -119,7 +122,7 @@ func cmdNode(args []string) {
 		peerSources = append(peerSources, lan.Discover(ctx, *syncInterval))
 	}
 
-	go pt.run(ctx, bs, mergePeers(ctx, peerSources...), *powFloor, *syncInterval, staticPeers)
+	go pt.run(ctx, bs, mergePeers(ctx, peerSources...), *powFloor, *syncInterval, staticPeers, true)
 
 	if *usbDir != "" {
 		go usbSyncLoop(ctx, bs, *usbDir, *usbInterval)
@@ -147,6 +150,7 @@ func cmdRelay(args []string) {
 	syncInterval    := fs.Duration("sync-interval", 5*time.Minute, "interval between peer sync rounds")
 	peersFlag       := fs.String("peers", "", "comma-separated peer relay base URLs (e.g. https://relay.example.com)")
 	advertiseURL    := fs.String("advertise-url", "", "public address of this relay (e.g. relay.example.com:8081 or https://relay.example.com); announced to peers on hello")
+	peerCache       := fs.String("peer-cache", "peers.json", "file to persist discovered peers across restarts")
 	lanScan         := fs.Bool("lan", false, fmt.Sprintf("scan LAN for sneakernet peers on port %d", lan.Port))
 	storageLimit    := fs.String("storage-limit", "0", "maximum blockstore size (e.g. 10GB, 512MB); 0 = unlimited")
 	reservePhysical := fs.String("reserve-physical", "0", "storage reserved for physical/local blocks (e.g. 2GB)")
@@ -201,6 +205,7 @@ func cmdRelay(args []string) {
 	if *advertiseURL != "" {
 		pt.advertiseURL = peerURL(*advertiseURL)
 	}
+	pt.peersFile = *peerCache
 
 	relaySrv := relay.NewServer(bs, *powFloor)
 	relaySrv.SetPeerSource(pt.nonPenalizedPeers)
@@ -234,7 +239,7 @@ func cmdRelay(args []string) {
 		peerSources = append(peerSources, lan.Discover(ctx, *syncInterval))
 	}
 
-	go pt.run(ctx, bs, mergePeers(ctx, peerSources...), *powFloor, *syncInterval, staticPeers)
+	go pt.run(ctx, bs, mergePeers(ctx, peerSources...), *powFloor, *syncInterval, staticPeers, false)
 
 	<-ctx.Done()
 	log.Println("shutting down")
@@ -452,6 +457,61 @@ type peerTracker struct {
 	mu           sync.Mutex
 	known        map[string]*peerState
 	advertiseURL string // public URL to announce when saying hello to peers; empty = no announcement
+	peersFile    string // path to persist discovered peers across restarts; empty = no persistence
+}
+
+// loadPeers reads peer URLs from the cache file and adds them to the tracker.
+func (pt *peerTracker) loadPeers() {
+	if pt.peersFile == "" {
+		return
+	}
+	data, err := os.ReadFile(pt.peersFile)
+	if os.IsNotExist(err) {
+		return
+	}
+	if err != nil {
+		log.Printf("load peers: %v", err)
+		return
+	}
+	var v struct {
+		Peers []string `json:"peers"`
+	}
+	if err := json.Unmarshal(data, &v); err != nil {
+		log.Printf("load peers: parse: %v", err)
+		return
+	}
+	for _, u := range v.Peers {
+		pt.addPeer(u)
+	}
+	if len(v.Peers) > 0 {
+		log.Printf("loaded %d peers from %s", len(v.Peers), pt.peersFile)
+	}
+}
+
+// savePeers atomically writes all known peer URLs to the cache file.
+func (pt *peerTracker) savePeers() {
+	if pt.peersFile == "" {
+		return
+	}
+	pt.mu.Lock()
+	urls := make([]string, 0, len(pt.known))
+	for u := range pt.known {
+		urls = append(urls, u)
+	}
+	pt.mu.Unlock()
+
+	data, err := json.Marshal(map[string][]string{"peers": urls})
+	if err != nil {
+		return
+	}
+	tmp := pt.peersFile + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		log.Printf("save peers: %v", err)
+		return
+	}
+	if err := os.Rename(tmp, pt.peersFile); err != nil {
+		log.Printf("save peers: rename: %v", err)
+	}
 }
 
 func newPeerTracker() *peerTracker {
@@ -488,6 +548,9 @@ func isPublicURL(rawURL string) bool {
 func (pt *peerTracker) addPeer(u string) bool {
 	pt.mu.Lock()
 	defer pt.mu.Unlock()
+	if pt.advertiseURL != "" && u == pt.advertiseURL {
+		return false
+	}
 	if _, exists := pt.known[u]; !exists && len(pt.known) < maxPeers {
 		pt.known[u] = &peerState{}
 		return true
@@ -541,12 +604,17 @@ func (pt *peerTracker) syncOne(ctx context.Context, store blockstore.Store, u st
 	}
 
 	if gossipPeers, err := c.Hello(ctx, pt.advertiseURL); err == nil {
+		var added int
 		for _, p := range gossipPeers {
 			p = peerURL(p)
 			if pt.addPeer(p) {
 				log.Printf("discovered peer via gossip from %s: %s", u, p)
 				go pt.syncOne(ctx, store, p, powFloor)
+				added++
 			}
+		}
+		if added > 0 {
+			pt.savePeers()
 		}
 	}
 
@@ -565,7 +633,12 @@ func (pt *peerTracker) syncOne(ctx context.Context, store blockstore.Store, u st
 	}
 }
 
-func (pt *peerTracker) run(ctx context.Context, store blockstore.Store, peers <-chan string, powFloor int, interval time.Duration, staticPeers []string) {
+// run drives the periodic sync loop. When rotate is true (node mode), each tick
+// syncs one peer in round-robin order rather than all peers at once, distributing
+// load across a dynamically-built relay list.
+func (pt *peerTracker) run(ctx context.Context, store blockstore.Store, peers <-chan string, powFloor int, interval time.Duration, staticPeers []string, rotate bool) {
+	pt.loadPeers()
+
 	for _, u := range staticPeers {
 		u = peerURL(u)
 		pt.addPeer(u)
@@ -584,9 +657,24 @@ func (pt *peerTracker) run(ctx context.Context, store blockstore.Store, peers <-
 			}
 			ready = append(ready, u)
 		}
+		var toSync []string
+		if rotate && len(ready) > 0 {
+			// Pick the healthy peer least recently pulled from. Peers with a zero
+			// pullSince (newly discovered) sort first, so new relays are tried
+			// promptly. Failing peers are already excluded via skipRounds above.
+			pick := ready[0]
+			for _, u := range ready[1:] {
+				if pt.known[u].pullSince.Before(pt.known[pick].pullSince) {
+					pick = u
+				}
+			}
+			toSync = []string{pick}
+		} else {
+			toSync = ready
+		}
 		pt.mu.Unlock()
 
-		for _, u := range ready {
+		for _, u := range toSync {
 			if ctx.Err() != nil {
 				return
 			}
@@ -610,6 +698,7 @@ func (pt *peerTracker) run(ctx context.Context, store blockstore.Store, peers <-
 			if pt.addPeer(u) {
 				log.Printf("discovered peer: %s", u)
 				go pt.syncOne(ctx, store, u, powFloor)
+				pt.savePeers()
 			}
 		case <-ticker.C:
 			doSync()
