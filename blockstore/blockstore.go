@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 )
 
@@ -94,11 +95,16 @@ func decodeCursor(token string) (cursor, error) {
 	return c, nil
 }
 
+// phi is the golden ratio, used as the base of the TTL growth curve.
+const phi = 1.6180339887498948482
+
 // TTLFromWorkFactor maps leading-zero bit count to a block lifetime.
-// Linear for now: BaseTTL × (wf + 1).
+// TTL = φ^(wf/2) days, so each additional bit multiplies lifetime by √φ ≈ 1.272.
+// Under eviction pressure only the monotonic ordering matters, not the exact values.
 func TTLFromWorkFactor(wf int) time.Duration {
 	if wf < 0 {
 		wf = 0
 	}
-	return BaseTTL * time.Duration(wf+1)
+	days := math.Pow(phi, float64(wf)/2)
+	return time.Duration(float64(24*time.Hour) * days)
 }

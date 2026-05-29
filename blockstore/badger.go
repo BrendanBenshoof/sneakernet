@@ -73,7 +73,18 @@ func (s *BadgerStore) computeMedianWorkFactor() (int, error) {
 		return 0, nil
 	}
 	sort.Ints(wfs)
-	return wfs[halfCapacity], nil
+	// Correct index into the zero-padded virtual array: the median position
+	// (halfCapacity) minus the number of leading zeros (capacity-len(wfs))
+	// equals len(wfs)-halfCapacity.
+	//
+	// Advertise one below the true median so peers can ramp down gracefully:
+	// if we advertised the exact median, every incoming block would be mined
+	// to exactly that level and the floor could only ever rise, never fall.
+	median := wfs[len(wfs)-halfCapacity]
+	if median > 0 {
+		median--
+	}
+	return median, nil
 }
 
 const (
