@@ -65,6 +65,7 @@ func cmdNode(args []string) {
 	powFloor     := fs.Int("pow-floor", 0, "minimum proof-of-work to accept from peers")
 	syncInterval := fs.Duration("sync-interval", 5*time.Minute, "interval between peer sync rounds")
 	peersFlag    := fs.String("peers", "", "comma-separated relay base URLs to sync with (e.g. https://relay.example.com)")
+	advertiseURL := fs.String("advertise-url", "", "public address of this node (e.g. node.example.com:8081 or https://node.example.com); announced to peers on hello")
 	lanScan      := fs.Bool("lan", false, fmt.Sprintf("scan LAN for sneakernet peers on port %d", lan.Port))
 	usbDir       := fs.String("usb-dir", "", "path to sneakernet USB volume root; syncs when .sneakernet marker is present (empty = disabled)")
 	usbInterval  := fs.Duration("usb-interval", 30*time.Second, "how often to check and sync the USB volume")
@@ -108,6 +109,9 @@ func cmdNode(args []string) {
 	defer stop()
 
 	pt := newPeerTracker()
+	if *advertiseURL != "" {
+		pt.advertiseURL = peerURL(*advertiseURL)
+	}
 
 	var peerSources []<-chan string
 	if *lanScan {
@@ -142,6 +146,7 @@ func cmdRelay(args []string) {
 	powFloor        := fs.Int("pow-floor", 0, "minimum proof-of-work for block acceptance")
 	syncInterval    := fs.Duration("sync-interval", 5*time.Minute, "interval between peer sync rounds")
 	peersFlag       := fs.String("peers", "", "comma-separated peer relay base URLs (e.g. https://relay.example.com)")
+	advertiseURL    := fs.String("advertise-url", "", "public address of this relay (e.g. relay.example.com:8081 or https://relay.example.com); announced to peers on hello")
 	lanScan         := fs.Bool("lan", false, fmt.Sprintf("scan LAN for sneakernet peers on port %d", lan.Port))
 	storageLimit    := fs.String("storage-limit", "0", "maximum blockstore size (e.g. 10GB, 512MB); 0 = unlimited")
 	reservePhysical := fs.String("reserve-physical", "0", "storage reserved for physical/local blocks (e.g. 2GB)")
@@ -193,9 +198,13 @@ func cmdRelay(args []string) {
 	defer stop()
 
 	pt := newPeerTracker()
+	if *advertiseURL != "" {
+		pt.advertiseURL = peerURL(*advertiseURL)
+	}
 
 	relaySrv := relay.NewServer(bs, *powFloor)
 	relaySrv.SetPeerSource(pt.nonPenalizedPeers)
+	relaySrv.SetPeerAdder(func(u string) { pt.addPeer(peerURL(u)) })
 	if *regionFlag != "" {
 		dbPath := *geoipDB
 		if dbPath == "" {
@@ -440,8 +449,9 @@ type peerState struct {
 }
 
 type peerTracker struct {
-	mu    sync.Mutex
-	known map[string]*peerState
+	mu           sync.Mutex
+	known        map[string]*peerState
+	advertiseURL string // public URL to announce when saying hello to peers; empty = no announcement
 }
 
 func newPeerTracker() *peerTracker {
@@ -530,7 +540,7 @@ func (pt *peerTracker) syncOne(ctx context.Context, store blockstore.Store, u st
 		return
 	}
 
-	if gossipPeers, err := c.GetPeers(ctx); err == nil {
+	if gossipPeers, err := c.Hello(ctx, pt.advertiseURL); err == nil {
 		for _, p := range gossipPeers {
 			p = peerURL(p)
 			if pt.addPeer(p) {

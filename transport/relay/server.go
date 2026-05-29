@@ -31,6 +31,7 @@ type Server struct {
 	powFloor   int
 	mux        *http.ServeMux
 	peerSource func() []string
+	peerAdder  func(string)
 	geoip      *GeoIP // optional; nil = LAN-or-Global only
 }
 
@@ -50,6 +51,12 @@ func NewServer(store blockstore.Store, powFloor int) *Server {
 // peer base URLs. Called by GET /v1/peers so peers can gossip the network.
 func (s *Server) SetPeerSource(fn func() []string) {
 	s.peerSource = fn
+}
+
+// SetPeerAdder registers a function called when a peer announces itself via
+// POST /v1/hello. The URL has already been validated as non-empty by the handler.
+func (s *Server) SetPeerAdder(fn func(string)) {
+	s.peerAdder = fn
 }
 
 // SetGeoIP attaches a GeoIP classifier that enables regional tagging of
@@ -73,6 +80,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /v1/delta", s.handleDelta)
 	s.mux.HandleFunc("GET /v1/pow-limit", s.handlePowLimit)
 	s.mux.HandleFunc("GET /v1/peers", s.handlePeers)
+	s.mux.HandleFunc("POST /v1/hello", s.handleHello)
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -238,6 +246,29 @@ func (s *Server) handlePowLimit(w http.ResponseWriter, r *http.Request) {
 // Returns JSON {"peers":["url1","url2",...]} — known healthy (non-penalized) peers.
 // Peers use this to gossip and discover the rest of the network.
 func (s *Server) handlePeers(w http.ResponseWriter, r *http.Request) {
+	var peers []string
+	if s.peerSource != nil {
+		peers = s.peerSource()
+	}
+	if peers == nil {
+		peers = []string{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"peers": peers})
+}
+
+// POST /v1/hello
+// Request JSON: {"url": "https://my-relay.example.com"} (url field is optional)
+// Response JSON: {"peers": [...]}
+// Announces the caller's public URL (if provided) and returns known peers.
+// Callers use this to self-register and bootstrap their peer list in one round trip.
+func (s *Server) handleHello(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		URL string `json:"url"`
+	}
+	json.NewDecoder(r.Body).Decode(&req) // best-effort; empty body is fine
+	if req.URL != "" && s.peerAdder != nil {
+		s.peerAdder(req.URL)
+	}
 	var peers []string
 	if s.peerSource != nil {
 		peers = s.peerSource()
