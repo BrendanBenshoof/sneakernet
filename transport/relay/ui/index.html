@@ -213,7 +213,7 @@
       <ul class="limit-list">
         <li><strong>Received messages are not saved.</strong> Decrypted incoming messages live in memory and vanish when you close or reload the tab. Sent messages are saved in browser storage and survive reloads. Re-scanning recovers received blocks still held by the relay.</li>
         <li><strong>Keys are this browser only.</strong> Identities live in IndexedDB for this browser on this device. A different browser, an incognito window, or clearing browser storage means starting over.</li>
-        <li><strong>No key encryption at rest.</strong> Identity keys sit as plaintext in browser storage, protected only by the browser's same-origin policy. A native node encrypts keys behind a passphrase.</li>
+        <li><strong>Keys are encrypted at rest.</strong> Private keys are sealed in IndexedDB with a vault password you set on first use. They only live in memory while you are unlocked — closing the tab or clicking Lock clears them.</li>
       </ul>
     </div>
   </section>
