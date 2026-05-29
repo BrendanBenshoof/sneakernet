@@ -87,7 +87,8 @@ func TestGetPowLimitMedian(t *testing.T) {
 		wfs = append(wfs, blockstore.WorkFactor(stamp, p))
 	}
 	sort.Ints(wfs)
-	want := wfs[5] // wfs[halfCapacity] where halfCapacity = capacity/2 = 10/2 = 5
+	// Server advertises one below the raw median so peers can ramp down gracefully.
+	want := wfs[5] - 1 // raw median is wfs[halfCapacity]; floor is median-1
 
 	if err := store.RefreshMedian(); err != nil {
 		t.Fatal("RefreshMedian:", err)

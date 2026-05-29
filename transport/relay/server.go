@@ -228,7 +228,7 @@ func (s *Server) handlePowLimit(w http.ResponseWriter, r *http.Request) {
 			serverError(w, http.StatusInternalServerError, "store error")
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]int{"pow_floor": median})
+		writeJSON(w, http.StatusOK, map[string]int{"pow_floor": median - 1})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]int{"pow_floor": s.powFloor})
