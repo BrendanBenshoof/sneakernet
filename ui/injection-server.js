@@ -165,7 +165,9 @@ class ServerBackend {
   // Boost a message by mining a better stamp. Returns new work_factor or null.
   async boost(blockId) {
     const r = await this._req('POST', '/api/boost', {block_id: blockId});
-    if (!r || !r.ok) return null;
+    if (!r) return null;
+    if (r.status === 504) return 0; // no improvement found — worth retrying
+    if (!r.ok) return null;
     const d = await r.json();
     return d.work_factor ?? null;
   }

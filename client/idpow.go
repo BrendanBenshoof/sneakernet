@@ -106,7 +106,7 @@ func MineIdentityPoW(ctx context.Context, pubkey [32]byte, duration time.Duratio
 	for {
 		select {
 		case <-ctx.Done():
-			return nil, 0, ctx.Err()
+			return best, bestBits, ctx.Err() // return best-so-far; caller decides whether to use it
 		case <-deadline:
 			return best, bestBits, nil
 		default:
