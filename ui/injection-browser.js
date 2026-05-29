@@ -376,6 +376,30 @@ async function passphraseToKey(passphrase) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+//  Vault crypto — PBKDF2 key derivation + XChaCha20 envelope
+// ═══════════════════════════════════════════════════════════════════════
+
+async function deriveVaultKey(password, saltBytes) {
+  const pwBytes = new TextEncoder().encode(password);
+  const base    = await crypto.subtle.importKey('raw', pwBytes, {name:'PBKDF2'}, false, ['deriveBits']);
+  const bits    = await crypto.subtle.deriveBits(
+    {name:'PBKDF2', hash:'SHA-256', salt:saltBytes, iterations:300000},
+    base, 256
+  );
+  return new Uint8Array(bits);
+}
+
+function vaultSeal(key32, plainBytes) {
+  const nonce  = crypto.getRandomValues(new Uint8Array(24));
+  const sealed = xchacha20Seal(key32, nonce, plainBytes);
+  return {sealed: b64enc(sealed), nonce: b64enc(nonce)};
+}
+
+function vaultOpen(key32, sealedB64, nonceB64) {
+  return xchacha20Open(key32, b64dec(nonceB64), b64dec(sealedB64));
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 //  IndexedDB
 // ═══════════════════════════════════════════════════════════════════════
 
@@ -383,11 +407,14 @@ let _db = null;
 function openDB() {
   if (_db) return Promise.resolve(_db);
   return new Promise((res, rej) => {
-    const req = indexedDB.open('sneakernet', 2);
+    const req = indexedDB.open('sneakernet', 3);
     req.onupgradeneeded = e => {
       const db = e.target.result;
       if (!db.objectStoreNames.contains('identities')) {
         db.createObjectStore('identities', {keyPath:'name'});
+      }
+      if (!db.objectStoreNames.contains('vault')) {
+        db.createObjectStore('vault', {keyPath:'id'});
       }
     };
     req.onsuccess = e => { _db=e.target.result; res(_db); };
@@ -422,6 +449,15 @@ async function dbDelete(store, key) {
   });
 }
 
+async function dbGet(store, key) {
+  const db = await openDB();
+  return new Promise((res, rej) => {
+    const req = db.transaction(store,'readonly').objectStore(store).get(key);
+    req.onsuccess = e => res(e.target.result || null);
+    req.onerror   = e => rej(e.target.error);
+  });
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 //  BrowserBackend
 //
@@ -436,14 +472,71 @@ class BrowserBackend {
     this._nextId       = 0;
     this._resumeToken  = localStorage.getItem('snk_resume_token') || '';
     this._wfUpdatedIds = new Set(); // block IDs whose work_factor improved this scrape cycle
+    this._unlockKey    = null;      // 32-byte Uint8Array, hot memory only — null when locked
     this._loadSentIntoInbox();  // hydrate sent messages before first getMessages() call
   }
 
-  get requiresAuth() { return false; }
-  async isAuthenticated() { return true; }
-  async createKeystore() {}
-  async unlock() {}
-  async lock() {}
+  get requiresAuth() { return true; }
+  async isAuthenticated() { return this._unlockKey !== null; }
+
+  async createKeystore(pw) {
+    const existing = await dbGet('vault', 'config');
+    if (existing) throw new Error('exists');
+
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const key  = await deriveVaultKey(pw, salt);
+
+    // Verification blob — sealed "sneakernet-ok"; decryption failure = wrong password
+    const CHECK_PLAIN = new TextEncoder().encode('sneakernet-ok');
+    const {sealed: checkSealed, nonce: checkNonce} = vaultSeal(key, CHECK_PLAIN);
+    await dbPut('vault', {id:'config', version:1, salt:b64enc(salt), checkSealed, checkNonce});
+
+    // Migrate existing plaintext identity private keys
+    const ids = await dbGetAll('identities');
+    for (const id of ids) {
+      const rec = {...id};
+      let dirty = false;
+      if (rec.signingPrivJWK) {
+        const plain = new TextEncoder().encode(JSON.stringify(rec.signingPrivJWK));
+        const {sealed, nonce} = vaultSeal(key, plain);
+        rec.signingPrivJWKEnc = sealed; rec.signingPrivJWKNonce = nonce;
+        delete rec.signingPrivJWK;
+        dirty = true;
+      }
+      if (rec.privJWK) {
+        const plain = new TextEncoder().encode(JSON.stringify(rec.privJWK));
+        const {sealed, nonce} = vaultSeal(key, plain);
+        rec.privJWKEnc = sealed; rec.privJWKNonce = nonce;
+        delete rec.privJWK;
+        dirty = true;
+      }
+      if (dirty) await dbPut('identities', rec);
+    }
+
+    // Migrate existing plaintext channel keys
+    const chs = this._loadChannels();
+    const encChs = chs.map(ch => {
+      if (!ch.keyBase64) return ch;
+      const plain = b64dec(ch.keyBase64);
+      const {sealed, nonce} = vaultSeal(key, plain);
+      return {name: ch.name, keyEnc: sealed, keyNonce: nonce};
+    });
+    this._saveChannels(encChs);
+
+    this._unlockKey = key;
+  }
+
+  async unlock(pw) {
+    const cfg = await dbGet('vault', 'config');
+    if (!cfg) throw new Error('noKeystore');
+    const key = await deriveVaultKey(pw, b64dec(cfg.salt));
+    try { vaultOpen(key, cfg.checkSealed, cfg.checkNonce); } catch { throw new Error('wrong password'); }
+    this._unlockKey = key;
+  }
+
+  async lock() {
+    if (this._unlockKey) { this._unlockKey.fill(0); this._unlockKey = null; }
+  }
 
   // ── identities ──────────────────────────────────────────────────────────
   // IndexedDB record (v2): {name, pubBase64(Ed25519), privJWK(Ed25519)}
@@ -452,8 +545,26 @@ class BrowserBackend {
   // Migration: prefer signingPubBase64/signingPrivJWK when present.
   // Returned shape: {name, public_key(Ed25519)}
 
-  _edPubB64(id)  { return id.signingPubBase64  || id.pubBase64;  }
-  _edPrivJWK(id) { return id.signingPrivJWK    || id.privJWK;    }
+  _edPubB64(id) { return id.signingPubBase64 || id.pubBase64; }
+
+  // Decrypt the Ed25519 private JWK for an identity record. Returns null when locked or corrupt.
+  async _decryptPrivJWK(id) {
+    const enc   = id.signingPrivJWKEnc   || id.privJWKEnc;
+    const nonce = id.signingPrivJWKNonce || id.privJWKNonce;
+    if (!enc) return id.signingPrivJWK || id.privJWK || null; // legacy plaintext (pre-vault)
+    if (!this._unlockKey) return null;
+    try {
+      const plain = vaultOpen(this._unlockKey, enc, nonce);
+      return JSON.parse(new TextDecoder().decode(plain));
+    } catch { return null; }
+  }
+
+  // Decrypt the channel key bytes for a channel record. Returns null when locked or corrupt.
+  async _decryptChannelKey(ch) {
+    if (!ch.keyEnc) return b64dec(ch.keyBase64 || ''); // legacy plaintext (pre-vault)
+    if (!this._unlockKey) return null;
+    try { return vaultOpen(this._unlockKey, ch.keyEnc, ch.keyNonce); } catch { return null; }
+  }
 
   async listIdentities() {
     const ids = await dbGetAll('identities');
@@ -468,15 +579,20 @@ class BrowserBackend {
   async addIdentity(name) {
     const ids = await dbGetAll('identities');
     if (ids.find(i => i.name === name)) throw new Error('duplicate');
+    if (!this._unlockKey) throw new Error('locked');
 
-    const kp      = await genEd25519Keypair();
+    const kp       = await genEd25519Keypair();
     const pubBytes = await exportEd25519PubRaw(kp.publicKey);
     const privJWK  = await exportEd25519PrivJWK(kp.privateKey);
 
+    const plain = new TextEncoder().encode(JSON.stringify(privJWK));
+    const {sealed, nonce} = vaultSeal(this._unlockKey, plain);
+
     await dbPut('identities', {
       name,
-      pubBase64: b64enc(pubBytes),
-      privJWK,
+      pubBase64:    b64enc(pubBytes),
+      privJWKEnc:   sealed,
+      privJWKNonce: nonce,
     });
   }
 
@@ -606,8 +722,10 @@ self.onmessage = async function(e) {
   async joinChannel(name, passphrase) {
     const chs = this._loadChannels();
     if (chs.find(c => c.name === name)) throw new Error('duplicate');
+    if (!this._unlockKey) throw new Error('locked');
     const keyBytes = await passphraseToKey(passphrase);
-    chs.push({name, keyBase64: b64enc(keyBytes)});
+    const {sealed, nonce} = vaultSeal(this._unlockKey, keyBytes);
+    chs.push({name, keyEnc: sealed, keyNonce: nonce});
     this._saveChannels(chs);
   }
 
@@ -624,7 +742,9 @@ self.onmessage = async function(e) {
 
     const ids      = await dbGetAll('identities');
     const channels = this._loadChannels();
-    const chKeys   = channels.map(ch => ({name: ch.name, key: b64dec(ch.keyBase64)}));
+    const chKeys   = await Promise.all(
+      channels.map(async ch => ({name: ch.name, key: await this._decryptChannelKey(ch)}))
+    );
 
     // Only seed seenIds from received blocks, not sent-log entries.
     // Sent-log entries must not block decryption of those same blocks by recipient identities.
@@ -673,7 +793,9 @@ self.onmessage = async function(e) {
 
         // Try direct identity decryption
         for (const id of ids) {
-          const plain = await tryDecryptDirect(this._edPrivJWK(id), payloadBytes);
+          const privJWK = await this._decryptPrivJWK(id);
+          if (!privJWK) continue;
+          const plain = await tryDecryptDirect(privJWK, payloadBytes);
           if (plain === null) continue;
           const parsed = readV2PlainFull(plain) || readV1Plain(plain);
           if (!parsed) continue;
@@ -713,6 +835,7 @@ self.onmessage = async function(e) {
         // Try channel decryption
         if (!matched) {
           for (const ch of chKeys) {
+            if (!ch.key) continue;
             const plain = await tryDecryptChannel(ch.key, payloadBytes);
             if (plain === null) continue;
             const parsed = readV2PlainFull(plain) || readV1Plain(plain);
@@ -756,9 +879,11 @@ self.onmessage = async function(e) {
     const ids = await dbGetAll('identities');
     const id  = ids.find(i => i.name === senderIdentityName);
     if (!id) return {senderPubBytes: null, signingPrivKey: null};
+    const privJWK = await this._decryptPrivJWK(id);
+    if (!privJWK) return {senderPubBytes: null, signingPrivKey: null};
     return {
       senderPubBytes: b64dec(this._edPubB64(id)),
-      signingPrivKey: await importEd25519PrivJWK(this._edPrivJWK(id)),
+      signingPrivKey: await importEd25519PrivJWK(privJWK),
     };
   }
 
@@ -1096,8 +1221,10 @@ self.onmessage = async function(e) {
     const threadRefs = replyToBlockId
       ? [replyToBlockId, ...Array(7).fill('0'.repeat(64))]
       : null;
+    const chKey = await this._decryptChannelKey(ch);
+    if (!chKey) throw new Error('locked');
     const plain   = await buildV2Plain(message, senderPubBytes, signingPrivKey, threadRefs);
-    const payload = await encryptChannelRaw(b64dec(ch.keyBase64), plain);
+    const payload = await encryptChannelRaw(chKey, plain);
     const blockId = await sha256hex(payload);
     await this._postBlock(payload);
     const sentAt = new Date().toISOString();
@@ -1123,10 +1250,10 @@ const backend = new BrowserBackend();
 
 const UI_CONFIG = {
   pageTitle:       'Browser',
-  lockSubtitle:    'Browser — client-side crypto, keys in IndexedDB',
+  lockSubtitle:    'Browser — client-side crypto, keys encrypted at rest',
   sidebarSubtitle: 'Browser',
-  hasLockButton:   false,
-  identitiesHint:  'Keys generated in your browser, stored in IndexedDB. Share your <strong>public key</strong> so others can send you messages and verify your identity — one key does both. Keys never leave this browser.',
+  hasLockButton:   true,
+  identitiesHint:  'Keys generated in your browser. Private keys are encrypted in IndexedDB with your vault password — they live in memory only while unlocked. Share your <strong>public key</strong> so others can send you messages and verify your identity — one key does both.',
   sendStatusMsg:   'Block stored on relay.',
   welcomeHtml: `<div style="max-width:520px;text-align:left">
     <p style="margin-bottom:18px;font-size:15px;color:var(--text)">Select a conversation from the sidebar, or click <strong>+</strong> to send a new message.</p>
@@ -1134,7 +1261,7 @@ const UI_CONFIG = {
       <strong style="color:var(--text);display:block;margin-bottom:8px">You are using the browser client.</strong>
       <strong style="color:var(--text)">Message lifetime scales with proof-of-work.</strong> When you send, your browser mines PoW locally — this may take a few seconds but extends your block's TTL beyond the 24-hour base.<br><br>
       <strong style="color:var(--text)">Your inbox is not saved.</strong> Decrypted messages live in memory and are cleared when you close or reload this tab. Re-scanning will only recover blocks still held by the relay.<br><br>
-      <strong style="color:var(--text)">Keys are stored in this browser only.</strong> Your identities live in this browser's IndexedDB. A different browser, incognito window, or clearing browser data means starting over with a new identity.
+      <strong style="color:var(--text)">Keys are encrypted at rest.</strong> Private keys are stored in IndexedDB encrypted with your vault password — they only live in memory while you are unlocked. A different browser, incognito window, or clearing browser data means starting over with a new identity.
     </div>
     <div style="margin-top:16px">
       <button class="sm ghost" data-join-channel="sneakernet-alpha">#sneakernet-alpha &rarr;</button>
