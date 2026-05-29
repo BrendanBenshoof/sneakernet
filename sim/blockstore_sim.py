@@ -9,7 +9,9 @@ Models BadgerStore / FlatFileStore semantics:
   - Eviction picks the tag furthest over its reservation, then that tag's
     soonest-logicalExpiry block.
   - StorageLimit triggers eviction after each Put (evictBatch=10 extra per trigger).
-  - Tombstones block re-acceptance for 14 days after eviction.
+  - Tombstones last 2×TTL(wf) from eviction time: long enough that peers still
+    circulating the block will have dropped it, but bounded so even high-PoW
+    blocks eventually become re-acceptable.
 
 Run:  python3 sim/blockstore_sim.py [scenario ...]
 Available scenarios: default  reservation_pressure  high_load  high_pow  low_pow
@@ -26,10 +28,14 @@ from typing import Callable, Optional
 
 # ── constants matching blockstore ─────────────────────────────────────────────
 
-BLOCK_SIZE_BYTES = 17 + 4096               # blockValHeaderSize + PayloadSize
-PHI              = (1 + 5 ** 0.5) / 2     # golden ratio ≈ 1.618
-TOMBSTONE_TTL_H  = 14 * 24                # 336 hours
-EVICT_BATCH      = 10
+BLOCK_SIZE_BYTES     = 17 + 4096           # blockValHeaderSize + PayloadSize
+# Tombstone key: tombPrefix(1) + id(32) = 33 bytes. BadgerDB adds per-entry
+# metadata (version, expiry timestamp, internal overhead) bringing the real
+# on-disk cost to ~64 bytes. Tombstones live for TOMBSTONE_TTL_H and count
+# against the storage limit just like blocks do (lsm+vlog includes them).
+TOMBSTONE_SIZE_BYTES = 64
+PHI                  = (1 + 5 ** 0.5) / 2  # golden ratio ≈ 1.618
+EVICT_BATCH          = 10
 
 MiB = 1024 * 1024
 GiB = 1024 * MiB
@@ -176,7 +182,8 @@ class SimStore:
     # ── internals ─────────────────────────────────────────────────────────────
 
     def _usage(self) -> int:
-        return len(self.blocks) * BLOCK_SIZE_BYTES
+        return (len(self.blocks) * BLOCK_SIZE_BYTES
+                + len(self.tombstones) * TOMBSTONE_SIZE_BYTES)
 
     def _evict(self, n: int, now: float) -> int:
         per_tag: dict[Tag, list[Block]] = defaultdict(list)
@@ -205,7 +212,8 @@ class SimStore:
             tag_usage[target] -= BLOCK_SIZE_BYTES
             if victim.id in self.blocks:
                 del self.blocks[victim.id]
-                self.tombstones[victim.id] = now + TOMBSTONE_TTL_H
+                # Tombstone lasts 2×TTL(wf) from eviction time.
+                self.tombstones[victim.id] = now + 2 * ttl_hours(victim.wf)
                 self.evictions_total += 1
                 self.eviction_log.append((now, victim.wf, victim.tag))
                 evicted += 1
@@ -408,6 +416,7 @@ class Simulation:
         return {
             "time":          self.now,
             "blocks":        self.store.count(),
+            "tombstones":    len(self.store.tombstones),
             "fill_pct":      self.store.fill_fraction() * 100,
             "evictions":     self.store.evictions_total,
             "arrivals":      self.store.arrivals_total,
@@ -439,13 +448,16 @@ def sparkline(values: list[float], width: int = BAR_WIDTH) -> str:
 def print_fill_timeline(snapshots: list[dict], duration_hours: float):
     fills    = [s["fill_pct"]       for s in snapshots]
     overdues = [s["overdue_pct"]    for s in snapshots]
-    floors   = [s["pow_floor"] for s in snapshots]
+    floors = [s["pow_floor"]  for s in snapshots]
+    tombs  = [s["tombstones"] for s in snapshots]
+    cap    = snapshots[-1]["blocks"] + snapshots[-1]["tombstones"]  # approx
     print(f"\n  Fill % over {duration_hours/24:.0f} days  (0%{'─'*(BAR_WIDTH-4)}100%):")
-    print(f"  fill:      {sparkline(fills)}")
-    print(f"  overdue:   {sparkline(overdues)}")
-    print(f"  pow_floor: {sparkline(floors)}")
+    print(f"  fill:       {sparkline(fills)}")
+    print(f"  overdue:    {sparkline(overdues)}")
+    print(f"  pow_floor:  {sparkline(floors)}")
+    print(f"  tombstones: {sparkline(tombs)}")
     print(f"  peak={max(fills):.1f}%  overdue@end={overdues[-1]:.1f}%  "
-          f"pow_floor@end={floors[-1]}")
+          f"pow_floor@end={floors[-1]}  tombs@end={tombs[-1]:,}")
 
 def print_wf_distribution(label: str, wf_dist: dict[int, int]):
     total  = sum(wf_dist.values()) or 1
@@ -541,7 +553,10 @@ def run_scenario(sc: Scenario, seed: int = 42):
     print(f"  Live at end       : {final['blocks']:,}  ({final['fill_pct']:.1f}% full)")
     print(f"  Overdue at end    : {final['overdue_pct']:.1f}%  "
           f"(stored past logical TTL, awaiting eviction)")
+    tomb_bytes = final['tombstones'] * TOMBSTONE_SIZE_BYTES
     print(f"  pow_floor at end  : {final['pow_floor']}")
+    print(f"  Tombstones at end : {final['tombstones']:,}  "
+          f"({tomb_bytes/MiB:.2f} MiB tombstone overhead)")
     print(f"  Floor rejects     : {final['floor_rejects']:,}")
 
     print_fill_timeline(snaps, sc.duration_hours)

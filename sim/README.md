@@ -18,6 +18,19 @@ was needed to answer:
 
 ## Bugs found and fixed in the process
 
+**0. Tombstone TTL was a fixed 14 days instead of the block's remaining TTL**
+
+The docstring on `Evict` says "a tombstone with the block's remaining TTL is
+written so it is not re-accepted before it would have naturally expired." The
+code used a fixed `tombstoneTTL = 14 * 24 * time.Hour` regardless of the
+evicted block's wf. This is wrong in both directions: a wf=0 block has a 24h
+TTL so its tombstone needs only 24h, not 14 days; a wf=12 block has an 18-day
+TTL so a 14-day tombstone lets it be re-introduced 4 days early.
+
+Fix: tombstone TTL = `2 × TTL(wf)` from eviction time. This is long enough
+that peers still circulating the block will have dropped it naturally, but
+bounded so even high-PoW blocks eventually become re-acceptable.
+
 **1. `computeMedianWorkFactor` indexes the wrong position**
 
 The intent was "median of a virtual capacity-sized array where empty slots
