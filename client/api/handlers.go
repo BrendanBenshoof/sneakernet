@@ -1037,8 +1037,9 @@ func (s *Server) handleBoost(w http.ResponseWriter, r *http.Request) {
 		err   error
 	}
 	type idRes struct {
-		stamp []byte
-		bits  int
+		stamp     []byte
+		bits      int
+		seedBits  int // bits of the sender's existing stamp before mining
 	}
 	blockCh := make(chan blockRes, 1)
 	idCh    := make(chan idRes, 1)
@@ -1049,9 +1050,9 @@ func (s *Server) handleBoost(w http.ResponseWriter, r *http.Request) {
 	}()
 	if hasSender {
 		go func() {
-			existingStamp, _ := client.ParseSnkStamp(msgContent, senderPub)
+			existingStamp, existingBits := client.ParseSnkStamp(msgContent, senderPub)
 			s, bits, _ := client.MineIdentityPoW(ctx, senderPub, 5*time.Second, existingStamp)
-			idCh <- idRes{s, bits}
+			idCh <- idRes{s, bits, existingBits}
 		}()
 	} else {
 		idCh <- idRes{}
@@ -1059,6 +1060,13 @@ func (s *Server) handleBoost(w http.ResponseWriter, r *http.Request) {
 
 	bRes := <-blockCh
 	iRes := <-idCh
+
+	// Send identity PoW gift regardless of whether block mining succeeded —
+	// MineIdentityPoW returns best-so-far even on context cancellation.
+	// seedBits is the sender's known current score; only gift if we beat it.
+	if hasSender && len(iRes.stamp) > 0 && iRes.bits > iRes.seedBits {
+		go s.sendPowGift(senderPub, iRes.stamp)
+	}
 
 	if bRes.err != nil {
 		writeError(w, http.StatusGatewayTimeout, "no improvement found in 5s — try again")
@@ -1076,14 +1084,6 @@ func (s *Server) handleBoost(w http.ResponseWriter, r *http.Request) {
 	newWF := bRes.wf
 	if actualWF, err := s.blocks.GetWorkFactor(id); err == nil {
 		newWF = actualWF
-	}
-
-	// Send identity PoW gift if we found an improvement over the sender's current stamp.
-	if hasSender && len(iRes.stamp) > 0 {
-		_, currentBits := client.ParseSnkStamp(msgContent, senderPub)
-		if iRes.bits > currentBits {
-			go s.sendPowGift(senderPub, iRes.stamp)
-		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{

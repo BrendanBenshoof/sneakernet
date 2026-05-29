@@ -919,7 +919,7 @@ self.onmessage=async function(e){
       this._sendGiftDM(senderPubB64, 'snk-pow-gift:' + stampB64url).catch(() => {});
     }
 
-    return newWF;
+    return newWF ?? 0; // 0 = no improvement found (worth retrying); null = hard error
   }
 
   // Parse the identity PoW bits from a message's snk: header line.

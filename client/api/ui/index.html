@@ -1202,7 +1202,9 @@ class ServerBackend {
   // Boost a message by mining a better stamp. Returns new work_factor or null.
   async boost(blockId) {
     const r = await this._req('POST', '/api/boost', {block_id: blockId});
-    if (!r || !r.ok) return null;
+    if (!r) return null;
+    if (r.status === 504) return 0; // no improvement found — worth retrying
+    if (!r.ok) return null;
     const d = await r.json();
     return d.work_factor ?? null;
   }
@@ -2091,7 +2093,9 @@ async function handleBoost(barsEl, m) {
   barsEl.dataset.boosting = '1';
   try {
     const result = await backend.boost(m.block_id);
-    if (result !== null) {
+    if (result === 0) {
+      toast('No improvement found — try again.');
+    } else if (result !== null) {
       const newWF = typeof result === 'number' ? result : result.work_factor;
       // Only move the model forward — never let a stale response lower the WF.
       if (newWF > (m.work_factor || 0)) {
