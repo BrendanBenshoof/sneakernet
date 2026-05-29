@@ -76,15 +76,7 @@ func (s *BadgerStore) computeMedianWorkFactor() (int, error) {
 	// Correct index into the zero-padded virtual array: the median position
 	// (halfCapacity) minus the number of leading zeros (capacity-len(wfs))
 	// equals len(wfs)-halfCapacity.
-	//
-	// Advertise one below the true median so peers can ramp down gracefully:
-	// if we advertised the exact median, every incoming block would be mined
-	// to exactly that level and the floor could only ever rise, never fall.
-	median := wfs[len(wfs)-halfCapacity]
-	if median > 0 {
-		median--
-	}
-	return median, nil
+	return wfs[len(wfs)-halfCapacity], nil
 }
 
 const (
@@ -496,9 +488,11 @@ func (s *BadgerStore) Evict(n int) (int, error) {
 			var wf int
 			var tag Tag
 			if err := item.Value(func(val []byte) error {
-				if len(val) >= blockValHeaderSize {
+				if len(val) >= legacyBlockValHeaderSize+PayloadSize {
 					wf = int(binary.BigEndian.Uint32(val[StampSize : StampSize+4]))
 					createdAt = int64(binary.BigEndian.Uint64(val[StampSize+4 : StampSize+12]))
+				}
+				if len(val) >= blockValHeaderSize+PayloadSize {
 					tag = Tag(val[StampSize+12])
 				}
 				return nil

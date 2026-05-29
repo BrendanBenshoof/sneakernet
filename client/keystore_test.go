@@ -146,7 +146,7 @@ func TestKeystoreAtomicSave(t *testing.T) {
 }
 
 func TestKeystoreMultiKeyClient(t *testing.T) {
-	bs, err := blockstore.OpenSQLite(":memory:")
+	bs, err := blockstore.OpenBadger(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

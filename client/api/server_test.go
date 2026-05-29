@@ -18,7 +18,7 @@ import (
 func testServer(t *testing.T) (*api.Server, string) {
 	t.Helper()
 
-	bs, err := blockstore.OpenSQLite(":memory:")
+	bs, err := blockstore.OpenBadger(t.TempDir())
 	if err != nil {
 		t.Fatalf("open blockstore: %v", err)
 	}

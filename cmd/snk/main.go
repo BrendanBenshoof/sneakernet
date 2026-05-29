@@ -233,8 +233,7 @@ func cmdRelay(args []string) {
 
 func cmdMassStorage(args []string) {
 	fs := flag.NewFlagSet("mass-storage", flag.ExitOnError)
-	srcSQLite := fs.String("from-sqlite", "", "source SQLite blockstore path (blocks.db)")
-	srcBadger  := fs.String("from-badger", "", "source BadgerDB blockstore directory")
+	srcBadger := fs.String("from-badger", "", "source BadgerDB blockstore directory")
 	targetDir  := fs.String("to", "", "target flat-file mass storage directory (required)")
 	reindex    := fs.Bool("reindex", false, "rebuild index only, do not sync blocks")
 	fs.Parse(args)
@@ -252,26 +251,19 @@ func cmdMassStorage(args []string) {
 	defer target.Close()
 
 	if !*reindex {
+		if *srcBadger == "" {
+			fmt.Fprintln(os.Stderr, "mass-storage: -from-badger is required unless -reindex is set")
+			fs.Usage()
+			os.Exit(1)
+		}
 		var src blockstore.Store
-		switch {
-		case *srcSQLite != "":
-			s, err := blockstore.OpenSQLite(*srcSQLite)
-			if err != nil {
-				log.Fatalf("open sqlite source: %v", err)
-			}
-			defer s.Close()
-			src = s
-		case *srcBadger != "":
+		{
 			s, err := blockstore.OpenBadger(*srcBadger)
 			if err != nil {
 				log.Fatalf("open badger source: %v", err)
 			}
 			defer s.Close()
 			src = s
-		default:
-			fmt.Fprintln(os.Stderr, "mass-storage: one of -from-sqlite or -from-badger is required unless -reindex is set")
-			fs.Usage()
-			os.Exit(1)
 		}
 
 		if err := syncStores(src, target); err != nil {
@@ -289,6 +281,7 @@ func cmdMassStorage(args []string) {
 func syncStores(src, dst blockstore.Store) error {
 	token := ""
 	copied, skipped, errs := 0, 0, 0
+	var firstErr error
 	for {
 		next, refs, err := src.ListBlocks(token, 500, 0, time.Time{})
 		if err != nil {
@@ -297,12 +290,17 @@ func syncStores(src, dst blockstore.Store) error {
 		for _, ref := range refs {
 			stamp, payload, err := src.Get(ref.ID)
 			if err != nil {
-				log.Printf("sync: get %x: %v", ref.ID, err)
+				if firstErr == nil {
+					firstErr = fmt.Errorf("get %x: %w", ref.ID[:4], err)
+				}
 				errs++
 				continue
 			}
-			if already, err := dst.Has(ref.ID); err != nil {
-				log.Printf("sync: has %x: %v", ref.ID, err)
+			already, err := dst.Has(ref.ID)
+			if err != nil {
+				if firstErr == nil {
+					firstErr = fmt.Errorf("has %x: %w", ref.ID[:4], err)
+				}
 				errs++
 				continue
 			} else if already {
@@ -314,7 +312,9 @@ func syncStores(src, dst blockstore.Store) error {
 				}
 			}
 			if _, err := dst.Put(stamp, payload, blockstore.TagPhysical); err != nil {
-				log.Printf("sync: put %x: %v", ref.ID, err)
+				if firstErr == nil {
+					firstErr = fmt.Errorf("put %x: %w", ref.ID[:4], err)
+				}
 				errs++
 				continue
 			}
@@ -326,7 +326,11 @@ func syncStores(src, dst blockstore.Store) error {
 		token = next
 		log.Printf("synced %d blocks so far...", copied)
 	}
-	log.Printf("sync complete: %d copied, %d already present, %d errors", copied, skipped, errs)
+	if errs > 0 {
+		log.Printf("sync complete: %d copied, %d already present, %d errors (first: %v)", copied, skipped, errs, firstErr)
+	} else {
+		log.Printf("sync complete: %d copied, %d already present, %d errors", copied, skipped, errs)
+	}
 	return nil
 }
 
