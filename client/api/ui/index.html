@@ -731,6 +731,25 @@
     }
     #qr-modal-box .sm { min-width: 90px; }
 
+    /* ── Bundle password modal ───────────────────────────────────────────── */
+    #bundle-pw-modal {
+      position: fixed; inset: 0; z-index: 200;
+      background: rgba(0,0,0,.6); backdrop-filter: blur(2px);
+      display: flex; align-items: center; justify-content: center;
+    }
+    #bundle-pw-modal.hidden { display: none; }
+    #bundle-pw-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--r-lg);
+      padding: 24px;
+      display: flex; flex-direction: column; gap: 12px;
+      min-width: 280px; max-width: 90vw;
+    }
+    #bundle-pw-label { font-weight: 600; font-size: 14px; }
+    #bundle-pw-sub   { font-size: 12px; color: var(--muted); }
+    #bundle-pw-row   { display: flex; gap: 8px; }
+
     /* ── Status bar ──────────────────────────────────────────────────────── */
     #statusbar {
       font-size: 11px;
@@ -970,6 +989,11 @@
           <input id="new-id-name" placeholder="Identity name">
           <button class="sm" id="add-id-btn">Add</button>
         </div>
+        <div class="row" style="margin-top:4px">
+          <button class="sm ghost" id="export-keys-btn">Export key bundle</button>
+          <button class="sm ghost" id="import-keys-btn">Import key bundle</button>
+          <input type="file" id="import-keys-file" accept=".snkbundle,.json" style="display:none">
+        </div>
       </div>
       <div class="panel-section">
         <h2>Contacts</h2>
@@ -1050,6 +1074,19 @@
     </div>
   </div>
 
+</div>
+
+<div id="bundle-pw-modal" class="hidden" role="dialog" aria-modal="true">
+  <div id="bundle-pw-box">
+    <div id="bundle-pw-label"></div>
+    <div id="bundle-pw-sub"></div>
+    <input type="password" id="bundle-pw-input" placeholder="Password" autocomplete="current-password">
+    <div id="bundle-pw-row">
+      <button class="sm ghost" id="bundle-pw-cancel">Cancel</button>
+      <button class="sm" id="bundle-pw-confirm">Confirm</button>
+    </div>
+    <p id="bundle-pw-err" style="color:var(--danger);font-size:12px;margin:0"></p>
+  </div>
 </div>
 
 <div id="qr-modal" class="hidden" role="dialog" aria-modal="true">
@@ -1476,6 +1513,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
   el('add-id-btn').addEventListener('click', addIdentity);
   el('new-id-name').addEventListener('keydown', e => { if (e.key === 'Enter') addIdentity(); });
+  if (typeof dbGetAll !== 'undefined') {
+    el('export-keys-btn').addEventListener('click', exportKeyBundle);
+    el('import-keys-btn').addEventListener('click', () => el('import-keys-file').click());
+    el('import-keys-file').addEventListener('change', e => {
+      const file = e.target.files[0];
+      if (file) importKeyBundle(file);
+      e.target.value = '';
+    });
+  } else {
+    el('export-keys-btn').style.display = 'none';
+    el('import-keys-btn').style.display = 'none';
+  }
   el('new-ch-btn').addEventListener('click', () => {
     el('sb-ch-form').classList.toggle('hidden');
     if (!el('sb-ch-form').classList.contains('hidden')) el('new-ch-pass').focus();
@@ -2528,6 +2577,138 @@ async function deleteIdentity(name) {
   rebuildConversations();
   renderSidebar();
   toast(`Identity "${name}" deleted.`);
+}
+
+// ── key bundle export / import ──────────────────────────────────────────────
+
+// Returns the entered password, or null if cancelled.
+function promptBundlePassword(label, sub) {
+  return new Promise(resolve => {
+    el('bundle-pw-label').textContent = label;
+    el('bundle-pw-sub').textContent   = sub || '';
+    el('bundle-pw-err').textContent   = '';
+    el('bundle-pw-input').value       = '';
+    el('bundle-pw-modal').classList.remove('hidden');
+    el('bundle-pw-input').focus();
+
+    function finish(pw) {
+      el('bundle-pw-modal').classList.add('hidden');
+      el('bundle-pw-confirm').removeEventListener('click', onConfirm);
+      el('bundle-pw-cancel').removeEventListener('click', onCancel);
+      el('bundle-pw-input').removeEventListener('keydown', onKey);
+      resolve(pw);
+    }
+    function onConfirm() { finish(el('bundle-pw-input').value); }
+    function onCancel()  { finish(null); }
+    function onKey(e)    { if (e.key === 'Enter') onConfirm(); if (e.key === 'Escape') onCancel(); }
+
+    el('bundle-pw-confirm').addEventListener('click', onConfirm);
+    el('bundle-pw-cancel').addEventListener('click', onCancel);
+    el('bundle-pw-input').addEventListener('keydown', onKey);
+  });
+}
+
+function rekeyIdentity(id, fromKey, toKey) {
+  const rec = {...id};
+  for (const [enc, nonce] of [
+    ['signingPrivJWKEnc', 'signingPrivJWKNonce'],
+    ['privJWKEnc',        'privJWKNonce'],
+  ]) {
+    if (!rec[enc]) continue;
+    const plain = vaultOpen(fromKey, rec[enc], rec[nonce]);
+    const resealed = vaultSeal(toKey, plain);
+    rec[enc] = resealed.sealed; rec[nonce] = resealed.nonce;
+  }
+  return rec;
+}
+
+function rekeyChannel(ch, fromKey, toKey) {
+  if (!ch.keyEnc) return ch;
+  const plain = vaultOpen(fromKey, ch.keyEnc, ch.keyNonce);
+  const {sealed, nonce} = vaultSeal(toKey, plain);
+  return {...ch, keyEnc: sealed, keyNonce: nonce};
+}
+
+async function exportKeyBundle() {
+  const ids   = await dbGetAll('identities');
+  const chs   = backend._loadChannels();
+  const vault = await dbGet('vault', 'config');
+  const bundle = {
+    version: 1, format: 'sneakernet-keybundle',
+    vault: vault ? {version: vault.version, salt: vault.salt, checkSealed: vault.checkSealed, checkNonce: vault.checkNonce} : null,
+    identities: ids, channels: chs,
+  };
+  const blob = new Blob([JSON.stringify(bundle, null, 2)], {type: 'application/json'});
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url; a.download = `sneakernet-keys-${new Date().toISOString().slice(0, 10)}.snkbundle`;
+  a.click();
+  URL.revokeObjectURL(url);
+  toast('Key bundle exported.');
+}
+
+async function importKeyBundle(file) {
+  let bundle;
+  try { bundle = JSON.parse(await file.text()); }
+  catch { toast('Could not read file.', true); return; }
+  if (bundle.format !== 'sneakernet-keybundle' || bundle.version !== 1) {
+    toast('Unrecognized file format.', true); return;
+  }
+
+  const localVault = await dbGet('vault', 'config');
+  let bundleKey = null;
+
+  if (!localVault) {
+    // Fresh device: adopt the bundle's vault, unlock with source password.
+    if (!bundle.vault) { toast('Bundle has no vault config — cannot import to a new device.', true); return; }
+    const pw = await promptBundlePassword('Source device password', 'Enter the password used on the device that created this bundle.');
+    if (pw === null) return;
+    try {
+      bundleKey = await deriveVaultKey(pw, b64dec(bundle.vault.salt));
+      vaultOpen(bundleKey, bundle.vault.checkSealed, bundle.vault.checkNonce);
+    } catch { toast('Wrong password.', true); return; }
+    await backend.restoreKeystore(bundle.vault, pw);
+    // Records are already encrypted with bundleKey = local key now; import directly.
+    bundleKey = null;
+  } else if (bundle.vault && bundle.vault.salt !== localVault.salt) {
+    // Different salt: re-key each record from bundle key → local key.
+    const pw = await promptBundlePassword('Source device password', 'This bundle was encrypted with a different vault. Enter the password from the source device.');
+    if (pw === null) return;
+    try {
+      bundleKey = await deriveVaultKey(pw, b64dec(bundle.vault.salt));
+      vaultOpen(bundleKey, bundle.vault.checkSealed, bundle.vault.checkNonce);
+    } catch { toast('Wrong password.', true); return; }
+  }
+  // else: same salt → same key → import directly (bundleKey stays null).
+
+  const existing      = await dbGetAll('identities');
+  const existingNames = new Set(existing.map(i => i.name));
+  let idImported = 0, idSkipped = 0;
+  for (let id of (bundle.identities || [])) {
+    if (existingNames.has(id.name)) { idSkipped++; continue; }
+    if (bundleKey) id = rekeyIdentity(id, bundleKey, backend._unlockKey);
+    await dbPut('identities', id);
+    idImported++;
+  }
+
+  const existingChs     = backend._loadChannels();
+  const existingChNames = new Set(existingChs.map(c => c.name));
+  let chImported = 0;
+  for (let ch of (bundle.channels || [])) {
+    if (existingChNames.has(ch.name)) continue;
+    if (bundleKey) ch = rekeyChannel(ch, bundleKey, backend._unlockKey);
+    existingChs.push(ch);
+    chImported++;
+  }
+  if (chImported > 0) backend._saveChannels(existingChs);
+
+  await loadIdentities();
+  renderIdentities();
+  rebuildConversations();
+  renderSidebar();
+  let msg = `Imported ${idImported} identit${idImported === 1 ? 'y' : 'ies'}, ${chImported} channel${chImported !== 1 ? 's' : ''}.`;
+  if (idSkipped) msg += ` ${idSkipped} skipped (name already exists).`;
+  toast(msg);
 }
 
 // ── contacts ────────────────────────────────────────────────────────────────

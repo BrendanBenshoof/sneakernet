@@ -538,6 +538,19 @@ class BrowserBackend {
     if (this._unlockKey) { this._unlockKey.fill(0); this._unlockKey = null; }
   }
 
+  // Adopt a vault config from an imported bundle (fresh device, no existing vault).
+  async restoreKeystore(vaultCfg, password) {
+    const key = await deriveVaultKey(password, b64dec(vaultCfg.salt));
+    await dbPut('vault', {
+      id: 'config',
+      version: vaultCfg.version || 1,
+      salt: vaultCfg.salt,
+      checkSealed: vaultCfg.checkSealed,
+      checkNonce:  vaultCfg.checkNonce,
+    });
+    this._unlockKey = key;
+  }
+
   // ── identities ──────────────────────────────────────────────────────────
   // IndexedDB record (v2): {name, pubBase64(Ed25519), privJWK(Ed25519)}
   // Old records (v1) have {name, pubBase64(X25519), privJWK(X25519),
