@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Sneakernet</title>
+  <link id="snk-favicon" rel="icon" type="image/svg+xml" href="">
 
   <!-- Apply theme before paint to avoid flash -->
   <script>
@@ -179,6 +180,16 @@
       margin-bottom: 8px;
       line-height: 1.5;
     }
+    .lock-logo { display: flex; align-items: center; gap: 12px; margin-bottom: 2px; }
+    .lock-logo h1 {
+      font-size: 28px;
+      font-weight: 500;
+      font-family: var(--mono);
+      letter-spacing: -0.03em;
+      color: var(--text-strong);
+      margin-bottom: 0;
+    }
+    .lock-logo .accent { color: #e69f4b; }
     #lock-err, #onboard-err { color: var(--danger); font-size: 12px; min-height: 16px; }
 
     /* ── App shell ────────────────────────────────────────────────────────── */
@@ -207,16 +218,19 @@
       border-bottom: 1px solid var(--border);
       gap: 6px;
     }
+    #sb-mark { flex-shrink: 0; }
     #sb-header h1 {
       flex: 1;
       font-size: 15px;
       font-weight: 600;
+      font-family: var(--mono);
       color: var(--text-strong);
-      letter-spacing: -0.01em;
+      letter-spacing: -0.02em;
       display: flex;
       align-items: baseline;
       gap: 6px;
     }
+    #sb-header h1 .accent { color: #e69f4b; }
     #sb-header .sub {
       font-size: 10px;
       color: var(--muted);
@@ -839,7 +853,18 @@
 <!-- ── lock screen ───────────────────────────────────────────── -->
 <div id="lock-screen" class="hidden">
   <div class="lock-card">
-    <h1>Sneakernet</h1>
+    <div class="lock-logo">
+      <svg xmlns="http://www.w3.org/2000/svg"
+           viewBox="-129.2 -93.829 258.4 187.658" width="66" height="48"
+           stroke-linejoin="round" stroke-linecap="round">
+        <path d="M23.8,-20.207L-11.2,40.415L-81.2,40.415L-116.2,-20.207L-81.2,-80.829L-11.2,-80.829Z"
+              fill="none" stroke="var(--text-strong)" stroke-width="12"/>
+        <path d="M116.2,20.207L81.2,80.829L11.2,80.829L-23.8,20.207L11.2,-40.415L81.2,-40.415Z"
+              fill="none" stroke="#e69f4b" stroke-width="12"/>
+        <path d="M-23.8,20.207L11.2,80.829" fill="none" stroke="#e69f4b" stroke-width="12"/>
+      </svg>
+      <h1><span>sneaker<span class="accent">net</span></span></h1>
+    </div>
     <p class="sub" id="lock-subtitle"></p>
     <input type="password" id="pw" placeholder="Password" autocomplete="current-password">
     <button id="unlock-btn">Unlock</button>
@@ -867,7 +892,16 @@
 
   <nav id="sidebar">
     <div id="sb-header">
-      <h1>Sneakernet <span class="sub" id="sb-subtitle"></span></h1>
+      <svg id="sb-mark" xmlns="http://www.w3.org/2000/svg"
+           viewBox="-129.2 -93.829 258.4 187.658" width="44" height="32"
+           stroke-linejoin="round" stroke-linecap="round">
+        <path d="M23.8,-20.207L-11.2,40.415L-81.2,40.415L-116.2,-20.207L-81.2,-80.829L-11.2,-80.829Z"
+              fill="none" stroke="var(--text-strong)" stroke-width="12"/>
+        <path d="M116.2,20.207L81.2,80.829L11.2,80.829L-23.8,20.207L11.2,-40.415L81.2,-40.415Z"
+              fill="none" stroke="#e69f4b" stroke-width="12"/>
+        <path d="M-23.8,20.207L11.2,80.829" fill="none" stroke="#e69f4b" stroke-width="12"/>
+      </svg>
+      <h1><span>sneaker<span class="accent">net</span></span><span class="sub" id="sb-subtitle"></span></h1>
     </div>
     <div id="sb-body">
       <div class="sb-section">
@@ -1045,9 +1079,33 @@ const el = id => document.getElementById(id);
 function lockErr(msg) { el('lock-err').textContent = msg; }
 function setStatus(msg, cls = '') { const s = el('statusbar'); s.textContent = msg; s.className = cls; }
 
+// ── favicon ────────────────────────────────────────────────────────────────
+const FAVICON_READ = 'data:image/svg+xml,' + encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="-129.2 -93.829 258.4 187.658" stroke-linejoin="round" stroke-linecap="round">' +
+  '<style>.l{stroke:#1c1a14}.r{stroke:#e69f4b}@media(prefers-color-scheme:dark){.l{stroke:#ece6d4}}</style>' +
+  '<path class="l" d="M23.8,-20.207L-11.2,40.415L-81.2,40.415L-116.2,-20.207L-81.2,-80.829L-11.2,-80.829Z" fill="none" stroke-width="12"/>' +
+  '<path class="r" d="M116.2,20.207L81.2,80.829L11.2,80.829L-23.8,20.207L11.2,-40.415L81.2,-40.415Z" fill="none" stroke-width="12"/>' +
+  '<path class="r" d="M-23.8,20.207L11.2,80.829" fill="none" stroke-width="12"/>' +
+  '</svg>'
+);
+const FAVICON_UNREAD = 'data:image/svg+xml,' + encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="-129.2 -93.829 258.4 187.658" stroke-linejoin="round" stroke-linecap="round">' +
+  '<style>.o{stroke:#1c1a14}@media(prefers-color-scheme:dark){.o{stroke:#ece6d4}}</style>' +
+  '<path d="M23.8,-20.207L-11.2,40.415L-81.2,40.415L-116.2,-20.207L-81.2,-80.829L-11.2,-80.829Z" fill="#c2603e" stroke="none"/>' +
+  '<path d="M116.2,20.207L81.2,80.829L11.2,80.829L-23.8,20.207L11.2,-40.415L81.2,-40.415Z" fill="#e69f4b" stroke="none"/>' +
+  '<path class="o" d="M116.2,20.207L81.2,80.829L11.2,80.829L-23.8,20.207L11.2,-40.415L81.2,-40.415Z" fill="none" stroke-width="12"/>' +
+  '<path class="o" d="M23.8,-20.207L-11.2,40.415L-81.2,40.415L-116.2,-20.207L-81.2,-80.829L-11.2,-80.829Z" fill="none" stroke-width="12"/>' +
+  '<path class="o" d="M-23.8,20.207L11.2,80.829" fill="none" stroke-width="12"/>' +
+  '</svg>'
+);
+function updateFavicon(n) {
+  el('snk-favicon').href = n > 0 ? FAVICON_UNREAD : FAVICON_READ;
+}
+
 // ── apply UI_CONFIG to DOM ─────────────────────────────────────────────────
 function applyConfig() {
   document.title = 'Sneakernet — ' + UI_CONFIG.pageTitle;
+  updateFavicon(0);
   el('lock-subtitle').textContent = UI_CONFIG.lockSubtitle;
   el('sb-subtitle').textContent   = UI_CONFIG.sidebarSubtitle;
   if (UI_CONFIG.welcomeHtml) el('conv-empty').innerHTML = UI_CONFIG.welcomeHtml;
@@ -2555,6 +2613,7 @@ function updateTitle() {
   document.title = total > 0
     ? `(${total}) Sneakernet — ${UI_CONFIG.pageTitle}`
     : `Sneakernet — ${UI_CONFIG.pageTitle}`;
+  updateFavicon(total);
 }
 
 function convForMsg(m) {

@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Sneakernet relay</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='-129.2 -93.829 258.4 187.658' stroke-linejoin='round' stroke-linecap='round'><style>.l{stroke:%231c1a14}.r{stroke:%23e69f4b}@media(prefers-color-scheme:dark){.l{stroke:%23ece6d4}}</style><path class='l' d='M23.8,-20.207L-11.2,40.415L-81.2,40.415L-116.2,-20.207L-81.2,-80.829L-11.2,-80.829Z' fill='none' stroke-width='12'/><path class='r' d='M116.2,20.207L81.2,80.829L11.2,80.829L-23.8,20.207L11.2,-40.415L81.2,-40.415Z' fill='none' stroke-width='12'/><path class='r' d='M-23.8,20.207L11.2,80.829' fill='none' stroke-width='12'/></svg>">
   <script>
     (function () {
       try { document.documentElement.setAttribute('data-theme', localStorage.getItem('snk_theme') || 'dark'); }
@@ -66,13 +67,15 @@
     .page { max-width: 660px; margin: 0 auto; }
 
     header { margin-bottom: 40px; }
-    header h1 {
+    .site-logo { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
+    .site-logo h1 {
       font-size: 28px;
-      font-weight: 700;
+      font-weight: 500;
+      font-family: 'IBM Plex Mono', monospace;
       color: var(--text-strong);
-      letter-spacing: -0.02em;
-      margin-bottom: 6px;
+      letter-spacing: -0.03em;
     }
+    .site-logo .accent { color: #e69f4b; }
     header .sub {
       font-size: 13px;
       color: var(--muted);
@@ -177,7 +180,18 @@
 <div class="page">
 
   <header>
-    <h1>Sneakernet</h1>
+    <div class="site-logo">
+      <svg xmlns="http://www.w3.org/2000/svg"
+           viewBox="-129.2 -93.829 258.4 187.658" width="66" height="48"
+           stroke-linejoin="round" stroke-linecap="round">
+        <path d="M23.8,-20.207L-11.2,40.415L-81.2,40.415L-116.2,-20.207L-81.2,-80.829L-11.2,-80.829Z"
+              fill="none" stroke="var(--text-strong)" stroke-width="12"/>
+        <path d="M116.2,20.207L81.2,80.829L11.2,80.829L-23.8,20.207L11.2,-40.415L81.2,-40.415Z"
+              fill="none" stroke="#e69f4b" stroke-width="12"/>
+        <path d="M-23.8,20.207L11.2,80.829" fill="none" stroke="#e69f4b" stroke-width="12"/>
+      </svg>
+      <h1><span>sneaker<span class="accent">net</span></span></h1>
+    </div>
     <div class="sub">relay node &mdash; community-operated anonymous messaging</div>
   </header>
 
