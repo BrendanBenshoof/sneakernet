@@ -115,6 +115,16 @@ func encryptPlain(recipientPub *ecdh.PublicKey, plain [plaintextSize]byte) (bloc
 
 	var payload blockstore.Payload
 	copy(payload[:pubKeySize], ephemeral.PublicKey().Bytes())
+	// Randomise bit 255 of the ephemeral public key. X25519 masks this bit on
+	// decryption (RFC 7748), so the shared secret is unaffected. Without this,
+	// the bit is always 0 (X25519 u-coordinates are < 2^255), which lets a
+	// passive observer distinguish public-key blocks from channel blocks, where
+	// the same position holds a uniform random salt.
+	var noise [1]byte
+	if _, err := rand.Read(noise[:]); err != nil {
+		return blockstore.Payload{}, err
+	}
+	payload[31] = (payload[31] & 0x7f) | (noise[0] & 0x80)
 	copy(payload[pubKeySize:ciphertextOffset], nonce[:])
 	copy(payload[ciphertextOffset:], ct)
 	return payload, nil
