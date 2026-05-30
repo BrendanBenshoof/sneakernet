@@ -57,6 +57,7 @@ See **[docs/running.md](docs/running.md)** for all options: running a relay, syn
 | [docs/scalability.md](docs/scalability.md) | Operating envelope, Tor comparison, propagation model, storage and bandwidth scaling, trial decryption costs |
 | [docs/running.md](docs/running.md) | Build, node and relay configuration, USB sync, all CLI flags |
 | [docs/web-client.md](docs/web-client.md) | Browser UI capabilities and limitations vs. native node |
+| [docs/ethics.md](docs/ethics.md) | Ethical status of the project: goods, harms, tradeoffs, relay operator responsibilities |
 
 ## What is in this repository
 
