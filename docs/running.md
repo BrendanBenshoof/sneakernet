@@ -108,4 +108,4 @@ The `.sneakernet` marker tells a watching node that the directory is a sneakerne
 
 ## Browser UI
 
-Every relay serves a browser UI at `/app`. It runs the full message format in JavaScript — no installation required, works from any device. Read [web_client.md](web_client.md) for details on what it can and cannot do compared to a native node.
+Every relay serves a browser UI at `/app`. It runs the full message format in JavaScript — no installation required, works from any device. Read [web-client.md](web-client.md) for details on what it can and cannot do compared to a native node.

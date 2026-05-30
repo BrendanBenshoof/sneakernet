@@ -4,8 +4,8 @@ This document describes the messaging protocol built on top of Sneakernet's
 encrypted block layer. It covers the plaintext format that lives inside a 
 decrypted block, how senders identify themselves, how identity proof-of-work 
 stamps function as a spam-prevention mechanism, and how threads and large 
-messages are handled. It does not cover how blocks are encrypted, stored, or 
-transported — those are addressed in separate documents.
+messages are handled. It does not cover [how blocks are encrypted](blocks.md), [stored](security.md#block-flooding-and-storage-exhaustion), or 
+[transported](scalability.md) — those are addressed in separate documents.
 
 ---
 
@@ -53,8 +53,7 @@ padding. The `msg_type` field is 0 for all current messages (UTF-8 text).
 
 An identity is an Ed25519 key pair. The public key is the stable, unique 
 address for a participant. It serves two purposes: it is the encryption address 
-(via the Edwards-to-Montgomery birational map, described in the block format 
-document), and it is the signature verification key for signed messages.
+(via the Edwards-to-Montgomery birational map, described in [blocks.md § Identity conversion](blocks.md#identity-conversion)), and it is the signature verification key for signed messages.
 
 A single 32-byte public key is all a contact needs to share. There is no 
 separate encryption key. Contacts are stored by public key and given a local 
@@ -75,7 +74,7 @@ Signing proves that the message was written by whoever holds the private key
 for `sender_pub`. It does not prove the sender's real-world identity, and it 
 does not prevent a block from being replicated or stored by anyone. Signed and 
 anonymous messages are indistinguishable to an outside observer — both are 
-encrypted inside the same opaque block format.
+encrypted inside the same opaque block format (see [blocks.md § Distinguishability](blocks.md#distinguishability)).
 
 ### Signature verification
 
@@ -162,7 +161,7 @@ Because argon2id is memory-hard (64 MB per evaluation), GPU-parallel attacks
 are expensive. Mining a high-quality stamp on a laptop takes seconds to 
 minutes; generating many identities with meaningful stamps remains costly.
 
-The argon2id parameters match the block-level PoW parameters used elsewhere in 
+The argon2id parameters match the [block-level PoW parameters](security.md#proof-of-work-as-admission-control) used elsewhere in 
 the system, allowing the same hardware cost model to apply. The application 
 salt `sneakernet-idpow-v1` domain-separates identity stamps from block stamps 
 so neither type is reusable as the other.
@@ -243,7 +242,7 @@ thread, not a reply.
 
 ## Anonymity
 
-All anonymity properties described in the block format document apply here. The 
+All anonymity properties described in [blocks.md § Distinguishability](blocks.md#distinguishability) apply here. The 
 messaging layer adds:
 
 - **Sender anonymity**: setting `sender_pub` to all-zeros suppresses 

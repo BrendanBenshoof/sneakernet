@@ -8,7 +8,7 @@ It is real. The cryptography is correct. It is also the weakest way to use sneak
 
 ## What it can do
 
-The web client runs entirely in your browser. It implements the full v2 message format: X25519 key agreement, XChaCha20-Poly1305 encryption, Ed25519 signing, and skip-list threading. No crypto happens on the server. The relay never sees your plaintext.
+The web client runs entirely in your browser. It implements the full [v2 message format](messaging.md#plaintext-layout-v2): [X25519 key agreement](blocks.md#public-key-block), XChaCha20-Poly1305 encryption, Ed25519 signing, and [skip-list threading](messaging.md#threading). No crypto happens on the server. The relay never sees your plaintext.
 
 You can:
 
@@ -23,7 +23,7 @@ You can:
 
 ### Proof of work
 
-The native node mines a proof-of-work stamp for every block it submits. Higher work means a longer TTL — a block with `work_factor=4` lives five days; `work_factor=8` lives nine. The browser does not mine PoW at all. Every block it submits carries a zero stamp: `work_factor=0`, TTL 24 hours.
+The native node mines a proof-of-work stamp for every block it submits. Higher work means a [longer TTL](security.md#block-flooding-and-storage-exhaustion) — a block with `work_factor=4` lives five days; `work_factor=8` lives nine. The browser does not mine PoW at all. Every block it submits carries a zero stamp: `work_factor=0`, TTL 24 hours.
 
 Messages sent from the browser disappear from the network within a day. If the recipient does not scrape within that window, the block is gone. A native node or phone app can mine even modest PoW in the background and give your messages a much better chance of surviving long enough to be read.
 
@@ -58,4 +58,4 @@ A dedicated node running on a laptop or server handles this invisibly in the bac
 
 Use it when you need to check in from a device you do not control — a borrowed laptop, a library terminal, a phone you do not want to install anything on. It is also a reasonable way to get started before setting up a native node.
 
-For day-to-day use, and especially for anything time-sensitive, a native node or app is much better. It mines real PoW so messages live longer. It decrypts in the background without draining a browser tab. It persists your inbox and keystore properly. The web client is a way to get started and a fallback for devices you do not control, not the intended way to rely on this network.
+For day-to-day use, and especially for anything time-sensitive, a native node or app is much better. It [mines real PoW](security.md#proof-of-work-as-admission-control) so messages live longer. It decrypts in the background without draining a browser tab. It persists your inbox and keystore properly. The web client is a way to get started and a fallback for devices you do not control, not the intended way to rely on this network.

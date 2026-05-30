@@ -18,7 +18,7 @@ Tor depends on infrastructure: directory authorities, consensus documents, bridg
 
 The price is paid in latency and throughput. Tor is designed for live, interactive use — browsing the web, making connections in real time. Sneakernet moves blocks over minutes to days. That is not a security deficit; it is what the design trades for everything above.
 
-Tor supports forward secrecy. Sneakernet has no message acknowledgement at the protocol level, so forward secrecy is hard and a bit out-of-context.
+Tor supports forward secrecy. Sneakernet has no message acknowledgement at the protocol level, so [forward secrecy](blocks.md#forward-secrecy) is hard and a bit out-of-context.
 
 The two tools are composable. The push leg of a Sneakernet sync can ride over Tor, inheriting its sender unlinkability for the submission step. Tor transport is not part of the initial release but is a near-certain addition.
 
@@ -62,7 +62,7 @@ The internet relay layer is likely to be the highest-volume transport, and witho
 
 The reservations are soft. An unused physical allocation is not held empty — it fills with whatever traffic is available. The reservation only matters under pressure: when the store is full and something must go, eviction targets the tag most over its quota first, then soonest-to-expire within that tag. This ensures internet relay traffic is what gets shed when local or physical blocks need room, not the other way around.
 
-Tombstones prevent evicted blocks from immediately re-entering the store. When a block is evicted, a record of its ID is kept for long enough that peers still circulating the block would have dropped it themselves. A peer pushing an evicted block back is turned away until that window closes.
+[Tombstones](security.md#block-flooding-and-storage-exhaustion) prevent evicted blocks from immediately re-entering the store. When a block is evicted, a record of its ID is kept for long enough that peers still circulating the block would have dropped it themselves. A peer pushing an evicted block back is turned away until that window closes.
 
 ### Geographic Distribution and Regional Tags
 
@@ -80,7 +80,7 @@ Nodes on the same local network find each other automatically by scanning for th
 
 ### Sync Protocol
 
-LAN sync uses the same delta sync mechanism as internet relay transport — pagination tokens, PoW floor filtering, the same HTTP protocol. The PoW floor is typically lower or zero for LAN peers. Phones and other constrained devices that cannot mine to the same level as a desktop or relay server are full participants on a LAN; a bridging node that imposed the internet floor on LAN peers would shut out exactly the devices that make local sync valuable.
+LAN sync uses the same [delta sync](#delta-sync) mechanism as internet relay transport — pagination tokens, PoW floor filtering, the same HTTP protocol. The PoW floor is typically lower or zero for LAN peers. Phones and other constrained devices that cannot mine to the same level as a desktop or relay server are full participants on a LAN; a bridging node that imposed the internet floor on LAN peers would shut out exactly the devices that make local sync valuable.
 
 ### Independence from Internet Connectivity
 
@@ -90,7 +90,7 @@ LAN sync requires no internet connection. A local network island — a mesh of d
 
 ## Physical Transport
 
-When a node encounters a Sneakernet volume — a USB drive, a directory on removable media — it does not simply copy files. It treats the volume as a peer relay. The volume's block store and metadata are read, and the node runs the same sync process it would run against any live internet relay: exchanging blocks in both directions, applying the same admission controls, the same eviction priority, the same tag reservations. The volume is, for the duration of the sync, a relay node that happens to be made of storage media rather than a running server.
+When a node encounters a Sneakernet volume — a USB drive, a directory on removable media — it does not simply copy files. It treats the volume as a peer relay. The volume's block store and metadata are read, and the node runs the same sync process it would run against any live internet relay: exchanging blocks in both directions, applying the same [admission controls](security.md#proof-of-work-as-admission-control), the same eviction priority, the same tag reservations. The volume is, for the duration of the sync, a relay node that happens to be made of storage media rather than a running server.
 
 This means a drive in regular circulation is not a one-off file transfer — it is a relay on a very slow circuit. Its sync interval is the courier's travel time; its per-contact bandwidth is the entire store. Each time it is plugged in it exchanges blocks with the node it is connected to, absorbing what is new and contributing what it carries. When it reaches the next node it does the same. Blocks propagate across networks with no shared connectivity, no internet, and no coordination beyond the physical act of handing the drive to someone.
 
@@ -110,7 +110,7 @@ At roughly 150,000 active users generating around 14,000 messages per hour — o
 
 The ladder is linear. Ten times that load pushes per-relay bandwidth to 14 GB per day and weekly storage to 95 GB — real server territory. At one hundred times, daily bandwidth per relay exceeds 100 GB.
 
-Trial decryption is the binding constraint on the receiver side. A week's store at one milli-discord scale holds approximately 2.3 million blocks. Checking that store against 10 keys at 20,000 X25519 operations per second takes around 19 minutes on a desktop. The `since` cursor keeps incremental checks cheap — only new blocks since the last check need to be tried — but the full cost is paid on first sync and after long offline periods. At ten times the target scale, initial sync becomes impractical without further optimization.
+Trial decryption — attempting [X25519 key agreement](blocks.md#public-key-block) against each block per held key — is the binding constraint on the receiver side. A week's store at one milli-discord scale holds approximately 2.3 million blocks. Checking that store against 10 keys at 20,000 X25519 operations per second takes around 19 minutes on a desktop. The `since` cursor keeps incremental checks cheap — only new blocks since the last check need to be tried — but the full cost is paid on first sync and after long offline periods. At ten times the target scale, initial sync becomes impractical without further optimization.
 
 PoW is the friction on the sender side. At one milli-discord scale with a low floor, mining a message takes under a second on modest hardware. As load rises and the floor follows, mining time on mobile reaches seconds to minutes.
 

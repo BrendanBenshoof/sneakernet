@@ -1,6 +1,6 @@
 # Block Formats
 
-This document describes the format and immediate cryptographic properties of a Sneakernet block. It covers how blocks are structured, how the two encryption schemes work, and what an adversary can and cannot determine from ciphertext alone. It does not cover proof-of-work, block lifetime, transport, or the plaintext message format inside the encrypted payload — those are addressed in separate documents.
+This document describes the format and immediate cryptographic properties of a Sneakernet block. It covers how blocks are structured, how the two encryption schemes work, and what an adversary can and cannot determine from ciphertext alone. It does not cover [proof-of-work](security.md#proof-of-work-as-admission-control), block lifetime, [transport](scalability.md), or the [plaintext message format](messaging.md) inside the encrypted payload — those are addressed in separate documents.
 
 Sneakernet stores and exchanges two kinds of encrypted blocks: **public-key blocks**, encrypted for a specific recipient, and **channel blocks**, encrypted with a shared symmetric key. Both are exactly 4096 bytes and are content-addressed by `SHA-256(payload)`.
 
@@ -186,7 +186,7 @@ That mechanism has a hard prerequisite: the recipient must eventually reply. In 
 
 Without a ratchet, the only alternative is out-of-band key rotation: the recipient publishes a new public key, old private keys are deleted, and senders switch to the new one. This fails for the same reason. The sender cannot know whether a block they are writing now will be received before or after the recipient's next key rotation. Propagation delay is unbounded and unknown. A sender encrypting to the new key may produce a block the recipient cannot decrypt because the old key was still the right one; a sender encrypting to the old key defeats the purpose.
 
-The cost compounds further because Sneakernet recipients have no addressing header to filter on — every block must be tried against every key held. A recipient maintaining `k` active key epochs pays `k×` the decryption cost. There is no rotation frequency at which the forward secrecy window is short enough to matter and the decryption cost is acceptable.
+The cost compounds further because Sneakernet recipients have no addressing header to filter on — every block must be tried against every key held. A recipient maintaining `k` active key epochs pays `k×` the decryption cost — a cost that already becomes a practical constraint at scale (see [scalability.md § Operating Envelope](scalability.md#operating-envelope)). There is no rotation frequency at which the forward secrecy window is short enough to matter and the decryption cost is acceptable.
 
 ### What this means in practice
 
