@@ -117,6 +117,20 @@ plaintext = XChaCha20-Poly1305(block_key, nonce).Open(payload[56:4096])
 
 Decryption fails if the channel key is wrong.
 
+### Channel key derivation
+
+The 32-byte channel key may be derived from a human-memorable passphrase. The primary use case is a simple deterministic derivation with no salt:
+
+```
+channel_key = SHA-256(passphrase)
+```
+
+A channel is a public forum: any node that knows the passphrase is a member, and membership is established solely by sharing the passphrase out of band. All members must independently derive the same key without any additional coordination. This derivation preserves the one-step join property — knowing the passphrase is sufficient.
+
+Any message encrypted with a human-memorable passphrase should be treated as public in the long term. Blocks replicate widely and are retained by nodes that cannot distinguish channel traffic from any other block. An adversary collecting blocks today can attempt to break the passphrase at any future point when compute is cheaper or the passphrase is leaked. The confidentiality of a channel block is only as strong as the passphrase entropy — and human-chosen phrases routinely fall short of that bar.
+
+Stronger key derivation — for example, Argon2id with a community context salt — is entirely viable and would meaningfully raise the cost of offline attacks, but is not part of this specification.
+
 ---
 
 ## Distinguishability
