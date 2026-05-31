@@ -2,21 +2,13 @@ SNEAKERNET
 ==========
 
 > Never underestimate the bandwidth of a station wagon full of tapes hurtling down the highway.
-> - Andrew S. Tanenbaum
+> — Andrew S. Tanenbaum
 
-# What is this?
+Sneakernet is a delay-tolerant encrypted messaging infrastructure built for the gaps in normal communication — network outages, surveillance, physical isolation, infrastructure failure. It moves fixed-size encrypted blocks across multiple transport modes: internet relay nodes, LAN sync, and physical media. Any combination of those paths can carry a message from sender to recipient with no central coordinator and no single point of failure.
 
-Sneakernet is a tool for people who need to communicate safely when they cannot trust the network — or when there is no network at all.
+The protocol has no metadata. Blocks carry no sender field, no addressing header, no routing information. The network cannot distinguish a message from random noise. Applications like the bundled chat client add identity and conversation as a client-side layer on top of that substrate.
 
-The name comes from the old practice of carrying data physically: by foot, by hand, on a USB drive. That is still a transport mode here. But the system extends that idea to cover every way people actually pass information to each other: local wireless networks, internet relays run by community members, and literal physical media exchanged in person.
-
-## Why it matters
-
-The right to communicate privately is not a product feature. It is something people need to support each other, organize, stay safe, and maintain dignity. That right is routinely attacked — by states, by platforms, by network operators who surveil or throttle traffic.
-
-This project is a tool for people to help each other maintain that right, without depending on any company, server, or infrastructure they do not control. Anyone can run a relay node and contribute storage and bandwidth to the network. Anyone can carry a USB drive and be a link in the chain. The system is designed to keep working even when parts of it fail or are attacked.
-
-There is no central point to shut down, no account to deactivate.
+This project exists because people should be able to talk to each other. It is community-run by design — there is nowhere to put a meter, no account infrastructure to monetize, no central node to subpoena or shut down.
 
 ## How it works
 
@@ -24,15 +16,18 @@ The system has three layers.
 
 **Blocks.** Everything stored and exchanged is a fixed 4096-byte unit of opaque data, content-addressed by SHA-256. Each block carries a proof-of-work stamp that determines how long it lives in storage. Blocks are completely opaque at the storage layer — the network cannot distinguish a message from random noise.
 
-**Transport.** Blocks spread by epidemic routing: each node passes blocks to peers, who pass them to theirs. Three transport modes run together: internet relay nodes that gossip peer lists and sync via delta exchange; LAN sync that finds peers automatically on the local network without any internet connection; and physical sync over USB drives that any node will absorb automatically on mount. A drive in circulation is a relay on a slow circuit.
+**Transport.** Blocks spread by epidemic routing: each node passes blocks to peers, who pass them to theirs. Currently three transport modes run together: internet relay nodes that gossip peer lists and sync via delta exchange; LAN sync that finds peers automatically on the local network without any internet connection; and physical sync over USB drives that any node will absorb automatically on mount. A drive in circulation is a relay on a slow circuit.
 
-**Messages.** At the application layer, blocks carry encrypted messages. Every block looks like random bytes without the right key. There is no addressing header, no sender field — the only way to know whether a block is for you is to try to decrypt it. Senders use ephemeral X25519 key agreement and XChaCha20-Poly1305 encryption. Signing is optional; messages can be sent anonymously. Groups use shared passphrases.
+**Messages.** At the application layer, blocks carry encrypted messages using modern encryption. Every block looks like random bytes without the right key. There is no addressing header, no sender field — the only way to know whether a block is for you is to try to decrypt it. Signing is optional; messages can be sent anonymously. Groups use shared passphrases.
 
 ### What this doesn't protect
 
-- **Endpoint security** — if the device running the node is compromised, the system cannot help.
-- **Relay access visibility** — an observer watching a relay's IP traffic can see which IPs connect to it. Using a relay your community operates reduces this risk.
-- **Browser client limitations** — no proof-of-work mining (messages get the minimum 24-hour TTL), inbox is memory-only. See [docs/web-client.md](docs/web-client.md).
+See [docs/security.md](docs/security.md) for the full threat model. Two things worth knowing up front:
+
+- **There is no recovery.** Keys, messages, and identity are self-custodied. If your key is lost or compromised there is no support, no reset, and no way to revoke it.
+- **Relay access is visible.** An observer watching a relay's IP traffic can see which IPs connect to it. Using a relay your community operates reduces this risk.
+
+The browser client has additional limitations — see [docs/web-client.md](docs/web-client.md).
 
 ## Getting started
 
