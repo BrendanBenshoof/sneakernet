@@ -63,12 +63,7 @@ func (c *Client) Scrape(ctx context.Context) (int, error) {
 			}
 			mp.DecryptedBy = identityName
 
-			var inserted bool
-			if mp.IsFragment() {
-				inserted, err = c.messages.SaveFragment(ref.ID, mp)
-			} else {
-				inserted, err = c.messages.SaveMessage(ref.ID, mp)
-			}
+			inserted, err := c.messages.SaveMessage(ref.ID, mp)
 			if err != nil {
 				return found, err
 			}

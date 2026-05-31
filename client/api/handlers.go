@@ -3,11 +3,11 @@ package api
 import (
 	"context"
 	"crypto/ed25519"
-	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"strconv"
@@ -435,11 +435,9 @@ func (s *Server) handleScrape(w http.ResponseWriter, r *http.Request) {
 //	  "reply_to_block_id": "<hex block ID>" // optional; omit = new thread
 //	}
 //
-// Encrypts and stores one or more blocks. Returns:
+// Encrypts and stores a single block. Returns:
 //
-//	{"block_ids": ["<hex>", ...], "frag_id": "<hex>"}
-//
-// frag_id is the empty string for single-block messages.
+//	{"block_ids": ["<hex>"]}
 func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		RecipientPublicKey string `json:"recipient_public_key"`
@@ -503,92 +501,42 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	content := []byte(req.Message)
-	if len(content) <= client.V2MaxContent {
-		// Single block.
-		mp.Content = content
-		mp.FragTotal = 1
-
-		var payload blockstore.Payload
-		if signerID != nil {
-			payload, err = client.EncryptSigned(recipientEdPub, mp, signerID.SignKey)
-		} else {
-			payload, err = client.Encrypt(recipientEdPub, mp)
-		}
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-
-		stamp, err := s.mineWithDeadline(r, payload)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "pow mining failed: "+err.Error())
-			return
-		}
-		id, err := s.blocks.Put(stamp, payload, blockstore.TagPhysical)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to store block")
-			return
-		}
-
-		// Immediately persist plaintext so it appears without waiting for a scrape.
-		mp.SentTo = recipientEdPubBytes
-		mp.DecryptedBy = req.SenderIdentity
-		_, _ = s.msgs.SaveMessage(id, mp)
-
-		writeJSON(w, http.StatusCreated, map[string]any{
-			"block_ids": []string{hex.EncodeToString(id[:])},
-			"frag_id":   "",
-		})
+	if len(content) > client.V3MaxContent {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("message too long (max %d bytes)", client.V3MaxContent))
 		return
 	}
 
-	// Multi-block: split content into fragments.
-	var fragID [32]byte
-	if _, err := rand.Read(fragID[:]); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to generate fragment ID")
+	mp.Content = content
+
+	var payload blockstore.Payload
+	if signerID != nil {
+		payload, err = client.EncryptSigned(recipientEdPub, mp, signerID.SignKey)
+	} else {
+		payload, err = client.Encrypt(recipientEdPub, mp)
+	}
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	chunks := splitBytes(content, client.V2MaxContent)
-	total := uint16(len(chunks))
-	blockIDs := make([]string, 0, total)
-
-	for i, chunk := range chunks {
-		fmp := mp
-		fmp.Content = chunk
-		fmp.FragID = fragID
-		fmp.FragIndex = uint16(i)
-		fmp.FragTotal = total
-		fmp.SentTo = recipientEdPubBytes
-		fmp.DecryptedBy = req.SenderIdentity
-
-		var fragPayload blockstore.Payload
-		if signerID != nil {
-			fragPayload, err = client.EncryptSigned(recipientEdPub, fmp, signerID.SignKey)
-		} else {
-			fragPayload, err = client.Encrypt(recipientEdPub, fmp)
-		}
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to encrypt fragment")
-			return
-		}
-		fragStamp, err := s.mineWithDeadline(r, fragPayload)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "pow mining failed: "+err.Error())
-			return
-		}
-		id, err := s.blocks.Put(fragStamp, fragPayload, blockstore.TagPhysical)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to store fragment block")
-			return
-		}
-		_, _ = s.msgs.SaveFragment(id, fmp)
-		blockIDs = append(blockIDs, hex.EncodeToString(id[:]))
+	stamp, err := s.mineWithDeadline(r, payload)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "pow mining failed: "+err.Error())
+		return
 	}
+	id, err := s.blocks.Put(stamp, payload, blockstore.TagPhysical)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to store block")
+		return
+	}
+
+	// Immediately persist plaintext so it appears without waiting for a scrape.
+	mp.SentTo = recipientEdPubBytes
+	mp.DecryptedBy = req.SenderIdentity
+	_, _ = s.msgs.SaveMessage(id, mp)
 
 	writeJSON(w, http.StatusCreated, map[string]any{
-		"block_ids": blockIDs,
-		"frag_id":   hex.EncodeToString(fragID[:]),
+		"block_ids": []string{hex.EncodeToString(id[:])},
 	})
 }
 
@@ -811,7 +759,6 @@ func (s *Server) handleSendChannel(w http.ResponseWriter, r *http.Request) {
 
 	mp := client.MessagePayload{
 		MsgType:   client.MsgTypeText,
-		FragTotal: 1,
 		Timestamp: time.Now().Unix(),
 		Content:   []byte(req.Message),
 	}
@@ -1099,7 +1046,6 @@ func (s *Server) sendPowGift(recipientPub [32]byte, stamp []byte) {
 		MsgType:   client.MsgTypeText,
 		Timestamp: time.Now().Unix(),
 		Content:   []byte(client.FormatPowGift(stamp)),
-		FragTotal: 1,
 	}
 	payload, err := client.Encrypt(ed25519.PublicKey(recipientPub[:]), mp)
 	if err != nil {
@@ -1129,16 +1075,3 @@ func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 	return true
 }
 
-// splitBytes splits b into chunks of at most size bytes.
-func splitBytes(b []byte, size int) [][]byte {
-	var chunks [][]byte
-	for len(b) > 0 {
-		n := size
-		if n > len(b) {
-			n = len(b)
-		}
-		chunks = append(chunks, b[:n])
-		b = b[n:]
-	}
-	return chunks
-}

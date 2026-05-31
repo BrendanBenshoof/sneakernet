@@ -209,7 +209,7 @@ func tryDecryptChannel(channelKey [32]byte, payload blockstore.Payload) (Message
 
 // tryDecrypt attempts to decrypt payload using the X25519 key derived from edPriv.
 // Returns ErrNotOurMessage if the block was not addressed to us or is malformed.
-// Handles both v1 (magic 0x01) and v2 (magic 0x02) formats.
+// Handles both v1 (magic 0x01) and v3 (magic 0x03) formats.
 func tryDecrypt(edPriv ed25519.PrivateKey, payload blockstore.Payload) (MessagePayload, error) {
 	privKey, err := edPrivToX25519(edPriv)
 	if err != nil {
@@ -241,7 +241,7 @@ func tryDecrypt(edPriv ed25519.PrivateKey, payload blockstore.Payload) (MessageP
 
 	magic4 := [4]byte(plain[:4])
 
-	if magic4 == MagicV2 {
+	if magic4 == MagicV3 {
 		buf := [plaintextSize]byte(plain)
 		mp, err := DecodePayload(buf)
 		if err != nil {
@@ -266,9 +266,8 @@ func tryDecrypt(edPriv ed25519.PrivateKey, payload blockstore.Payload) (MessageP
 		content := make([]byte, msgLen)
 		copy(content, plain[v1HeaderSize:v1HeaderSize+msgLen])
 		return MessagePayload{
-			MsgType:   MsgTypeText,
-			FragTotal: 1,
-			Content:   content,
+			MsgType: MsgTypeText,
+			Content: content,
 		}, nil
 	}
 

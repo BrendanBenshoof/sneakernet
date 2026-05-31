@@ -1,7 +1,6 @@
 package client
 
 import (
-	"bytes"
 	"database/sql"
 	"fmt"
 	"time"
@@ -11,10 +10,10 @@ import (
 	"github.com/brendanbenshoof/sneakernet/blockstore"
 )
 
-// Message is a successfully decrypted and (for fragments) fully reassembled message.
+// Message is a successfully decrypted message.
 type Message struct {
 	ID          int64
-	BlockID     blockstore.ID // first block seen; for reassembled fragments, the first fragment's block
+	BlockID     blockstore.ID
 	SenderPub   [32]byte      // Ed25519 public key; all-zeros = anonymous
 	ThreadRefs  [8][32]byte   // skip list; ThreadRefs[0] is direct reply target; all-zeros = absent
 	SentAt      time.Time     // sender-claimed send time; zero = unknown
@@ -68,7 +67,6 @@ func (s *MessageStore) migrate() error {
 		{"thread_refs", "BLOB DEFAULT NULL"},
 		{"sent_at", "INTEGER DEFAULT NULL"},
 		{"msg_type", "INTEGER NOT NULL DEFAULT 0"},
-		{"frag_id", "BLOB DEFAULT NULL"},
 		{"channel", "TEXT NOT NULL DEFAULT ''"},
 		{"sent_to", "BLOB DEFAULT NULL"},
 		{"decrypted_by", "TEXT NOT NULL DEFAULT ''"},
@@ -86,25 +84,7 @@ func (s *MessageStore) migrate() error {
 		}
 	}
 
-	_, err := s.db.Exec(`
-		CREATE TABLE IF NOT EXISTS fragments (
-			frag_id     BLOB    NOT NULL,
-			frag_index  INTEGER NOT NULL,
-			frag_total  INTEGER NOT NULL,
-			block_id    BLOB    NOT NULL,
-			content     BLOB    NOT NULL,
-			sender_pub  BLOB,
-			thread_refs BLOB,
-			sent_at     INTEGER,
-			msg_type    INTEGER NOT NULL DEFAULT 0,
-			channel     TEXT    NOT NULL DEFAULT '',
-			received_at INTEGER NOT NULL,
-			PRIMARY KEY (frag_id, frag_index)
-		);
-		CREATE UNIQUE INDEX IF NOT EXISTS idx_frag_assembled
-			ON messages(frag_id) WHERE frag_id IS NOT NULL;
-	`)
-	return err
+	return nil
 }
 
 // GetCheckpoint returns the timestamp from which the next scrape should start.
@@ -150,101 +130,6 @@ func (s *MessageStore) SaveMessage(blockID blockstore.ID, mp MessagePayload) (bo
 		return false, fmt.Errorf("client: save message: %w", err)
 	}
 	n, _ := result.RowsAffected()
-	return n > 0, nil
-}
-
-// SaveFragment stores one fragment. If this completes the set, all fragments are
-// assembled into a single message, fragment rows are cleaned up, and (true, nil)
-// is returned. Otherwise returns (false, nil).
-func (s *MessageStore) SaveFragment(blockID blockstore.ID, mp MessagePayload) (bool, error) {
-	tx, err := s.db.Begin()
-	if err != nil {
-		return false, fmt.Errorf("client: save fragment: %w", err)
-	}
-	defer tx.Rollback()
-
-	_, err = tx.Exec(
-		`INSERT OR IGNORE INTO fragments
-			(frag_id, frag_index, frag_total, block_id, content,
-			 sender_pub, thread_refs, sent_at, msg_type, channel, received_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		mp.FragID[:],
-		mp.FragIndex,
-		mp.FragTotal,
-		blockID[:],
-		mp.Content,
-		zeroToNil(mp.SenderPub[:]),
-		encodeThreadRefs(mp.ThreadRefs),
-		zeroInt64(mp.Timestamp),
-		mp.MsgType,
-		mp.Channel,
-		time.Now().Unix(),
-	)
-	if err != nil {
-		return false, fmt.Errorf("client: save fragment: insert: %w", err)
-	}
-
-	var count int
-	if err := tx.QueryRow(`SELECT COUNT(*) FROM fragments WHERE frag_id = ?`, mp.FragID[:]).Scan(&count); err != nil {
-		return false, fmt.Errorf("client: save fragment: count: %w", err)
-	}
-	if count < int(mp.FragTotal) {
-		return false, tx.Commit()
-	}
-
-	// All fragments present — assemble in order.
-	rows, err := tx.Query(
-		`SELECT frag_index, block_id, content FROM fragments WHERE frag_id = ? ORDER BY frag_index ASC`,
-		mp.FragID[:],
-	)
-	if err != nil {
-		return false, fmt.Errorf("client: save fragment: query: %w", err)
-	}
-	var buf bytes.Buffer
-	var firstBlockID blockstore.ID
-	for rows.Next() {
-		var idx int
-		var bidBytes, chunk []byte
-		if err := rows.Scan(&idx, &bidBytes, &chunk); err != nil {
-			rows.Close()
-			return false, fmt.Errorf("client: save fragment: scan: %w", err)
-		}
-		if idx == 0 {
-			copy(firstBlockID[:], bidBytes)
-		}
-		buf.Write(chunk)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return false, fmt.Errorf("client: save fragment: rows: %w", err)
-	}
-
-	res, err := tx.Exec(
-		`INSERT OR IGNORE INTO messages
-			(block_id, content, received_at, sender_pub, thread_refs, sent_at, msg_type, channel, frag_id, sent_to, decrypted_by)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		firstBlockID[:],
-		buf.Bytes(),
-		time.Now().Unix(),
-		zeroToNil(mp.SenderPub[:]),
-		encodeThreadRefs(mp.ThreadRefs),
-		zeroInt64(mp.Timestamp),
-		mp.MsgType,
-		mp.Channel,
-		mp.FragID[:],
-		zeroToNil(mp.SentTo),
-		mp.DecryptedBy,
-	)
-	if err != nil {
-		return false, fmt.Errorf("client: save fragment: insert message: %w", err)
-	}
-	if _, err := tx.Exec(`DELETE FROM fragments WHERE frag_id = ?`, mp.FragID[:]); err != nil {
-		return false, fmt.Errorf("client: save fragment: cleanup: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return false, fmt.Errorf("client: save fragment: commit: %w", err)
-	}
-	n, _ := res.RowsAffected()
 	return n > 0, nil
 }
 
