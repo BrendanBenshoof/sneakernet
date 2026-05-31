@@ -199,9 +199,9 @@
 
   <section>
     <h2>What this is</h2>
-    <p>Sneakernet is a tool for people who need to communicate safely when they cannot trust the network — or when there is no network at all. Messages are encrypted end-to-end before they leave your device. Nobody operating this relay can read them. There is no sender field, no addressing header, and no metadata linking any block to any identity. Blocks look like random bytes to everyone except the intended recipient.</p>
-    <p>Everything stored and exchanged is a fixed 4096-byte block of opaque data. Blocks spread through the network by epidemic routing: each node shares blocks with peers, who share with theirs. This node is one relay in that network — it stores incoming blocks and syncs them with other sneakernet nodes. When your device connects, it fetches blocks and tries to decrypt them. Only the ones addressed to your key will open.</p>
-    <p>There are three ways blocks move: <strong>relay nodes</strong> like this one (internet-accessible, community-operated), <strong>LAN sync</strong> (nodes on the same local network find each other automatically), and <strong>physical sync</strong> — blocks exported to a USB drive and handed to someone, who plugs it in and absorbs the data. There is no central point to shut down, no account to deactivate.</p>
+    <p>Sneakernet is a messaging tool built for the gaps — the places and moments where normal communication infrastructure fails, whether that means a government shutdown, a natural disaster, a border, or simply no reliable internet. It works across multiple transport modes that can function independently or together: internet relay nodes like this one, local network sync between nearby devices, and physical sync over USB drives passed by hand. A message can travel any combination of those paths to reach its destination.</p>
+    <p>Sneakernet is infrastructure. The blocks it moves have no sender field, no addressing header, no metadata — to anyone watching the network they look like random noise. What you find at <a href="/app" style="color:var(--accent)">/app</a> is a chat application built on top of that infrastructure, one that adds identities and conversations as a client-side layer. The privacy properties live in the protocol. The chat interface is one tool that uses them.</p>
+    <p>This network has no owner and no central point. It exists because people run it for each other.</p>
   </section>
 
   <section>
@@ -220,8 +220,7 @@
 
   <section>
     <h2>Running your own node</h2>
-    <p>Anyone can run a relay and contribute storage and bandwidth to the network. The more people running nodes, the longer messages survive and the harder the network is to disrupt. Running a node is an act of mutual support — you are helping everyone who uses this network maintain their ability to communicate.</p>
-    <p>Source code and setup instructions: <span style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--accent)">github.com/brendanbenshoof/sneakernet</span>. See <span style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--accent)">RUNNING.md</span> in the repo for relay configuration, storage limits, and peering options.</p>
+    <p>Source code, documentation, and setup instructions are at <a href="https://github.com/BrendanBenshoof/sneakernet" style="color:var(--accent)">github.com/BrendanBenshoof/sneakernet</a>.</p>
   </section>
 
   <footer>sneakernet relay &mdash; blocks are opaque &mdash; no logs, no accounts, no tracking</footer>

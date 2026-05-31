@@ -148,7 +148,7 @@
     button.icon:hover { color: var(--text); background: var(--surface-2); }
 
     /* ── Lock + onboarding ───────────────────────────────────────────────── */
-    #lock-screen, #onboarding {
+    #lock-screen, #onboarding, #consent-screen {
       flex: 1;
       display: flex;
       align-items: center;
@@ -892,11 +892,33 @@
   </div>
 </div>
 
+<!-- ── consent screen (shown once on first load) ─────────────── -->
+<div id="consent-screen" class="hidden">
+  <div class="lock-card" style="max-width:480px">
+    <h1>Before you continue</h1>
+    <p class="sub">Sneakernet carries unmoderated content.</p>
+    <p class="sub">This is an anonymous public forum. Anyone can send messages here. No one can read them in transit, and no one can remove them. There is no moderation and there cannot be — the design that protects your privacy is the same design that makes moderation impossible.</p>
+    <p class="sub">Messages are limited to text. This is not a platform for images, files, or media. But text alone is enough to be harmful, and you will likely encounter content that is offensive, false, or distressing.</p>
+    <p class="sub">You have some control over what you see. In Settings you can hide anonymous messages, set a minimum proof-of-work threshold to filter low-effort content, and block specific contacts. These filters apply only to your view — they do not affect the network.</p>
+    <p class="sub">If you do not feel safe and comfortable proceeding into an unmoderated anonymous space, this tool is not the right one for you right now.</p>
+    <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;font-size:13px;color:var(--text)">
+      <input type="checkbox" id="consent-check" style="width:auto;margin-top:2px;flex-shrink:0">
+      I understand and want to continue.
+    </label>
+    <button id="consent-btn" disabled>Continue</button>
+  </div>
+</div>
+
 <!-- ── onboarding (first-time identity setup) ────────────────── -->
 <div id="onboarding" class="hidden">
-  <div class="lock-card">
+  <div class="lock-card" style="max-width:480px">
     <h1>Create your identity</h1>
-    <p class="sub">You need an identity to send and receive messages. Choose a name to get started.</p>
+    <p class="sub">Choose a name to get started. You can create multiple identities and switch between them.</p>
+    <div style="background:var(--surface-2);border:1px solid var(--border-2);border-radius:var(--r-md);padding:12px 14px;display:flex;flex-direction:column;gap:8px">
+      <p class="sub" style="margin:0;color:var(--warn)"><strong style="color:var(--text)">Your key is your identity.</strong> This is a cryptographic key, not an account. There is no password reset, no recovery email, no way to revoke it if it is lost or stolen.</p>
+      <p class="sub" style="margin:0">If you lose this key, this identity is gone permanently. Anyone who trusted this public key can no longer verify it is you — and someone with your private key can impersonate this identity to everyone who trusted it, with no way for them to know.</p>
+      <p class="sub" style="margin:0"><strong style="color:var(--text)">Export your key bundle and keep it somewhere safe.</strong> Do this before you use this identity for anything that matters.</p>
+    </div>
     <input type="text" id="onboard-name" placeholder="Identity name (e.g., Alice)" autocomplete="off">
     <button id="onboard-btn">Create &amp; continue</button>
     <p id="onboard-err"></p>
@@ -2891,8 +2913,22 @@ async function copyKey(key) {
 // ── view transitions ───────────────────────────────────────────────────────
 function showLock() {
   el('lock-screen').classList.remove('hidden');
+  el('consent-screen').classList.add('hidden');
   el('app').classList.add('hidden');
   el('pw').focus();
+}
+
+function showConsent(then) {
+  el('lock-screen').classList.add('hidden');
+  el('consent-screen').classList.remove('hidden');
+  el('consent-check').checked = false;
+  el('consent-btn').disabled = true;
+  el('consent-check').onchange = () => { el('consent-btn').disabled = !el('consent-check').checked; };
+  el('consent-btn').onclick = () => {
+    try { localStorage.setItem('snk_consent', '1'); } catch(e) {}
+    el('consent-screen').classList.add('hidden');
+    then();
+  };
 }
 
 async function showApp() {
@@ -2905,6 +2941,13 @@ async function showApp() {
     el('onboard-name').focus();
     return;
   }
+  let consented = false;
+  try { consented = localStorage.getItem('snk_consent') === '1'; } catch(e) {}
+  if (!consented) { showConsent(() => _launchApp()); return; }
+  await _launchApp();
+}
+
+async function _launchApp() {
   el('app').classList.remove('hidden');
   await Promise.all([loadMessages(), loadChannels(), loadContacts()]);
   rebuildConversations();
