@@ -1280,6 +1280,9 @@ function applyConfig() {
   el('conv-empty').querySelectorAll('[data-join-channel]').forEach(btn => {
     btn.addEventListener('click', () => joinDefaultChannel(btn.dataset.joinChannel));
   });
+  el('conv-empty').querySelectorAll('[data-join-forum]').forEach(btn => {
+    btn.addEventListener('click', () => joinDefaultForum(btn.dataset.joinForum));
+  });
   updateNotifBtn();
   if (UI_CONFIG.hasLockButton) {
     const btn = document.createElement('button');
@@ -3148,6 +3151,23 @@ async function loadChannels() {
   channels = await backend.listChannels();
 }
 
+
+async function joinDefaultForum(name) {
+  const key = 'forum:' + name;
+  const existing = conversations.find(c => c.kind === 'forum' && c.name === key);
+  if (existing) { openConversation(existing); return; }
+  try {
+    await backend.joinChannel(key, key);
+  } catch(e) {
+    if (e.message !== 'duplicate') { toast('Failed to join forum.', true); return; }
+  }
+  unhideConv({kind: 'forum', name: key});
+  await loadChannels();
+  rebuildConversations();
+  renderSidebar();
+  const conv = conversations.find(c => c.kind === 'forum' && c.name === key);
+  if (conv) openConversation(conv);
+}
 
 async function joinDefaultChannel(name) {
   const existing = conversations.find(c => c.kind === 'channel' && c.name === name);

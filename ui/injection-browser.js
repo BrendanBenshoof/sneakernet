@@ -1371,7 +1371,7 @@ const UI_CONFIG = {
       <strong style="color:var(--text)">Keys are encrypted at rest.</strong> Private keys are stored in IndexedDB encrypted with your vault password — they only live in memory while you are unlocked. A different browser, incognito window, or clearing browser data means starting over with a new identity.
     </div>
     <div style="margin-top:16px">
-      <button class="sm ghost" data-join-channel="sneakernet-alpha">#sneakernet-alpha &rarr;</button>
+      <button class="sm ghost" data-join-forum="sneakernet-alpha">§sneakernet-alpha &rarr;</button>
     </div>
   </div>`,
 };

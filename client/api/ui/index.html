@@ -1433,7 +1433,7 @@ const UI_CONFIG = {
   hasLockButton:   true,
   identitiesHint:  'Stored in the server-side encrypted keystore. Share your <strong>public key</strong> so others can send you messages and verify your identity — one key does both.',
   sendStatusMsg:   'Message stored in blockstore.',
-  welcomeHtml:     '<div><p>Select a conversation from the sidebar, or click <strong>+</strong> to send a new message.</p><div style="margin-top:12px"><button class="sm ghost" data-join-channel="sneakernet-alpha">#sneakernet-alpha &rarr;</button></div></div>',
+  welcomeHtml:     '<div><p>Select a conversation from the sidebar, or click <strong>+</strong> to send a new message.</p><div style="margin-top:12px"><button class="sm ghost" data-join-forum="sneakernet-alpha">§sneakernet-alpha &rarr;</button></div></div>',
 };
 
 </script>
@@ -1477,6 +1477,9 @@ function applyConfig() {
   if (UI_CONFIG.welcomeHtml) el('conv-empty').innerHTML = UI_CONFIG.welcomeHtml;
   el('conv-empty').querySelectorAll('[data-join-channel]').forEach(btn => {
     btn.addEventListener('click', () => joinDefaultChannel(btn.dataset.joinChannel));
+  });
+  el('conv-empty').querySelectorAll('[data-join-forum]').forEach(btn => {
+    btn.addEventListener('click', () => joinDefaultForum(btn.dataset.joinForum));
   });
   updateNotifBtn();
   if (UI_CONFIG.hasLockButton) {
@@ -3346,6 +3349,23 @@ async function loadChannels() {
   channels = await backend.listChannels();
 }
 
+
+async function joinDefaultForum(name) {
+  const key = 'forum:' + name;
+  const existing = conversations.find(c => c.kind === 'forum' && c.name === key);
+  if (existing) { openConversation(existing); return; }
+  try {
+    await backend.joinChannel(key, key);
+  } catch(e) {
+    if (e.message !== 'duplicate') { toast('Failed to join forum.', true); return; }
+  }
+  unhideConv({kind: 'forum', name: key});
+  await loadChannels();
+  rebuildConversations();
+  renderSidebar();
+  const conv = conversations.find(c => c.kind === 'forum' && c.name === key);
+  if (conv) openConversation(conv);
+}
 
 async function joinDefaultChannel(name) {
   const existing = conversations.find(c => c.kind === 'channel' && c.name === name);
