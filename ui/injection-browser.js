@@ -223,31 +223,28 @@ function hexToBytes(hex) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  Message format v2
+//  Message format v3
 //  Plaintext layout (4024 bytes):
-//    [0:4]    magic SNK\x02
+//    [0:4]    magic SNK\x03
 //    [4]      msg_type  (0=text)
 //    [5]      flags
 //    [6:14]   timestamp int64 LE ms
 //    [14:46]  sender Ed25519 pub (zeros = anonymous)
 //    [46:110] Ed25519 signature  (zeros = unsigned)
 //    [110:366] thread_refs[8] x 32 bytes
-//    [366:398] frag_id
-//    [398:400] frag_index uint16 LE
-//    [400:402] frag_total uint16 LE
-//    [402:404] content_len uint16 LE
-//    [404:]   content + padding
+//    [366:368] content_len uint16 LE
+//    [368:]   content + padding
 // ═══════════════════════════════════════════════════════════════════════
 
 const PLAINTEXT_SIZE = 4024;
-const MAX_CONTENT    = 3620;
+const MAX_CONTENT    = 3656;
 
 async function buildV2Plain(msgText, senderEd25519PubBytes, signingPrivKey, threadRefHexes) {
   const msg = new TextEncoder().encode(msgText);
   if (msg.length > MAX_CONTENT) throw new Error(`Message too long (max ${MAX_CONTENT} bytes)`);
   const plain = new Uint8Array(PLAINTEXT_SIZE);
 
-  plain[0]=0x53; plain[1]=0x4e; plain[2]=0x4b; plain[3]=0x02;
+  plain[0]=0x53; plain[1]=0x4e; plain[2]=0x4b; plain[3]=0x03;
   // [4]=0 text, [5]=0 flags
 
   // timestamp ms as int64 LE at [6:14]
@@ -266,13 +263,10 @@ async function buildV2Plain(msgText, senderEd25519PubBytes, signingPrivKey, thre
     }
   }
 
-  // frag_total = 1 at [400:402]
-  plain[400] = 1;
-
-  // content_len at [402:404]
-  plain[402] = msg.length & 0xff;
-  plain[403] = (msg.length >> 8) & 0xff;
-  plain.set(msg, 404);
+  // content_len at [366:368]
+  plain[366] = msg.length & 0xff;
+  plain[367] = (msg.length >> 8) & 0xff;
+  plain.set(msg, 368);
 
   // sign with signature field zeroed (already 0)
   if (signingPrivKey && senderEd25519PubBytes) {
@@ -284,7 +278,7 @@ async function buildV2Plain(msgText, senderEd25519PubBytes, signingPrivKey, thre
 }
 
 function readV2PlainFull(plain) {
-  if (plain[0]!==0x53||plain[1]!==0x4e||plain[2]!==0x4b||plain[3]!==0x02) return null;
+  if (plain[0]!==0x53||plain[1]!==0x4e||plain[2]!==0x4b||plain[3]!==0x03) return null;
   const msgType = plain[4];
 
   // timestamp LE int64
@@ -302,10 +296,10 @@ function readV2PlainFull(plain) {
     threadRefs.push(bytesToHex(plain.slice(110 + i*32, 142 + i*32)));
   }
 
-  const msgLen = plain[402] | (plain[403]<<8);
+  const msgLen = plain[366] | (plain[367]<<8);
   if (msgLen > MAX_CONTENT) return null;
 
-  return {msgType, sentAt, senderPub, threadRefs, contentB64: b64enc(plain.slice(404, 404+msgLen))};
+  return {msgType, sentAt, senderPub, threadRefs, contentB64: b64enc(plain.slice(368, 368+msgLen))};
 }
 
 function readV1Plain(plain) {

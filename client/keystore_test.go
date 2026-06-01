@@ -166,7 +166,7 @@ func TestKeystoreMultiKeyClient(t *testing.T) {
 	id2, _ := ks.Add("bob")
 
 	for _, id := range []*Identity{id1, id2} {
-		mp := MessagePayload{MsgType: MsgTypeText, FragTotal: 1, Content: []byte("hi " + id.Name)}
+		mp := MessagePayload{MsgType: MsgTypeText, Content: []byte("hi " + id.Name)}
 		payload, err := Encrypt(id.PublicKey(), mp)
 		if err != nil {
 			t.Fatal(err)

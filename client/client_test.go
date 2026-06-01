@@ -36,7 +36,7 @@ func TestScrape(t *testing.T) {
 
 	// Two messages for recipient.
 	for _, text := range want {
-		mp := MessagePayload{MsgType: MsgTypeText, FragTotal: 1, Content: []byte(text)}
+		mp := MessagePayload{MsgType: MsgTypeText, Content: []byte(text)}
 		payload, err := Encrypt(recipientKey.Public().(ed25519.PublicKey), mp)
 		if err != nil {
 			t.Fatalf("Encrypt: %v", err)
@@ -48,7 +48,7 @@ func TestScrape(t *testing.T) {
 	}
 
 	// One message for someone else — should not appear.
-	noise, err := Encrypt(otherKey.Public().(ed25519.PublicKey), MessagePayload{MsgType: MsgTypeText, FragTotal: 1, Content: []byte("not for you")})
+	noise, err := Encrypt(otherKey.Public().(ed25519.PublicKey), MessagePayload{MsgType: MsgTypeText, Content: []byte("not for you")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,11 +105,11 @@ func TestEncryptDecryptRoundtrip(t *testing.T) {
 	}{
 		{"empty", []byte{}},
 		{"short", []byte("hi")},
-		{"max", make([]byte, V2MaxContent)},
+		{"max", make([]byte, V3MaxContent)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			mp := MessagePayload{MsgType: MsgTypeText, FragTotal: 1, Content: tc.content}
+			mp := MessagePayload{MsgType: MsgTypeText, Content: tc.content}
 			payload, err := Encrypt(key.Public().(ed25519.PublicKey), mp)
 			if err != nil {
 				t.Fatalf("Encrypt: %v", err)
@@ -134,7 +134,7 @@ func TestTryDecryptWrongKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mp := MessagePayload{MsgType: MsgTypeText, FragTotal: 1, Content: []byte("secret")}
+	mp := MessagePayload{MsgType: MsgTypeText, Content: []byte("secret")}
 	payload, err := Encrypt(recipient.Public().(ed25519.PublicKey), mp)
 	if err != nil {
 		t.Fatal(err)
@@ -167,7 +167,7 @@ func TestCheckpointAdvances(t *testing.T) {
 
 	putBlock := func(text string) {
 		t.Helper()
-		mp := MessagePayload{MsgType: MsgTypeText, FragTotal: 1, Content: []byte(text)}
+		mp := MessagePayload{MsgType: MsgTypeText, Content: []byte(text)}
 		payload, err := Encrypt(key.Public().(ed25519.PublicKey), mp)
 		if err != nil {
 			t.Fatal(err)
@@ -192,72 +192,6 @@ func TestCheckpointAdvances(t *testing.T) {
 	}
 }
 
-func TestFragmentReassembly(t *testing.T) {
-	bs, err := blockstore.OpenBadger(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer bs.Close()
-
-	ms, err := OpenMessageStore(":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ms.Close()
-
-	_, key, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Build a message that requires exactly 2 fragments.
-	fullContent := make([]byte, V2MaxContent+100)
-	for i := range fullContent {
-		fullContent[i] = byte(i % 251)
-	}
-
-	var fragID [32]byte
-	fragID[0] = 0xAB
-
-	chunks := [][]byte{fullContent[:V2MaxContent], fullContent[V2MaxContent:]}
-	var stamp blockstore.Stamp
-	for i, chunk := range chunks {
-		mp := MessagePayload{
-			MsgType:   MsgTypeText,
-			FragID:    fragID,
-			FragIndex: uint16(i),
-			FragTotal: 2,
-			Content:   chunk,
-		}
-		payload, err := Encrypt(key.Public().(ed25519.PublicKey), mp)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := bs.Put(stamp, payload, blockstore.TagPhysical); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	c := New(bs, ms, []*Identity{{Name: "test", SignKey: key}}, nil)
-	found, err := c.Scrape(context.Background())
-	if err != nil {
-		t.Fatalf("Scrape: %v", err)
-	}
-	if found != 1 {
-		t.Fatalf("Scrape found %d, want 1 assembled message", found)
-	}
-
-	msgs, err := ms.ListMessages()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(msgs) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(msgs))
-	}
-	if string(msgs[0].Content) != string(fullContent) {
-		t.Fatal("reassembled content does not match original")
-	}
-}
 
 func TestSignedRoundtrip(t *testing.T) {
 	_, recipientKey, err := ed25519.GenerateKey(rand.Reader)
@@ -279,7 +213,6 @@ func TestSignedRoundtrip(t *testing.T) {
 
 	mp := MessagePayload{
 		MsgType:   MsgTypeText,
-		FragTotal: 1,
 		Content:   []byte("signed hello"),
 		SenderPub: senderPub,
 	}
