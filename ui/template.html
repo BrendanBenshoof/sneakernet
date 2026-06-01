@@ -413,6 +413,19 @@
       letter-spacing: 0.06em;
     }
     #mobile-back { display: none; }
+    #forum-sort-picker {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+    #forum-sort-picker .sub {
+      font-size: 11px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    #forum-sort-picker select { width: auto; }
     #identity-picker {
       display: flex;
       align-items: center;
@@ -635,7 +648,23 @@
       border-bottom: 1px solid var(--border);
       background: var(--surface);
       flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      gap: 10px;
     }
+    .forum-thread-sort {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .forum-thread-sort .sub {
+      font-size: 11px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .forum-thread-sort select { width: auto; font-size: 12px; }
     .forum-node { position: relative; }
     .forum-post {
       padding: 10px 14px;
@@ -668,6 +697,33 @@
     }
     .fp-actions { margin-top: 6px; display: flex; gap: 6px; }
     .fp-reply-btn.active { color: var(--accent); }
+    .inline-reply {
+      margin: 6px 0 4px 20px;
+      border-left: 2px solid var(--accent-line);
+      padding: 8px 10px;
+      background: var(--surface-2);
+      border-radius: 0 var(--r-sm) var(--r-sm) 0;
+    }
+    .inline-reply-ctx {
+      font-size: 11px;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    .inline-reply-ctx .ctx-val { color: var(--text); font-weight: 500; }
+    .inline-reply textarea {
+      width: 100%;
+      min-height: 58px;
+      max-height: 200px;
+      resize: none;
+      overflow-y: auto;
+      box-sizing: border-box;
+    }
+    .inline-reply-actions {
+      display: flex;
+      gap: 6px;
+      margin-top: 6px;
+      justify-content: flex-end;
+    }
     .forum-gap-node {
       font-family: var(--mono);
       font-size: 10.5px;
@@ -1115,6 +1171,15 @@
       <button class="icon" id="mobile-back">&#x2630;</button>
       <h2 id="conv-title">Select a conversation</h2>
       <span id="conv-sub" class="sub"></span>
+      <div id="forum-sort-picker" class="hidden">
+        <span class="sub" style="white-space:nowrap">sort</span>
+        <select id="forum-sort-select">
+          <option value="youngest">Youngest</option>
+          <option value="oldest">Oldest</option>
+          <option value="soonest">Soonest to expire</option>
+          <option value="longest">Longest to expire</option>
+        </select>
+      </div>
       <div id="identity-picker">
         <span class="sub" style="white-space:nowrap">acting as</span>
         <select id="active-identity"></select>
@@ -1338,6 +1403,7 @@ let activeIdentity = null;
 let lastMsgLoadSec = 0; // unix timestamp of last loadMessages call, for wf_updated_since
 let forumThreadId  = null; // null = index, blockId = viewing that thread
 let forumReplyTo   = null; // blockId being replied to in compose, null = default
+let forumSort      = localStorage.getItem('snk_forum_sort') || 'youngest';
 
 // ── recipient input helpers ────────────────────────────────────────────────
 function parseRecipientInput(str) {
@@ -1539,6 +1605,13 @@ document.addEventListener('DOMContentLoaded', () => {
     renderSidebar();
     if (currentView && currentView.kind !== 'panel' && currentView.kind !== 'new') rerenderCurrentView();
   });
+
+  el('forum-sort-select').value = forumSort;
+  el('forum-sort-select').addEventListener('change', e => {
+    forumSort = e.target.value;
+    localStorage.setItem('snk_forum_sort', forumSort);
+    if (currentView?.kind === 'forum') renderMessages(currentView);
+  });
 });
 
 // ── auth ───────────────────────────────────────────────────────────────────
@@ -1646,6 +1719,7 @@ async function loadMessages() {
       continue;
     }
     m.content_text = b64toText(m.content);
+    if (!m.sender_pub && m.content_text?.startsWith('snk-pow-gift:')) continue;
     allMessages.push(m);
     byBlock.set(m.block_id, m);
     fresh.push(m);
@@ -1654,7 +1728,7 @@ async function loadMessages() {
   rebuildConversations();
   if (currentView) rerenderCurrentView();
   renderSidebar();
-  maybeNotify(msgs);
+  maybeNotify(fresh);
 }
 
 // For forum posts (msg_type 3), the snk: identity header lives in the body
@@ -1834,6 +1908,15 @@ function topoSort(msgs) {
 }
 
 function byReceivedAt(a, b) { return new Date(a.received_at) - new Date(b.received_at); }
+
+function forumSortCmp() {
+  switch (forumSort) {
+    case 'oldest':  return (a, b) => new Date(a.received_at) - new Date(b.received_at);
+    case 'soonest': return (a, b) => (a.work_factor || 0) - (b.work_factor || 0);
+    case 'longest': return (a, b) => (b.work_factor || 0) - (a.work_factor || 0);
+    default:        return (a, b) => new Date(b.received_at) - new Date(a.received_at); // youngest
+  }
+}
 
 function causalHead(msgs) {
   const sorted = topoSort(msgs);
@@ -2057,7 +2140,7 @@ function makeSbItem(conv) {
   div.className = 'sb-item';
   if (currentView && currentView.kind === conv.kind && currentView.name === conv.name) div.classList.add('active');
   const prefix = conv.kind === 'channel' ? '<span class="sb-hash">#</span> '
-               : conv.kind === 'forum'   ? '<span class="sb-hash">§</span> '
+               : conv.kind === 'forum'   ? '<span class="sb-hash">/</span> '
                : '';
   const unread = conv.messages.filter(m => !seenBlocks.has(m.block_id) && !identities.some(id => id.public_key === m.sender_pub)).length;
   const badge     = unread > 0 ? `<span class="sb-badge">${unread}</span>` : '';
@@ -2108,12 +2191,13 @@ function openConversation(conv) {
   el('settings-view').classList.add('hidden');
   el('conv-view').classList.remove('hidden');
   el('conv-title').textContent = conv.kind === 'channel' ? '#' + conv.name
-                               : conv.kind === 'forum'   ? '§' + convDisplayName(conv)
+                               : conv.kind === 'forum'   ? '/' + convDisplayName(conv)
                                : conv.name;
   el('conv-sub').textContent   = conv.kind === 'channel' ? 'channel'
                                : conv.kind === 'forum'   ? 'forum'
                                : conv.kind === 'unknown' ? 'unknown senders'
                                : 'direct';
+  el('forum-sort-picker').classList.toggle('hidden', conv.kind !== 'forum');
   renderMessages(conv, true);
   renderCompose(conv);
   renderSidebar();
@@ -2148,8 +2232,14 @@ function renderMessages(conv, scrollToBottom = false) {
         container.appendChild(empty);
       }
     } else if (forumThreadId) {
+      el('forum-sort-picker').classList.add('hidden');
       renderForumThread(conv, container);
+      if (forumReplyTo) {
+        const nodeDiv = container.querySelector(`.forum-node[data-block-id="${forumReplyTo}"]`);
+        if (nodeDiv) injectInlineReply(forumReplyTo, conv, nodeDiv);
+      }
     } else {
+      el('forum-sort-picker').classList.remove('hidden');
       renderForumIndex(conv, container);
     }
     if (atBottom) container.scrollTop = container.scrollHeight;
@@ -2241,7 +2331,8 @@ function forumBlocked(conv) {
 function renderForumIndex(conv, container) {
   const blocked = forumBlocked(conv);
   const { roots, children, byId, blockedByParent, topLevelBlocked } = buildForumTree(conv.messages, blocked);
-  roots.sort((a, b) => latestActivityMs(b.block_id, byId, children) - latestActivityMs(a.block_id, byId, children));
+  roots.sort(forumSortCmp());
+
   const frag = document.createDocumentFragment();
   for (const m of roots) frag.appendChild(makeForumCard(m, children, byId, blockedByParent, conv));
   if (topLevelBlocked > 0) {
@@ -2287,6 +2378,8 @@ function makeForumCard(m, children, byId, blockedByParent, conv) {
 function renderForumThread(conv, container) {
   const blocked = forumBlocked(conv);
   const { children, byId, gapLevel, blockedByParent } = buildForumTree(conv.messages, blocked);
+  const cmp = forumSortCmp();
+  for (const ch of children.values()) ch.sort(cmp);
   const root = byId.get(forumThreadId);
   if (!root) {
     forumThreadId = null;
@@ -2295,14 +2388,29 @@ function renderForumThread(conv, container) {
   }
   const backDiv = document.createElement('div');
   backDiv.className = 'forum-thread-back';
-  backDiv.innerHTML = '<button class="sm ghost">← Back to index</button>';
+  backDiv.innerHTML = `<button class="sm ghost">← Back to index</button>
+    <div class="forum-thread-sort">
+      <span class="sub">sort</span>
+      <select>
+        <option value="youngest"${forumSort === 'youngest' ? ' selected' : ''}>Youngest</option>
+        <option value="oldest"${forumSort === 'oldest'   ? ' selected' : ''}>Oldest</option>
+        <option value="soonest"${forumSort === 'soonest' ? ' selected' : ''}>Soonest to expire</option>
+        <option value="longest"${forumSort === 'longest' ? ' selected' : ''}>Longest to expire</option>
+      </select>
+    </div>`;
   backDiv.querySelector('button').addEventListener('click', () => {
     forumThreadId = null;
     forumReplyTo  = null;
     renderMessages(conv, false);
     renderCompose(conv);
   });
+  backDiv.querySelector('select').addEventListener('change', e => {
+    forumSort = e.target.value;
+    localStorage.setItem('snk_forum_sort', forumSort);
+    renderMessages(conv);
+  });
   container.appendChild(backDiv);
+
   const frag = document.createDocumentFragment();
   renderForumNode(root, children, gapLevel, blockedByParent, frag, 0, conv);
   container.appendChild(frag);
@@ -2332,6 +2440,7 @@ function renderForumNode(m, children, gapLevel, blockedByParent, container, dept
   const div = document.createElement('div');
   div.className = 'forum-node';
   div.dataset.depth = depth;
+  div.dataset.blockId = m.block_id;
   div.style.marginLeft = indent + 'px';
 
   const post = document.createElement('div');
@@ -2352,10 +2461,9 @@ function renderForumNode(m, children, gapLevel, blockedByParent, container, dept
   if (forumReplyTo === m.block_id) replyBtn.classList.add('active');
   replyBtn.addEventListener('click', () => {
     forumReplyTo = m.block_id;
-    renderCompose(conv);
-    el('compose-body').focus();
-    container.closest('#conv-messages')?.querySelectorAll('.fp-reply-btn')
+    el('conv-messages').querySelectorAll('.fp-reply-btn')
       .forEach(b => b.classList.toggle('active', b === replyBtn));
+    injectInlineReply(m.block_id, conv, div);
   });
 
   const barsEl = post.querySelector('.pow-widget');
@@ -2554,10 +2662,68 @@ function resetCompose() {
   const ta = el('compose-body');
   ta.value = '';
   ta.style.height = '';
+  const subj = el('forum-subject');
+  if (subj) subj.value = '';
+}
+
+function injectInlineReply(blockId, conv, nodeDiv) {
+  el('conv-messages').querySelectorAll('.inline-reply').forEach(n => n.remove());
+  if (!blockId || !nodeDiv) return;
+  const senderText = nodeDiv.querySelector('.msg-sender')?.textContent?.trim() || blockId.slice(0, 12) + '…';
+  const asSuffix = activeIdentity ? ` · as <span class="ctx-val">${esc(activeIdentity.name)}</span>` : '';
+  const box = document.createElement('div');
+  box.className = 'inline-reply';
+  box.innerHTML = `
+    <div class="inline-reply-ctx">replying to <span class="ctx-val">${esc(senderText)}</span>${asSuffix}</div>
+    <textarea placeholder="Reply…"></textarea>
+    <div class="inline-reply-actions">
+      <button class="sm ghost inline-cancel">Cancel</button>
+      <button class="sm inline-send">Send</button>
+    </div>`;
+  nodeDiv.appendChild(box);
+  const ta = box.querySelector('textarea');
+  ta.focus();
+  box.querySelector('.inline-cancel').addEventListener('click', () => {
+    forumReplyTo = null;
+    box.remove();
+    el('conv-messages').querySelectorAll('.fp-reply-btn').forEach(b => b.classList.remove('active'));
+  });
+  const doSend = () => sendInlineReply(blockId, conv, box, ta);
+  box.querySelector('.inline-send').addEventListener('click', doSend);
+  ta.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); doSend(); }
+  });
+}
+
+async function sendInlineReply(replyTo, conv, box, ta) {
+  const rawBody = ta.value.trim();
+  if (!rawBody) { toast('Enter a message.'); return; }
+  const body = activeIdentity
+    ? snkUri(activeIdentity.name, activeIdentity.public_key, activeIdentity.pow_stamp || null) + '\n' + rawBody
+    : rawBody;
+  const sendBtn = box.querySelector('.inline-send');
+  sendBtn.disabled = true;
+  try {
+    const senderName = activeIdentity?.name || null;
+    const result = await backend.sendForum(conv.name, rawBody, '', senderName, replyTo);
+    forumReplyTo = null;
+    box.remove();
+    el('conv-messages').querySelectorAll('.fp-reply-btn').forEach(b => b.classList.remove('active'));
+    injectOptimisticMsg(result?.blockId, body, conv.name, null, replyTo, 3);
+    toast('Message sent.');
+    setStatus(UI_CONFIG.sendStatusMsg);
+  } catch(e) {
+    toast('Send failed: ' + e.message, true);
+    sendBtn.disabled = false;
+  }
 }
 
 function renderCompose(conv) {
-  el('compose-area').classList.remove('hidden');
+  if (conv.kind !== 'forum' || !forumThreadId) {
+    el('compose-area').classList.remove('hidden');
+  } else {
+    el('compose-area').classList.add('hidden');
+  }
   el('compose-extra').innerHTML = '';
   resetCompose();
   if (conv.kind === 'forum')        renderComposeForum(conv);
@@ -2566,20 +2732,13 @@ function renderCompose(conv) {
 }
 
 function renderComposeForum(conv) {
+  if (forumThreadId) return; // thread view: replies go inline, bottom bar is hidden
   const asSuffix = activeIdentity ? ` · as <span class="ctx-val">${esc(activeIdentity.name)}</span>` : '';
-  if (!forumThreadId) {
-    // Index: compose a new top-level post
-    el('compose-ctx').innerHTML = `new post in <span class="ctx-val">§${esc(convDisplayName(conv))}</span>` + asSuffix;
-    el('compose-extra').innerHTML = `
-      <div class="compose-row">
-        <input id="forum-subject" placeholder="Subject" style="font-size:13px" autocomplete="off">
-      </div>`;
-  } else {
-    // Thread: reply to forumReplyTo or the root post
-    const target = forumReplyTo || forumThreadId;
-    el('compose-ctx').innerHTML = `replying to <span class="ctx-val">${target.slice(0,12)}…</span>` + asSuffix;
-    el('compose-extra').innerHTML = '';
-  }
+  el('compose-ctx').innerHTML = `new post in <span class="ctx-val">/${esc(convDisplayName(conv))}</span>` + asSuffix;
+  el('compose-extra').innerHTML = `
+    <div class="compose-row">
+      <input id="forum-subject" placeholder="Subject" style="font-size:13px" autocomplete="off">
+    </div>`;
   el('send-btn').dataset.mode = 'forum';
 }
 
@@ -3425,6 +3584,7 @@ function maybeNotify(newMsgs) {
   if (!_notifsEnabled || !document.hidden) return;
   const novel = newMsgs.filter(m => {
     if (m.sent_to) return false;
+    if (identities.some(id => id.public_key === m.sender_pub)) return false;
     if (!currentView) return true;
     if (currentView.kind === 'channel' || currentView.kind === 'forum') return m.channel !== currentView.name;
     if (currentView.kind === 'direct')  return m.sender_pub !== currentView.pub;

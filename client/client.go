@@ -63,18 +63,22 @@ func (c *Client) Scrape(ctx context.Context) (int, error) {
 			}
 			mp.DecryptedBy = identityName
 
+			// Handle PoW gifts silently — apply and discard, never store.
+			if identityName != "" && mp.Channel == "" {
+				if stamp, ok := ParsePowGift(mp.Content); ok {
+					if c.OnPowGift != nil {
+						c.OnPowGift(identityName, stamp)
+					}
+					continue
+				}
+			}
+
 			inserted, err := c.messages.SaveMessage(ref.ID, mp)
 			if err != nil {
 				return found, err
 			}
 			if inserted {
 				found++
-				// Check for an identity PoW gift in new direct messages.
-				if c.OnPowGift != nil && identityName != "" && mp.Channel == "" {
-					if stamp, ok := ParsePowGift(mp.Content); ok {
-						c.OnPowGift(identityName, stamp)
-					}
-				}
 			}
 		}
 
