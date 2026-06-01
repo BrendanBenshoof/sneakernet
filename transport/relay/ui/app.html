@@ -348,6 +348,30 @@
       color: var(--muted-2);
     }
     #sb-footer button:hover .glyph { color: var(--accent); }
+    #sb-footer a.sb-link {
+      width: 100%;
+      text-align: left;
+      background: transparent;
+      border: none;
+      color: var(--muted);
+      font-size: 12.5px;
+      padding: 7px 10px;
+      border-radius: var(--r-sm);
+      font-weight: 400;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      text-decoration: none;
+      cursor: pointer;
+    }
+    #sb-footer a.sb-link:hover { background: var(--bg); color: var(--text); }
+    #sb-footer a.sb-link .glyph {
+      width: 16px;
+      display: inline-flex;
+      justify-content: center;
+      color: var(--muted-2);
+    }
+    #sb-footer a.sb-link:hover .glyph { color: var(--accent); }
 
     /* ── Main pane ───────────────────────────────────────────────────────── */
     #main {
@@ -1082,6 +1106,7 @@
       <button id="scrape-btn" title="Refresh — Shift+click to rescan all blocks"><span class="glyph">&#x27F3;</span> Refresh</button>
       <button id="identities-btn"><span class="glyph">&#x2299;</span> Identities &amp; Contacts</button>
       <button id="settings-btn"><span class="glyph">&#x2699;</span> Settings</button>
+      <a class="sb-link" href="https://github.com/BrendanBenshoof/sneakernet/issues" target="_blank" rel="noopener noreferrer"><span class="glyph">&#x2BAD;</span> Report a bug</a>
     </div>
   </nav>
 
