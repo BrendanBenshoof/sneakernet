@@ -26,6 +26,8 @@ const (
 	MsgTypeBinary uint8 = 1
 	MsgTypeSystem uint8 = 2
 	MsgTypePost   uint8 = 3 // forum post; content is "subject\nbody"
+	MsgTypeEdit   uint8 = 4 // edit: content is "<64-hex target block id>\n<new content>"
+	MsgTypeDelete uint8 = 5 // delete: content is "<64-hex target block id>"
 
 	threadCount  = 8
 	V3HeaderSize = 368

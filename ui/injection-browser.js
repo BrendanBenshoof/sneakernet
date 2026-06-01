@@ -1351,6 +1351,116 @@ self.onmessage = async function(e) {
     });
     return {blockId};
   }
+
+  async sendEditChannel(channelName, targetBlockId, newContent, senderIdentity) {
+    const content = targetBlockId + '\n' + newContent;
+    const chs = this._loadChannels();
+    const ch  = chs.find(c => c.name === channelName);
+    if (!ch) throw new Error('channel not found');
+    const {senderPubBytes, signingPrivKey} = await this._getSenderKeys(senderIdentity);
+    const chKey = await this._decryptChannelKey(ch);
+    if (!chKey) throw new Error('locked');
+    const plain   = await buildV2Plain(content, senderPubBytes, signingPrivKey, null, 4);
+    const payload = await encryptChannelRaw(chKey, plain);
+    const blockId = await sha256hex(payload);
+    await this._postBlock(payload);
+    const sentAt = new Date().toISOString();
+    this._inbox.push({
+      id:           ++this._nextId,
+      block_id:     blockId,
+      channel:      channelName,
+      sender_pub:   senderPubBytes ? b64enc(senderPubBytes) : '',
+      msg_type:     4,
+      content:      b64enc(new TextEncoder().encode(content)),
+      thread_refs:  Array(8).fill('0'.repeat(64)),
+      sent_at:      sentAt,
+      received_at:  sentAt,
+      sent_to:      null,
+      decrypted_by: senderIdentity || '',
+      work_factor:  0,
+    });
+    return {blockId};
+  }
+
+  async sendDeleteChannel(channelName, targetBlockId, senderIdentity) {
+    const chs = this._loadChannels();
+    const ch  = chs.find(c => c.name === channelName);
+    if (!ch) throw new Error('channel not found');
+    const {senderPubBytes, signingPrivKey} = await this._getSenderKeys(senderIdentity);
+    const chKey = await this._decryptChannelKey(ch);
+    if (!chKey) throw new Error('locked');
+    const plain   = await buildV2Plain(targetBlockId, senderPubBytes, signingPrivKey, null, 5);
+    const payload = await encryptChannelRaw(chKey, plain);
+    const blockId = await sha256hex(payload);
+    await this._postBlock(payload);
+    const sentAt = new Date().toISOString();
+    this._inbox.push({
+      id:           ++this._nextId,
+      block_id:     blockId,
+      channel:      channelName,
+      sender_pub:   senderPubBytes ? b64enc(senderPubBytes) : '',
+      msg_type:     5,
+      content:      b64enc(new TextEncoder().encode(targetBlockId)),
+      thread_refs:  Array(8).fill('0'.repeat(64)),
+      sent_at:      sentAt,
+      received_at:  sentAt,
+      sent_to:      null,
+      decrypted_by: senderIdentity || '',
+      work_factor:  0,
+    });
+    return {blockId};
+  }
+
+  async sendEditDirect(recipientPublicKey, targetBlockId, newContent, senderIdentity) {
+    recipientPublicKey = fromB64url(recipientPublicKey);
+    const content = targetBlockId + '\n' + newContent;
+    const {senderPubBytes, signingPrivKey} = await this._getSenderKeys(senderIdentity);
+    const plain   = await buildV2Plain(content, senderPubBytes, signingPrivKey, null, 4);
+    const payload = await encryptDirect(recipientPublicKey, plain);
+    const blockId = await sha256hex(payload);
+    await this._postBlock(payload);
+    const sentAt = new Date().toISOString();
+    this._inbox.push({
+      id:           ++this._nextId,
+      block_id:     blockId,
+      channel:      null,
+      sender_pub:   senderPubBytes ? b64enc(senderPubBytes) : '',
+      msg_type:     4,
+      content:      b64enc(new TextEncoder().encode(content)),
+      thread_refs:  Array(8).fill('0'.repeat(64)),
+      sent_at:      sentAt,
+      received_at:  sentAt,
+      sent_to:      recipientPublicKey,
+      decrypted_by: senderIdentity || '',
+      work_factor:  0,
+    });
+    return {blockId};
+  }
+
+  async sendDeleteDirect(recipientPublicKey, targetBlockId, senderIdentity) {
+    recipientPublicKey = fromB64url(recipientPublicKey);
+    const {senderPubBytes, signingPrivKey} = await this._getSenderKeys(senderIdentity);
+    const plain   = await buildV2Plain(targetBlockId, senderPubBytes, signingPrivKey, null, 5);
+    const payload = await encryptDirect(recipientPublicKey, plain);
+    const blockId = await sha256hex(payload);
+    await this._postBlock(payload);
+    const sentAt = new Date().toISOString();
+    this._inbox.push({
+      id:           ++this._nextId,
+      block_id:     blockId,
+      channel:      null,
+      sender_pub:   senderPubBytes ? b64enc(senderPubBytes) : '',
+      msg_type:     5,
+      content:      b64enc(new TextEncoder().encode(targetBlockId)),
+      thread_refs:  Array(8).fill('0'.repeat(64)),
+      sent_at:      sentAt,
+      received_at:  sentAt,
+      sent_to:      recipientPublicKey,
+      decrypted_by: senderIdentity || '',
+      work_factor:  0,
+    });
+    return {blockId};
+  }
 }
 
 const backend = new BrowserBackend();

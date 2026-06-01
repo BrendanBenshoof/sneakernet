@@ -451,12 +451,18 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		Message            string `json:"message"`
 		SenderIdentity     string `json:"sender_identity"`
 		ReplyToBlockID     string `json:"reply_to_block_id"`
+		EditTarget         string `json:"edit_target,omitempty"`
+		DeleteTarget       string `json:"delete_target,omitempty"`
 	}
 	if !decode(w, r, &req) {
 		return
 	}
-	if req.RecipientPublicKey == "" || req.Message == "" {
-		writeError(w, http.StatusBadRequest, "recipient_public_key and message required")
+	if req.RecipientPublicKey == "" {
+		writeError(w, http.StatusBadRequest, "recipient_public_key required")
+		return
+	}
+	if req.EditTarget == "" && req.DeleteTarget == "" && req.Message == "" {
+		writeError(w, http.StatusBadRequest, "message required")
 		return
 	}
 
@@ -473,8 +479,18 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	s.mu.RUnlock()
 
 	var mp client.MessagePayload
-	mp.MsgType = client.MsgTypeText
 	mp.Timestamp = time.Now().Unix()
+	switch {
+	case req.DeleteTarget != "":
+		mp.MsgType = client.MsgTypeDelete
+		mp.Content = []byte(req.DeleteTarget)
+	case req.EditTarget != "":
+		mp.MsgType = client.MsgTypeEdit
+		mp.Content = []byte(req.EditTarget + "\n" + req.Message)
+	default:
+		mp.MsgType = client.MsgTypeText
+		mp.Content = []byte(req.Message)
+	}
 
 	var signerID *client.Identity
 	if req.SenderIdentity != "" {
@@ -507,13 +523,17 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	content := []byte(req.Message)
-	if len(content) > client.V3MaxContent {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("message too long (max %d bytes)", client.V3MaxContent))
+	if mp.MsgType == client.MsgTypeText {
+		content := []byte(req.Message)
+		if len(content) > client.V3MaxContent {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("message too long (max %d bytes)", client.V3MaxContent))
+			return
+		}
+		mp.Content = content
+	} else if len(mp.Content) > client.V3MaxContent {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("content too long (max %d bytes)", client.V3MaxContent))
 		return
 	}
-
-	mp.Content = content
 
 	var payload blockstore.Payload
 	if signerID != nil {
@@ -738,12 +758,18 @@ func (s *Server) handleSendChannel(w http.ResponseWriter, r *http.Request) {
 		ReplyToBlockID string `json:"reply_to_block_id"`
 		ForumPost      bool   `json:"forum_post,omitempty"`
 		Subject        string `json:"subject,omitempty"`
+		EditTarget     string `json:"edit_target,omitempty"`   // hex block ID being edited
+		DeleteTarget   string `json:"delete_target,omitempty"` // hex block ID being deleted
 	}
 	if !decode(w, r, &req) {
 		return
 	}
-	if req.ChannelName == "" || req.Message == "" {
-		writeError(w, http.StatusBadRequest, "channel_name and message required")
+	if req.ChannelName == "" {
+		writeError(w, http.StatusBadRequest, "channel_name required")
+		return
+	}
+	if req.EditTarget == "" && req.DeleteTarget == "" && req.Message == "" {
+		writeError(w, http.StatusBadRequest, "message required")
 		return
 	}
 
@@ -769,14 +795,21 @@ func (s *Server) handleSendChannel(w http.ResponseWriter, r *http.Request) {
 	mp := client.MessagePayload{
 		Timestamp: time.Now().Unix(),
 	}
-	if req.ForumPost {
+	switch {
+	case req.DeleteTarget != "":
+		mp.MsgType = client.MsgTypeDelete
+		mp.Content = []byte(req.DeleteTarget)
+	case req.EditTarget != "":
+		mp.MsgType = client.MsgTypeEdit
+		mp.Content = []byte(req.EditTarget + "\n" + req.Message)
+	case req.ForumPost:
 		mp.MsgType = client.MsgTypePost
 		if req.Subject != "" {
 			mp.Content = []byte(req.Subject + "\n" + req.Message)
 		} else {
 			mp.Content = []byte(req.Message)
 		}
-	} else {
+	default:
 		mp.MsgType = client.MsgTypeText
 		mp.Content = []byte(req.Message)
 	}
