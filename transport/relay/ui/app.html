@@ -668,6 +668,33 @@
     }
     .fp-actions { margin-top: 6px; display: flex; gap: 6px; }
     .fp-reply-btn.active { color: var(--accent); }
+    .inline-reply {
+      margin: 6px 0 4px 20px;
+      border-left: 2px solid var(--accent-line);
+      padding: 8px 10px;
+      background: var(--surface-2);
+      border-radius: 0 var(--r-sm) var(--r-sm) 0;
+    }
+    .inline-reply-ctx {
+      font-size: 11px;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    .inline-reply-ctx .ctx-val { color: var(--text); font-weight: 500; }
+    .inline-reply textarea {
+      width: 100%;
+      min-height: 58px;
+      max-height: 200px;
+      resize: none;
+      overflow-y: auto;
+      box-sizing: border-box;
+    }
+    .inline-reply-actions {
+      display: flex;
+      gap: 6px;
+      margin-top: 6px;
+      justify-content: flex-end;
+    }
     .forum-gap-node {
       font-family: var(--mono);
       font-size: 10.5px;
@@ -3526,6 +3553,10 @@ function renderMessages(conv, scrollToBottom = false) {
       }
     } else if (forumThreadId) {
       renderForumThread(conv, container);
+      if (forumReplyTo) {
+        const nodeDiv = container.querySelector(`.forum-node[data-block-id="${forumReplyTo}"]`);
+        if (nodeDiv) injectInlineReply(forumReplyTo, conv, nodeDiv);
+      }
     } else {
       renderForumIndex(conv, container);
     }
@@ -3709,6 +3740,7 @@ function renderForumNode(m, children, gapLevel, blockedByParent, container, dept
   const div = document.createElement('div');
   div.className = 'forum-node';
   div.dataset.depth = depth;
+  div.dataset.blockId = m.block_id;
   div.style.marginLeft = indent + 'px';
 
   const post = document.createElement('div');
@@ -3729,10 +3761,9 @@ function renderForumNode(m, children, gapLevel, blockedByParent, container, dept
   if (forumReplyTo === m.block_id) replyBtn.classList.add('active');
   replyBtn.addEventListener('click', () => {
     forumReplyTo = m.block_id;
-    renderCompose(conv);
-    el('compose-body').focus();
-    container.closest('#conv-messages')?.querySelectorAll('.fp-reply-btn')
+    el('conv-messages').querySelectorAll('.fp-reply-btn')
       .forEach(b => b.classList.toggle('active', b === replyBtn));
+    injectInlineReply(m.block_id, conv, div);
   });
 
   const barsEl = post.querySelector('.pow-widget');
@@ -3935,8 +3966,64 @@ function resetCompose() {
   if (subj) subj.value = '';
 }
 
+function injectInlineReply(blockId, conv, nodeDiv) {
+  el('conv-messages').querySelectorAll('.inline-reply').forEach(n => n.remove());
+  if (!blockId || !nodeDiv) return;
+  const senderText = nodeDiv.querySelector('.msg-sender')?.textContent?.trim() || blockId.slice(0, 12) + '…';
+  const asSuffix = activeIdentity ? ` · as <span class="ctx-val">${esc(activeIdentity.name)}</span>` : '';
+  const box = document.createElement('div');
+  box.className = 'inline-reply';
+  box.innerHTML = `
+    <div class="inline-reply-ctx">replying to <span class="ctx-val">${esc(senderText)}</span>${asSuffix}</div>
+    <textarea placeholder="Reply…"></textarea>
+    <div class="inline-reply-actions">
+      <button class="sm ghost inline-cancel">Cancel</button>
+      <button class="sm inline-send">Send</button>
+    </div>`;
+  nodeDiv.appendChild(box);
+  const ta = box.querySelector('textarea');
+  ta.focus();
+  box.querySelector('.inline-cancel').addEventListener('click', () => {
+    forumReplyTo = null;
+    box.remove();
+    el('conv-messages').querySelectorAll('.fp-reply-btn').forEach(b => b.classList.remove('active'));
+  });
+  const doSend = () => sendInlineReply(blockId, conv, box, ta);
+  box.querySelector('.inline-send').addEventListener('click', doSend);
+  ta.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); doSend(); }
+  });
+}
+
+async function sendInlineReply(replyTo, conv, box, ta) {
+  const rawBody = ta.value.trim();
+  if (!rawBody) { toast('Enter a message.'); return; }
+  const body = activeIdentity
+    ? snkUri(activeIdentity.name, activeIdentity.public_key, activeIdentity.pow_stamp || null) + '\n' + rawBody
+    : rawBody;
+  const sendBtn = box.querySelector('.inline-send');
+  sendBtn.disabled = true;
+  try {
+    const senderName = activeIdentity?.name || null;
+    const result = await backend.sendForum(conv.name, rawBody, '', senderName, replyTo);
+    forumReplyTo = null;
+    box.remove();
+    el('conv-messages').querySelectorAll('.fp-reply-btn').forEach(b => b.classList.remove('active'));
+    injectOptimisticMsg(result?.blockId, body, conv.name, null, replyTo, 3);
+    toast('Message sent.');
+    setStatus(UI_CONFIG.sendStatusMsg);
+  } catch(e) {
+    toast('Send failed: ' + e.message, true);
+    sendBtn.disabled = false;
+  }
+}
+
 function renderCompose(conv) {
-  el('compose-area').classList.remove('hidden');
+  if (conv.kind !== 'forum' || !forumThreadId) {
+    el('compose-area').classList.remove('hidden');
+  } else {
+    el('compose-area').classList.add('hidden');
+  }
   el('compose-extra').innerHTML = '';
   resetCompose();
   if (conv.kind === 'forum')        renderComposeForum(conv);
@@ -3945,20 +4032,13 @@ function renderCompose(conv) {
 }
 
 function renderComposeForum(conv) {
+  if (forumThreadId) return; // thread view: replies go inline, bottom bar is hidden
   const asSuffix = activeIdentity ? ` · as <span class="ctx-val">${esc(activeIdentity.name)}</span>` : '';
-  if (!forumThreadId) {
-    // Index: compose a new top-level post
-    el('compose-ctx').innerHTML = `new post in <span class="ctx-val">/${esc(convDisplayName(conv))}</span>` + asSuffix;
-    el('compose-extra').innerHTML = `
-      <div class="compose-row">
-        <input id="forum-subject" placeholder="Subject" style="font-size:13px" autocomplete="off">
-      </div>`;
-  } else {
-    // Thread: reply to forumReplyTo or the root post
-    const target = forumReplyTo || forumThreadId;
-    el('compose-ctx').innerHTML = `replying to <span class="ctx-val">${target.slice(0,12)}…</span>` + asSuffix;
-    el('compose-extra').innerHTML = '';
-  }
+  el('compose-ctx').innerHTML = `new post in <span class="ctx-val">/${esc(convDisplayName(conv))}</span>` + asSuffix;
+  el('compose-extra').innerHTML = `
+    <div class="compose-row">
+      <input id="forum-subject" placeholder="Subject" style="font-size:13px" autocomplete="off">
+    </div>`;
   el('send-btn').dataset.mode = 'forum';
 }
 
