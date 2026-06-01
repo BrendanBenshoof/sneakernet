@@ -302,6 +302,38 @@ function readV2PlainFull(plain) {
   return {msgType, sentAt, senderPub, threadRefs, contentB64: b64enc(plain.slice(368, 368+msgLen))};
 }
 
+// v2 layout (4024 bytes):
+//   [0:4]     magic SNK\x02
+//   [4]       msg_type  [5] flags
+//   [6:14]    timestamp int64 LE (Unix seconds)
+//   [14:46]   sender Ed25519 pub  [46:110] signature  [110:366] thread_refs[8]
+//   [366:398] frag_id (32B)  [398:400] frag_index  [400:402] frag_total  [402:404] content_len
+//   [404:]    content
+function readV2Plain(plain) {
+  if (plain[0]!==0x53||plain[1]!==0x4e||plain[2]!==0x4b||plain[3]!==0x02) return null;
+  const msgType = plain[4];
+
+  let tsS = 0n;
+  for (let i = 7; i >= 0; i--) tsS = (tsS << 8n) | BigInt(plain[6+i]);
+  const sentAt = tsS > 0n ? new Date(Number(tsS) * 1000).toISOString() : null;
+
+  const spb = plain.slice(14, 46);
+  const senderPub = spb.every(b=>b===0) ? '' : b64enc(spb);
+
+  const threadRefs = [];
+  for (let i = 0; i < 8; i++) {
+    threadRefs.push(bytesToHex(plain.slice(110 + i*32, 142 + i*32)));
+  }
+
+  const fragTotal = plain[400] | (plain[401]<<8);
+  if (fragTotal > 1) return null; // fragmented — skip incomplete
+
+  const msgLen = plain[402] | (plain[403]<<8);
+  if (msgLen > 3620) return null;
+
+  return {msgType, sentAt, senderPub, threadRefs, contentB64: b64enc(plain.slice(404, 404+msgLen))};
+}
+
 function readV1Plain(plain) {
   if (plain[0]!==0x53||plain[1]!==0x4e||plain[2]!==0x4b||plain[3]!==0x01) return null;
   const msgLen = plain[4] | (plain[5]<<8);
@@ -825,7 +857,7 @@ self.onmessage = async function(e) {
           if (!privJWK) { console.warn(`[snk] block ${blkId.slice(0,8)}: privJWK null for identity "${id.name}"`); continue; }
           const plain = await tryDecryptDirect(privJWK, payloadBytes);
           if (plain === null) continue;
-          const parsed = readV2PlainFull(plain) || readV1Plain(plain);
+          const parsed = readV2PlainFull(plain) || readV2Plain(plain) || readV1Plain(plain);
           if (!parsed) {
             const magic = Array.from(plain.slice(0,4)).map(b=>'0x'+b.toString(16).padStart(2,'0')).join(' ');
             const msgLen = plain[366] | (plain[367]<<8);
@@ -872,7 +904,7 @@ self.onmessage = async function(e) {
             if (!ch.key) { console.warn(`[snk] block ${blkId.slice(0,8)}: skipping channel "${ch.name}" — no key`); continue; }
             const plain = await tryDecryptChannel(ch.key, payloadBytes);
             if (plain === null) continue;
-            const parsed = readV2PlainFull(plain) || readV1Plain(plain);
+            const parsed = readV2PlainFull(plain) || readV2Plain(plain) || readV1Plain(plain);
             if (!parsed) {
               const magic = Array.from(plain.slice(0,4)).map(b=>'0x'+b.toString(16).padStart(2,'0')).join(' ');
               const msgLen = plain[366] | (plain[367]<<8);
