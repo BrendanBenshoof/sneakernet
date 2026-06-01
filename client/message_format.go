@@ -25,6 +25,7 @@ const (
 	MsgTypeText   uint8 = 0
 	MsgTypeBinary uint8 = 1
 	MsgTypeSystem uint8 = 2
+	MsgTypePost   uint8 = 3 // forum post; content is "subject\nbody"
 
 	threadCount  = 8
 	V3HeaderSize = 368

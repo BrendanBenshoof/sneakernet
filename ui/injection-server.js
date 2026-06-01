@@ -162,6 +162,18 @@ class ServerBackend {
     return {blockId: d.block_id || null};
   }
 
+  async sendForum(channelName, message, subject, senderIdentity, replyToBlockId) {
+    const payload = {channel_name: channelName, message, forum_post: true};
+    if (subject) payload.subject = subject;
+    if (senderIdentity) payload.sender_identity = senderIdentity;
+    if (replyToBlockId) payload.reply_to_block_id = replyToBlockId;
+    const r = await this._req('POST', '/api/send-channel', payload);
+    if (!r) throw new Error('failed');
+    if (!r.ok) { const d = await r.json(); throw new Error(d.error || 'failed'); }
+    const d = await r.json();
+    return {blockId: d.block_id || null};
+  }
+
   // Boost a message by mining a better stamp. Returns new work_factor or null.
   async boost(blockId) {
     const r = await this._req('POST', '/api/boost', {block_id: blockId});

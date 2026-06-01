@@ -239,13 +239,13 @@ function hexToBytes(hex) {
 const PLAINTEXT_SIZE = 4024;
 const MAX_CONTENT    = 3656;
 
-async function buildV2Plain(msgText, senderEd25519PubBytes, signingPrivKey, threadRefHexes) {
+async function buildV2Plain(msgText, senderEd25519PubBytes, signingPrivKey, threadRefHexes, msgType = 0) {
   const msg = new TextEncoder().encode(msgText);
   if (msg.length > MAX_CONTENT) throw new Error(`Message too long (max ${MAX_CONTENT} bytes)`);
   const plain = new Uint8Array(PLAINTEXT_SIZE);
 
   plain[0]=0x53; plain[1]=0x4e; plain[2]=0x4b; plain[3]=0x03;
-  // [4]=0 text, [5]=0 flags
+  plain[4] = msgType; // msg_type; [5]=0 flags
 
   // timestamp ms as int64 LE at [6:14]
   const tsMs = BigInt(Date.now());
@@ -1242,6 +1242,39 @@ self.onmessage = async function(e) {
       sender_pub:   senderPubBytes ? b64enc(senderPubBytes) : '',
       msg_type:     0,
       content:      b64enc(new TextEncoder().encode(message)),
+      thread_refs:  threadRefs || Array(8).fill('0'.repeat(64)),
+      sent_at:      sentAt,
+      received_at:  sentAt,
+      sent_to:      null,
+      decrypted_by: senderIdentity || '',
+      work_factor:  0,
+    });
+    return {blockId};
+  }
+
+  async sendForum(channelName, message, subject, senderIdentity, replyToBlockId) {
+    const body = subject ? subject + '\n' + message : message;
+    const chs  = this._loadChannels();
+    const ch   = chs.find(c => c.name === channelName);
+    if (!ch) throw new Error('channel not found');
+    const {senderPubBytes, signingPrivKey} = await this._getSenderKeys(senderIdentity);
+    const threadRefs = replyToBlockId
+      ? [replyToBlockId, ...Array(7).fill('0'.repeat(64))]
+      : null;
+    const chKey = await this._decryptChannelKey(ch);
+    if (!chKey) throw new Error('locked');
+    const plain   = await buildV2Plain(body, senderPubBytes, signingPrivKey, threadRefs, 3);
+    const payload = await encryptChannelRaw(chKey, plain);
+    const blockId = await sha256hex(payload);
+    await this._postBlock(payload);
+    const sentAt = new Date().toISOString();
+    this._inbox.push({
+      id:           ++this._nextId,
+      block_id:     blockId,
+      channel:      channelName,
+      sender_pub:   senderPubBytes ? b64enc(senderPubBytes) : '',
+      msg_type:     3,
+      content:      b64enc(new TextEncoder().encode(body)),
       thread_refs:  threadRefs || Array(8).fill('0'.repeat(64)),
       sent_at:      sentAt,
       received_at:  sentAt,
