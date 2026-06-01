@@ -174,6 +174,46 @@ class ServerBackend {
     return {blockId: d.block_id || null};
   }
 
+  async sendEditChannel(channelName, targetBlockId, newContent, senderIdentity) {
+    const payload = {channel_name: channelName, message: newContent, edit_target: targetBlockId};
+    if (senderIdentity) payload.sender_identity = senderIdentity;
+    const r = await this._req('POST', '/api/send-channel', payload);
+    if (!r) throw new Error('failed');
+    if (!r.ok) { const d = await r.json(); throw new Error(d.error || 'failed'); }
+    const d = await r.json();
+    return {blockId: d.block_id || null};
+  }
+
+  async sendDeleteChannel(channelName, targetBlockId, senderIdentity) {
+    const payload = {channel_name: channelName, delete_target: targetBlockId};
+    if (senderIdentity) payload.sender_identity = senderIdentity;
+    const r = await this._req('POST', '/api/send-channel', payload);
+    if (!r) throw new Error('failed');
+    if (!r.ok) { const d = await r.json(); throw new Error(d.error || 'failed'); }
+    const d = await r.json();
+    return {blockId: d.block_id || null};
+  }
+
+  async sendEditDirect(recipientPublicKey, targetBlockId, newContent, senderIdentity) {
+    const payload = {recipient_public_key: fromB64url(recipientPublicKey), message: newContent, edit_target: targetBlockId};
+    if (senderIdentity) payload.sender_identity = senderIdentity;
+    const r = await this._req('POST', '/api/send', payload);
+    if (!r) throw new Error('failed');
+    if (!r.ok) { const d = await r.json(); throw new Error(d.error || 'failed'); }
+    const d = await r.json();
+    return {blockId: d.block_ids?.[0] || null};
+  }
+
+  async sendDeleteDirect(recipientPublicKey, targetBlockId, senderIdentity) {
+    const payload = {recipient_public_key: fromB64url(recipientPublicKey), delete_target: targetBlockId};
+    if (senderIdentity) payload.sender_identity = senderIdentity;
+    const r = await this._req('POST', '/api/send', payload);
+    if (!r) throw new Error('failed');
+    if (!r.ok) { const d = await r.json(); throw new Error(d.error || 'failed'); }
+    const d = await r.json();
+    return {blockId: d.block_ids?.[0] || null};
+  }
+
   // Boost a message by mining a better stamp. Returns new work_factor or null.
   async boost(blockId) {
     const r = await this._req('POST', '/api/boost', {block_id: blockId});

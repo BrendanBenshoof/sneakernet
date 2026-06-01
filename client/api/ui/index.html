@@ -461,6 +461,18 @@
       opacity: 1;
     }
 
+    .msg-content.msg-deleted-content { color: var(--muted); font-style: italic; }
+    .msg-deleted-label { font-size: 11px; color: var(--muted); font-style: italic; padding: 2px 0; }
+    .msg-action-btn {
+      font-size: 11px; padding: 0 2px; line-height: 1;
+      background: none; border: none; cursor: pointer;
+      color: var(--muted); opacity: 0.5; transition: opacity 0.1s;
+    }
+    .msg-action-btn:hover { opacity: 1; }
+    .edit-history-inline { display: inline-flex; align-items: center; gap: 1px; font-size: 11px; color: var(--muted); }
+    .edit-history-inline .hist-label { font-size: 10px; opacity: 0.7; margin: 0 1px; }
+    .fp-deleted { color: var(--muted); font-style: italic; font-size: 13px; }
+
     .empty-state {
       display: flex;
       align-items: center;
@@ -695,7 +707,7 @@
       word-break: break-word;
       color: var(--text);
     }
-    .fp-actions { margin-top: 6px; display: flex; gap: 6px; }
+    .fp-actions { margin-top: 6px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
     .fp-reply-btn.active { color: var(--accent); }
     .inline-reply {
       margin: 6px 0 4px 20px;
@@ -1270,6 +1282,13 @@
         </div>
         <div class="setting-row">
           <div class="setting-info">
+            <div class="label">Show deleted messages</div>
+            <div class="desc">Show messages the sender has marked as deleted, with a [deleted] label instead of hiding them.</div>
+          </div>
+          <label class="toggle"><input type="checkbox" id="setting-show-deleted"><div class="toggle-track"></div></label>
+        </div>
+        <div class="setting-row">
+          <div class="setting-info">
             <div class="label">Identity PoW floor: <span id="setting-pow-floor-val">0</span> bits</div>
             <div class="desc">Hide messages from identified senders whose proof-of-work stamp is below this threshold. 0 = off.</div>
           </div>
@@ -1503,6 +1522,46 @@ class ServerBackend {
     return {blockId: d.block_id || null};
   }
 
+  async sendEditChannel(channelName, targetBlockId, newContent, senderIdentity) {
+    const payload = {channel_name: channelName, message: newContent, edit_target: targetBlockId};
+    if (senderIdentity) payload.sender_identity = senderIdentity;
+    const r = await this._req('POST', '/api/send-channel', payload);
+    if (!r) throw new Error('failed');
+    if (!r.ok) { const d = await r.json(); throw new Error(d.error || 'failed'); }
+    const d = await r.json();
+    return {blockId: d.block_id || null};
+  }
+
+  async sendDeleteChannel(channelName, targetBlockId, senderIdentity) {
+    const payload = {channel_name: channelName, delete_target: targetBlockId};
+    if (senderIdentity) payload.sender_identity = senderIdentity;
+    const r = await this._req('POST', '/api/send-channel', payload);
+    if (!r) throw new Error('failed');
+    if (!r.ok) { const d = await r.json(); throw new Error(d.error || 'failed'); }
+    const d = await r.json();
+    return {blockId: d.block_id || null};
+  }
+
+  async sendEditDirect(recipientPublicKey, targetBlockId, newContent, senderIdentity) {
+    const payload = {recipient_public_key: fromB64url(recipientPublicKey), message: newContent, edit_target: targetBlockId};
+    if (senderIdentity) payload.sender_identity = senderIdentity;
+    const r = await this._req('POST', '/api/send', payload);
+    if (!r) throw new Error('failed');
+    if (!r.ok) { const d = await r.json(); throw new Error(d.error || 'failed'); }
+    const d = await r.json();
+    return {blockId: d.block_ids?.[0] || null};
+  }
+
+  async sendDeleteDirect(recipientPublicKey, targetBlockId, senderIdentity) {
+    const payload = {recipient_public_key: fromB64url(recipientPublicKey), delete_target: targetBlockId};
+    if (senderIdentity) payload.sender_identity = senderIdentity;
+    const r = await this._req('POST', '/api/send', payload);
+    if (!r) throw new Error('failed');
+    if (!r.ok) { const d = await r.json(); throw new Error(d.error || 'failed'); }
+    const d = await r.json();
+    return {blockId: d.block_ids?.[0] || null};
+  }
+
   // Boost a message by mining a better stamp. Returns new work_factor or null.
   async boost(blockId) {
     const r = await this._req('POST', '/api/boost', {block_id: blockId});
@@ -1717,6 +1776,13 @@ document.addEventListener('DOMContentLoaded', () => {
   el('setting-filter-anon').addEventListener('change', function () {
     _filterAnon = this.checked;
     localStorage.setItem('snk_filter_anon', this.checked ? '1' : '0');
+    rebuildConversations();
+    rerenderCurrentView();
+    renderSidebar();
+  });
+  el('setting-show-deleted').addEventListener('change', function () {
+    _showDeleted = this.checked;
+    localStorage.setItem('snk_show_deleted', this.checked ? '1' : '0');
     rebuildConversations();
     rerenderCurrentView();
     renderSidebar();
@@ -2007,6 +2073,35 @@ function rebuildConversations() {
     ? allMessages.filter(m => m.decrypted_by === activeIdentity.name || !m.decrypted_by)
     : allMessages;
 
+  // Build index for edit/delete validation
+  const msgsById = new Map();
+  for (const m of byIdentity) {
+    if (m.block_id) msgsById.set(m.block_id, m);
+  }
+
+  // Extract edit (msg_type=4) and delete (msg_type=5) control messages
+  editsByTarget = new Map();
+  deletedTargets = new Set();
+  const controlMsgIds = new Set();
+  for (const m of byIdentity) {
+    if (m.msg_type !== 4 && m.msg_type !== 5) continue;
+    controlMsgIds.add(m.block_id);
+    const raw = m.content_text || '';
+    const targetId = raw.slice(0, 64);
+    if (targetId.length < 64) continue;
+    const original = msgsById.get(targetId);
+    if (!original || original.sender_pub !== m.sender_pub) continue;
+    if (m.msg_type === 5) {
+      deletedTargets.add(targetId);
+    } else {
+      if (!editsByTarget.has(targetId)) editsByTarget.set(targetId, []);
+      editsByTarget.get(targetId).push(m);
+    }
+  }
+  for (const edits of editsByTarget.values()) {
+    edits.sort((a, b) => new Date(a.sent_at || 0) - new Date(b.sent_at || 0));
+  }
+
   for (const m of byIdentity) {
     if (m.channel && isFilteredMsg(m)) {
       if (!filteredMsgs.has(m.channel)) filteredMsgs.set(m.channel, []);
@@ -2014,7 +2109,11 @@ function rebuildConversations() {
     }
   }
 
-  const relevant = byIdentity.filter(m => !isFilteredMsg(m));
+  const relevant = byIdentity.filter(m =>
+    !isFilteredMsg(m) &&
+    !controlMsgIds.has(m.block_id) &&
+    (!deletedTargets.has(m.block_id) || _showDeleted)
+  );
 
   for (const m of relevant) {
     if (m.channel) {
@@ -2545,14 +2644,25 @@ function renderForumIndex(conv, container) {
 function makeForumCard(m, children, byId, blockedByParent, conv) {
   const div = document.createElement('div');
   div.className = 'forum-card';
-  const { subject, body } = parseForumContent(m);
+  const isDeleted = deletedTargets.has(m.block_id);
+  const versions  = getVersions(m);
+  const isEdited  = versions.length > 1;
+
+  const effectiveText = versions[versions.length - 1].content_text;
+  const nl = effectiveText.indexOf('\n');
+  const subject = nl >= 0 ? effectiveText.slice(0, nl).trim() : effectiveText.trim();
+  const rest = nl >= 0 ? effectiveText.slice(nl + 1) : '';
+  const {bodyText: body} = parseSnkHeader(rest, m.sender_pub);
+  const snippet = body ? body.slice(0, 140).replace(/\n/g, ' ') : '';
+
   const replies = countDescendants(m.block_id, children);
   const blockedCount = countBlockedInSubtree(m.block_id, children, blockedByParent);
-  const snippet = body ? body.slice(0, 140).replace(/\n/g, ' ') : '';
-  const blockedBadge = blockedCount > 0
-    ? `<span class="fc-blocked">⛔ ${blockedCount} blocked</span>` : '';
+  const blockedBadge  = blockedCount > 0 ? `<span class="fc-blocked">⛔ ${blockedCount} blocked</span>` : '';
+  const editedBadge   = isEdited   ? `<span class="edited-label">[edited]</span>`   : '';
+  const deletedBadge  = isDeleted  ? `<span class="edited-label">[deleted]</span>`  : '';
+
   div.innerHTML = `
-    <div class="fc-subject">${esc(subject || '(no subject)')}</div>
+    <div class="fc-subject">${esc(subject || '(no subject)')}${deletedBadge}${editedBadge}</div>
     ${snippet ? `<div class="fc-snippet">${esc(snippet)}${body.length > 140 ? '…' : ''}</div>` : ''}
     <div class="fc-meta">
       ${renderSenderMeta(m)}
@@ -2627,7 +2737,18 @@ function makeForumGapNode(m, level) {
 }
 
 function renderForumNode(m, children, gapLevel, blockedByParent, container, depth, conv) {
-  const { subject, body } = parseForumContent(m);
+  const isDeleted = deletedTargets.has(m.block_id);
+  const versions  = getVersions(m);
+  const isEdited  = versions.length > 1;
+  const isOwn     = activeIdentity && m.sender_pub === activeIdentity.public_key;
+  const latestIdx = versions.length - 1;
+
+  const effectiveText = versions[latestIdx].content_text;
+  const nl = effectiveText.indexOf('\n');
+  const displaySubject = nl >= 0 ? effectiveText.slice(0, nl).trim() : effectiveText.trim();
+  const rest = nl >= 0 ? effectiveText.slice(nl + 1) : '';
+  const {bodyText: displayBody} = parseSnkHeader(rest, m.sender_pub);
+
   const isRoot = depth === 0;
   const indent = Math.min(depth, 5) * 20;
   const gap    = gapLevel.get(m.block_id) || 0;
@@ -2643,13 +2764,19 @@ function renderForumNode(m, children, gapLevel, blockedByParent, container, dept
 
   const post = document.createElement('div');
   post.className = 'forum-post' + (isRoot ? ' forum-root' : '');
+
+  const deletedLabel = isDeleted ? `<div class="msg-deleted-label">[deleted by sender]</div>` : '';
+
   post.innerHTML = `
     <div class="fp-meta">
       ${renderSenderMeta(m)}
       ${renderTimeMeta(m)}
+      ${isEdited ? `<span class="edit-history-inline"><button class="msg-action-btn fp-hist-prev" title="older version">←</button><span class="hist-label"></span><button class="msg-action-btn fp-hist-next" title="newer version">→</button></span>` : ''}
+      ${isOwn && !isDeleted ? `<button class="msg-action-btn fp-edit-btn" title="Edit">✏</button><button class="msg-action-btn fp-delete-btn" title="Delete">🗑</button>` : ''}
     </div>
-    ${isRoot && subject ? `<div class="fp-subject">${esc(subject)}</div>` : ''}
-    <div class="fp-body">${esc(body || (isRoot ? '' : subject))}</div>
+    ${isRoot && displaySubject ? `<div class="fp-subject" data-fp-subject>${esc(displaySubject)}</div>` : ''}
+    <div class="fp-body" data-fp-body>${esc(displayBody || (isRoot ? '' : displaySubject))}</div>
+    ${deletedLabel}
     <div class="fp-actions">
       <button class="sm ghost fp-reply-btn">Reply</button>
       ${signalBars(m.work_factor || 0)}
@@ -2667,6 +2794,35 @@ function renderForumNode(m, children, gapLevel, blockedByParent, container, dept
   const barsEl = post.querySelector('.pow-widget');
   if (boostingIds.has(m.block_id)) barsEl.dataset.boosting = '1';
   barsEl.addEventListener('click', () => handleBoost(barsEl, m));
+
+  if (isEdited) {
+    const prevBtn   = post.querySelector('.fp-hist-prev');
+    const nextBtn   = post.querySelector('.fp-hist-next');
+    const histLabel = post.querySelector('.hist-label');
+    let vIdx = latestIdx;
+    const updateFpHist = () => {
+      histLabel.textContent = vIdx === 0 ? 'orig' : `${vIdx}/${latestIdx}`;
+      prevBtn.disabled = vIdx === 0;
+      nextBtn.disabled = vIdx === latestIdx;
+      const vText = versions[vIdx].content_text;
+      const vnl = vText.indexOf('\n');
+      const vSubj = vnl >= 0 ? vText.slice(0, vnl).trim() : vText.trim();
+      const vRest = vnl >= 0 ? vText.slice(vnl + 1) : '';
+      const {bodyText: vBody} = parseSnkHeader(vRest, m.sender_pub);
+      const subjEl = post.querySelector('[data-fp-subject]');
+      if (subjEl) subjEl.textContent = vSubj;
+      post.querySelector('[data-fp-body]').textContent = vBody || (isRoot ? '' : vSubj);
+    };
+    prevBtn.addEventListener('click', () => { if (vIdx > 0) { vIdx--; updateFpHist(); } });
+    nextBtn.addEventListener('click', () => { if (vIdx < latestIdx) { vIdx++; updateFpHist(); } });
+    updateFpHist();
+  }
+
+  const fpEditBtn = post.querySelector('.fp-edit-btn');
+  if (fpEditBtn) fpEditBtn.addEventListener('click', () => injectInlineForumEdit(m, conv, div));
+
+  const fpDeleteBtn = post.querySelector('.fp-delete-btn');
+  if (fpDeleteBtn) fpDeleteBtn.addEventListener('click', () => handleForumDelete(m, conv));
 
   div.appendChild(post);
   container.appendChild(div);
@@ -2713,6 +2869,11 @@ function makeBlockedNode(count) {
 }
 
 function makeMsgRow(m, {hasPred, hasSucc, isFork, forkFirst, forkLast, isChained, hasDirectSucc}) {
+  const isDeleted  = deletedTargets.has(m.block_id);
+  const versions   = getVersions(m);
+  const isEdited   = versions.length > 1;
+  const isOwn      = activeIdentity && m.sender_pub === activeIdentity.public_key;
+
   const div = document.createElement('div');
   div.className = 'msg-row';
   div.dataset.block = m.block_id;
@@ -2721,6 +2882,12 @@ function makeMsgRow(m, {hasPred, hasSucc, isFork, forkFirst, forkLast, isChained
     : isChained ? 'bullet chained' : 'bullet';
   const topClass    = isChained     ? 'conn-top chained'    : 'conn-top';
   const bottomClass = hasDirectSucc ? 'conn-bottom chained' : 'conn-bottom';
+  const contentTypeClass = m.msg_type === 1 ? 'binary' : m.msg_type === 2 ? 'system' : m.msg_type === 3 ? 'forum' : '';
+  const deletedClass     = isDeleted ? ' msg-deleted-content' : '';
+  const latestIdx        = versions.length - 1;
+  const initialContent   = renderContent({...m, content_text: versions[latestIdx].content_text});
+  const deletedLabel     = isDeleted ? `<div class="msg-deleted-label">[deleted by sender]</div>` : '';
+
   div.innerHTML = `
     <div class="connector-col">
       ${hasPred ? `<div class="${topClass}"></div>` : '<div class="conn-none"></div>'}
@@ -2731,10 +2898,13 @@ function makeMsgRow(m, {hasPred, hasSucc, isFork, forkFirst, forkLast, isChained
       <div class="msg-meta">
         ${renderSenderMeta(m)}
         ${renderTimeMeta(m)}
+        ${isEdited  ? `<span class="edit-history-inline"><button class="msg-action-btn hist-prev" title="older version">←</button><span class="hist-label"></span><button class="msg-action-btn hist-next" title="newer version">→</button></span>` : ''}
+        ${isOwn && !isDeleted ? `<button class="msg-action-btn msg-edit-btn" title="Edit">✏</button><button class="msg-action-btn msg-delete-btn" title="Delete">🗑</button>` : ''}
         <span class="msg-block-id">${m.block_id.slice(0,12)}…</span>
         ${signalBars(m.work_factor || 0)}
       </div>
-      <div class="msg-content ${m.msg_type === 1 ? 'binary' : m.msg_type === 2 ? 'system' : m.msg_type === 3 ? 'forum' : ''}">${renderContent(m)}</div>
+      <div class="msg-content ${contentTypeClass}${deletedClass}">${initialContent}</div>
+      ${deletedLabel}
     </div>`;
 
   const senderEl = div.querySelector('[data-snk-uri]');
@@ -2745,6 +2915,29 @@ function makeMsgRow(m, {hasPred, hasSucc, isFork, forkFirst, forkLast, isChained
     if (boostingIds.has(m.block_id)) barsEl.dataset.boosting = '1';
     barsEl.addEventListener('click', () => handleBoost(barsEl, m));
   }
+
+  if (isEdited) {
+    const contentEl = div.querySelector('.msg-content');
+    const prevBtn   = div.querySelector('.hist-prev');
+    const nextBtn   = div.querySelector('.hist-next');
+    const histLabel = div.querySelector('.hist-label');
+    let vIdx = latestIdx;
+    const updateHist = () => {
+      histLabel.textContent = vIdx === 0 ? 'orig' : `${vIdx}/${latestIdx}`;
+      prevBtn.disabled = vIdx === 0;
+      nextBtn.disabled = vIdx === latestIdx;
+      contentEl.innerHTML = renderContent({...m, content_text: versions[vIdx].content_text});
+    };
+    prevBtn.addEventListener('click', () => { if (vIdx > 0) { vIdx--; updateHist(); } });
+    nextBtn.addEventListener('click', () => { if (vIdx < latestIdx) { vIdx++; updateHist(); } });
+    updateHist();
+  }
+
+  const editBtn = div.querySelector('.msg-edit-btn');
+  if (editBtn) editBtn.addEventListener('click', () => injectInlineMsgEdit(m, div));
+
+  const deleteBtn = div.querySelector('.msg-delete-btn');
+  if (deleteBtn) deleteBtn.addEventListener('click', () => handleMsgDelete(m));
 
   return div;
 }
@@ -2845,6 +3038,20 @@ async function handleBoost(barsEl, m) {
   }
 }
 
+// Returns [{content_text, sentAt, label}, ...] oldest-first for a message and its edits.
+// For edit versions the leading 64-char target hash + newline is already stripped.
+function getVersions(m) {
+  const edits = editsByTarget.get(m.block_id) || [];
+  return [
+    {content_text: m.content_text || '', sentAt: m.sent_at, label: 'original'},
+    ...edits.map((e, i) => {
+      const raw = e.content_text || '';
+      const nl  = raw.indexOf('\n');
+      return {content_text: nl >= 0 ? raw.slice(nl + 1) : '', sentAt: e.sent_at, label: `edit ${i + 1}`};
+    }),
+  ];
+}
+
 function renderContent(m) {
   if (m.msg_type === 1) return `[binary, ${b64byteLen(m.content)} bytes]`;
   if (m.msg_type === 3) {
@@ -2913,6 +3120,136 @@ async function sendInlineReply(replyTo, conv, box, ta) {
   } catch(e) {
     toast('Send failed: ' + e.message, true);
     sendBtn.disabled = false;
+  }
+}
+
+// ── Edit/delete for forum posts ─────────────────────────────────────────────
+
+function injectInlineForumEdit(m, conv, nodeDiv) {
+  el('conv-messages').querySelectorAll('.inline-edit').forEach(n => n.remove());
+  const versions  = getVersions(m);
+  const latestIdx = versions.length - 1;
+  const current   = versions[latestIdx].content_text;
+  const nl = current.indexOf('\n');
+  const currentSubject = nl >= 0 ? current.slice(0, nl).trim() : current.trim();
+  const currentBody    = nl >= 0 ? (() => { const {bodyText} = parseSnkHeader(current.slice(nl + 1), m.sender_pub); return bodyText; })() : '';
+
+  const box = document.createElement('div');
+  box.className = 'inline-reply inline-edit';
+  box.innerHTML = `
+    <div class="inline-reply-ctx">editing post <span class="ctx-val" style="font-weight:normal;opacity:0.7">· original is preserved and viewable via the ← history nav</span></div>
+    <input class="edit-subject" value="${esc(currentSubject)}" placeholder="Subject" style="font-size:13px;margin-bottom:6px">
+    <textarea placeholder="Body…">${esc(currentBody)}</textarea>
+    <div class="inline-reply-actions">
+      <button class="sm ghost inline-cancel">Cancel</button>
+      <button class="sm inline-send">Save edit</button>
+    </div>`;
+  nodeDiv.appendChild(box);
+  box.querySelector('textarea').focus();
+  box.querySelector('.inline-cancel').addEventListener('click', () => box.remove());
+  const doSend = async () => {
+    const newSubject = box.querySelector('.edit-subject').value.trim();
+    const newBody    = box.querySelector('textarea').value.trim();
+    if (!newSubject && !newBody) { toast('Enter content.'); return; }
+    const newContent = newSubject ? newSubject + '\n' + newBody : newBody;
+    const sendBtn    = box.querySelector('.inline-send');
+    sendBtn.disabled = true;
+    try {
+      const result = await backend.sendEditChannel(conv.name, m.block_id, newContent, activeIdentity?.name || null);
+      box.remove();
+      injectOptimisticMsg(result?.blockId, m.block_id + '\n' + newContent, conv.name, null, null, 4);
+      toast('Edit sent.');
+    } catch(e) {
+      toast('Send failed: ' + e.message, true);
+      sendBtn.disabled = false;
+    }
+  };
+  box.querySelector('.inline-send').addEventListener('click', doSend);
+  box.querySelector('textarea').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); doSend(); }
+  });
+}
+
+async function handleForumDelete(m, conv) {
+  if (!confirm('Mark this post as deleted?\n\nThe original message is still stored and shared — this only hides it from view by default. Anyone can reveal it via "Show deleted messages" in settings.')) return;
+  try {
+    const result = await backend.sendDeleteChannel(conv.name, m.block_id, activeIdentity?.name || null);
+    injectOptimisticMsg(result?.blockId, m.block_id, conv.name, null, null, 5);
+    toast('Post marked as deleted.');
+  } catch(e) {
+    toast('Delete failed: ' + e.message, true);
+  }
+}
+
+// ── Edit/delete for chat messages ───────────────────────────────────────────
+
+function injectInlineMsgEdit(m, msgRowDiv) {
+  el('conv-messages').querySelectorAll('.inline-edit').forEach(n => n.remove());
+  const versions  = getVersions(m);
+  const latestIdx = versions.length - 1;
+  const {bodyText: currentText} = parseSnkHeader(versions[latestIdx].content_text, m.sender_pub);
+
+  const box = document.createElement('div');
+  box.className = 'inline-reply inline-edit';
+  box.style.marginLeft = '0';
+  box.innerHTML = `
+    <div class="inline-reply-ctx">editing message <span class="ctx-val" style="font-weight:normal;opacity:0.7">· original is preserved and viewable via the ← history nav</span></div>
+    <textarea placeholder="Message…">${esc(currentText)}</textarea>
+    <div class="inline-reply-actions">
+      <button class="sm ghost inline-cancel">Cancel</button>
+      <button class="sm inline-send">Save edit</button>
+    </div>`;
+  msgRowDiv.querySelector('.msg-body-col').appendChild(box);
+  box.querySelector('textarea').focus();
+  box.querySelector('.inline-cancel').addEventListener('click', () => box.remove());
+
+  const doSend = async () => {
+    const newText = box.querySelector('textarea').value.trim();
+    if (!newText) { toast('Enter content.'); return; }
+    const newContent = activeIdentity
+      ? snkUri(activeIdentity.name, activeIdentity.public_key, activeIdentity.pow_stamp || null) + '\n' + newText
+      : newText;
+    const sendBtn = box.querySelector('.inline-send');
+    sendBtn.disabled = true;
+    try {
+      const conv = convForMsg(m);
+      let result;
+      if (conv?.kind === 'direct') {
+        const recipientPub = m.sent_to || (m.sender_pub === activeIdentity?.public_key ? conv.pub : m.sender_pub);
+        result = await backend.sendEditDirect(recipientPub, m.block_id, newContent, activeIdentity?.name || null);
+        injectOptimisticMsg(result?.blockId, m.block_id + '\n' + newContent, null, recipientPub, null, 4);
+      } else if (conv) {
+        result = await backend.sendEditChannel(conv.name, m.block_id, newContent, activeIdentity?.name || null);
+        injectOptimisticMsg(result?.blockId, m.block_id + '\n' + newContent, conv.name, null, null, 4);
+      }
+      box.remove();
+      toast('Edit sent.');
+    } catch(e) {
+      toast('Send failed: ' + e.message, true);
+      sendBtn.disabled = false;
+    }
+  };
+  box.querySelector('.inline-send').addEventListener('click', doSend);
+  box.querySelector('textarea').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); doSend(); }
+  });
+}
+
+async function handleMsgDelete(m) {
+  if (!confirm('Mark this message as deleted?\n\nThe original message is still stored and shared — this only hides it from view by default. Anyone can reveal it via "Show deleted messages" in settings.')) return;
+  try {
+    const conv = convForMsg(m);
+    if (conv?.kind === 'direct') {
+      const recipientPub = m.sent_to || conv.pub;
+      const result = await backend.sendDeleteDirect(recipientPub, m.block_id, activeIdentity?.name || null);
+      injectOptimisticMsg(result?.blockId, m.block_id, null, recipientPub, null, 5);
+    } else if (conv) {
+      const result = await backend.sendDeleteChannel(conv.name, m.block_id, activeIdentity?.name || null);
+      injectOptimisticMsg(result?.blockId, m.block_id, conv.name, null, null, 5);
+    }
+    toast('Message marked as deleted.');
+  } catch(e) {
+    toast('Delete failed: ' + e.message, true);
   }
 }
 
@@ -3730,6 +4067,10 @@ let _notifsEnabled  = localStorage.getItem('snk_notifs') === '1';
 let _enterToSend    = localStorage.getItem('snk_enter_send') !== '0';
 let _filterAnon  = localStorage.getItem('snk_filter_anon') === '1';
 let _powFloor    = parseInt(localStorage.getItem('snk_pow_floor') || '0', 10) || 0;
+let _showDeleted = localStorage.getItem('snk_show_deleted') === '1';
+
+let editsByTarget = new Map(); // targetBlockId → [editMsg, ...] oldest-first
+let deletedTargets = new Set(); // targetBlockId
 
 const blockedKeys = new Set(JSON.parse(localStorage.getItem('snk_blocked_keys') || '[]'));
 function saveBlockedKeys() { localStorage.setItem('snk_blocked_keys', JSON.stringify([...blockedKeys])); }
@@ -3755,6 +4096,7 @@ function openSettings() {
   el('setting-notifs').checked        = _notifsEnabled;
   el('setting-enter-send').checked    = _enterToSend;
   el('setting-filter-anon').checked    = _filterAnon;
+  el('setting-show-deleted').checked   = _showDeleted;
   el('setting-pow-floor').value        = _powFloor;
   el('setting-pow-floor-val').textContent = _powFloor;
   el('setting-refresh').value         = localStorage.getItem('snk_refresh_idle') || '30';
