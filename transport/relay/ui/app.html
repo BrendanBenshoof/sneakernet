@@ -3760,6 +3760,23 @@ function renderForumThread(conv, container) {
     renderCompose(conv);
   });
   container.appendChild(backDiv);
+
+  const sortBar = document.createElement('div');
+  sortBar.className = 'forum-sort-bar';
+  sortBar.innerHTML = `<span>Sort replies:</span>
+    <select>
+      <option value="youngest"${forumSort === 'youngest' ? ' selected' : ''}>Youngest</option>
+      <option value="oldest"${forumSort === 'oldest'   ? ' selected' : ''}>Oldest</option>
+      <option value="soonest"${forumSort === 'soonest' ? ' selected' : ''}>Soonest to expire</option>
+      <option value="longest"${forumSort === 'longest' ? ' selected' : ''}>Longest to expire</option>
+    </select>`;
+  sortBar.querySelector('select').addEventListener('change', e => {
+    forumSort = e.target.value;
+    localStorage.setItem('snk_forum_sort', forumSort);
+    renderMessages(conv);
+  });
+  container.appendChild(sortBar);
+
   const frag = document.createDocumentFragment();
   renderForumNode(root, children, gapLevel, blockedByParent, frag, 0, conv);
   container.appendChild(frag);
