@@ -2392,8 +2392,13 @@ function renderForumIndex(conv, container) {
   const { roots, children, byId, blockedByParent, topLevelBlocked } = buildForumTree(conv.messages, blocked);
   roots.sort(forumSortCmp());
 
+  const nullRef = '0'.repeat(64);
   const frag = document.createDocumentFragment();
-  for (const m of roots) frag.appendChild(makeForumCard(m, children, byId, blockedByParent, conv));
+  for (const m of roots) {
+    // Skip orphaned replies — a true root post has no parent reference.
+    if (m.thread_refs?.[0] && m.thread_refs[0] !== nullRef) continue;
+    frag.appendChild(makeForumCard(m, children, byId, blockedByParent, conv));
+  }
   if (topLevelBlocked > 0) {
     const chip = document.createElement('div');
     chip.className = 'forum-blocked-chip';
