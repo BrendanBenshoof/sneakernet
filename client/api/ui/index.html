@@ -190,6 +190,7 @@
       margin-bottom: 0;
     }
     .lock-logo .accent { color: #e69f4b; }
+    html[data-theme="dark"] .mark-ink { stroke: #ece6d4; }
     #lock-err, #onboard-err { color: var(--danger); font-size: 12px; min-height: 16px; }
 
     /* ── App shell ────────────────────────────────────────────────────────── */
@@ -1065,12 +1066,12 @@
     <div class="lock-logo">
       <svg xmlns="http://www.w3.org/2000/svg"
            viewBox="-129.2 -93.829 258.4 187.658" width="66" height="48"
-           stroke-linejoin="round" stroke-linecap="round">
-        <path d="M23.8,-20.207L-11.2,40.415L-81.2,40.415L-116.2,-20.207L-81.2,-80.829L-11.2,-80.829Z"
-              fill="none" stroke="var(--text-strong)" stroke-width="12"/>
+           fill="none" stroke-linejoin="round" stroke-linecap="round">
         <path d="M116.2,20.207L81.2,80.829L11.2,80.829L-23.8,20.207L11.2,-40.415L81.2,-40.415Z"
-              fill="none" stroke="#e69f4b" stroke-width="12"/>
-        <path d="M-23.8,20.207L11.2,80.829" fill="none" stroke="#e69f4b" stroke-width="12"/>
+              stroke="#e69f4b" stroke-width="12"/>
+        <path class="mark-ink" d="M23.8,-20.207L-11.2,40.415L-81.2,40.415L-116.2,-20.207L-81.2,-80.829L-11.2,-80.829Z"
+              stroke="#1c1a14" stroke-width="12"/>
+        <path d="M-23.8,20.207L11.2,80.829" stroke="#e69f4b" stroke-width="12"/>
       </svg>
       <h1><span>sneaker<span class="accent">net</span></span></h1>
     </div>
@@ -1596,11 +1597,11 @@ function setStatus(msg, cls = '') { const s = el('statusbar'); s.textContent = m
 
 // ── favicon ────────────────────────────────────────────────────────────────
 const FAVICON_READ = 'data:image/svg+xml,' + encodeURIComponent(
-  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="-129.2 -93.829 258.4 187.658" stroke-linejoin="round" stroke-linecap="round">' +
-  '<style>.l{stroke:#1c1a14}.r{stroke:#e69f4b}@media(prefers-color-scheme:dark){.l{stroke:#ece6d4}}</style>' +
-  '<path class="l" d="M23.8,-20.207L-11.2,40.415L-81.2,40.415L-116.2,-20.207L-81.2,-80.829L-11.2,-80.829Z" fill="none" stroke-width="12"/>' +
-  '<path class="r" d="M116.2,20.207L81.2,80.829L11.2,80.829L-23.8,20.207L11.2,-40.415L81.2,-40.415Z" fill="none" stroke-width="12"/>' +
-  '<path class="r" d="M-23.8,20.207L11.2,80.829" fill="none" stroke-width="12"/>' +
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="-129.2 -93.829 258.4 187.658" fill="none" stroke-linejoin="round" stroke-linecap="round">' +
+  '<style>.i{stroke:#1c1a14}@media(prefers-color-scheme:dark){.i{stroke:#ece6d4}}</style>' +
+  '<path d="M116.2,20.207L81.2,80.829L11.2,80.829L-23.8,20.207L11.2,-40.415L81.2,-40.415Z" stroke="#e69f4b" stroke-width="12"/>' +
+  '<path class="i" d="M23.8,-20.207L-11.2,40.415L-81.2,40.415L-116.2,-20.207L-81.2,-80.829L-11.2,-80.829Z" stroke-width="12"/>' +
+  '<path d="M-23.8,20.207L11.2,80.829" stroke="#e69f4b" stroke-width="12"/>' +
   '</svg>'
 );
 const FAVICON_UNREAD = 'data:image/svg+xml,' + encodeURIComponent(
