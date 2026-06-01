@@ -628,6 +628,26 @@
       flex-wrap: wrap;
     }
     .fc-replies { color: var(--accent); }
+    .forum-sort-bar {
+      padding: 6px 14px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--muted);
+      flex-shrink: 0;
+    }
+    .forum-sort-bar select {
+      font-size: 12px;
+      padding: 2px 4px;
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: var(--r-sm);
+      cursor: pointer;
+    }
 
     /* Forum thread view */
     .forum-thread-back {
@@ -1365,6 +1385,7 @@ let activeIdentity = null;
 let lastMsgLoadSec = 0; // unix timestamp of last loadMessages call, for wf_updated_since
 let forumThreadId  = null; // null = index, blockId = viewing that thread
 let forumReplyTo   = null; // blockId being replied to in compose, null = default
+let forumSort      = localStorage.getItem('snk_forum_sort') || 'youngest';
 
 // ── recipient input helpers ────────────────────────────────────────────────
 function parseRecipientInput(str) {
@@ -1862,6 +1883,15 @@ function topoSort(msgs) {
 
 function byReceivedAt(a, b) { return new Date(a.received_at) - new Date(b.received_at); }
 
+function forumSortCmp() {
+  switch (forumSort) {
+    case 'oldest':  return (a, b) => new Date(a.received_at) - new Date(b.received_at);
+    case 'soonest': return (a, b) => (a.work_factor || 0) - (b.work_factor || 0);
+    case 'longest': return (a, b) => (b.work_factor || 0) - (a.work_factor || 0);
+    default:        return (a, b) => new Date(b.received_at) - new Date(a.received_at); // youngest
+  }
+}
+
 function causalHead(msgs) {
   const sorted = topoSort(msgs);
   return sorted.length ? sorted[sorted.length - 1].block_id : null;
@@ -2272,7 +2302,24 @@ function forumBlocked(conv) {
 function renderForumIndex(conv, container) {
   const blocked = forumBlocked(conv);
   const { roots, children, byId, blockedByParent, topLevelBlocked } = buildForumTree(conv.messages, blocked);
-  roots.sort((a, b) => latestActivityMs(b.block_id, byId, children) - latestActivityMs(a.block_id, byId, children));
+  roots.sort(forumSortCmp());
+
+  const sortBar = document.createElement('div');
+  sortBar.className = 'forum-sort-bar';
+  sortBar.innerHTML = `<span>Sort:</span>
+    <select>
+      <option value="youngest"${forumSort === 'youngest' ? ' selected' : ''}>Youngest</option>
+      <option value="oldest"${forumSort === 'oldest'   ? ' selected' : ''}>Oldest</option>
+      <option value="soonest"${forumSort === 'soonest' ? ' selected' : ''}>Soonest to expire</option>
+      <option value="longest"${forumSort === 'longest' ? ' selected' : ''}>Longest to expire</option>
+    </select>`;
+  sortBar.querySelector('select').addEventListener('change', e => {
+    forumSort = e.target.value;
+    localStorage.setItem('snk_forum_sort', forumSort);
+    renderMessages(conv);
+  });
+  container.appendChild(sortBar);
+
   const frag = document.createDocumentFragment();
   for (const m of roots) frag.appendChild(makeForumCard(m, children, byId, blockedByParent, conv));
   if (topLevelBlocked > 0) {
@@ -2318,6 +2365,8 @@ function makeForumCard(m, children, byId, blockedByParent, conv) {
 function renderForumThread(conv, container) {
   const blocked = forumBlocked(conv);
   const { children, byId, gapLevel, blockedByParent } = buildForumTree(conv.messages, blocked);
+  const cmp = forumSortCmp();
+  for (const ch of children.values()) ch.sort(cmp);
   const root = byId.get(forumThreadId);
   if (!root) {
     forumThreadId = null;
