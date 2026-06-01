@@ -1807,9 +1807,23 @@ class BrowserBackend {
 
   // Decrypt the channel key bytes for a channel record. Returns null when locked or corrupt.
   async _decryptChannelKey(ch) {
-    if (!ch.keyEnc) return b64dec(ch.keyBase64 || ''); // legacy plaintext (pre-vault)
-    if (!this._unlockKey) return null;
-    try { return vaultOpen(this._unlockKey, ch.keyEnc, ch.keyNonce); } catch { return null; }
+    if (!ch.keyEnc) {
+      const key = b64dec(ch.keyBase64 || '');
+      console.log(`[snk] _decryptChannelKey "${ch.name}": legacy plaintext key, len=${key.length}`);
+      return key;
+    }
+    if (!this._unlockKey) {
+      console.warn(`[snk] _decryptChannelKey "${ch.name}": vault locked`);
+      return null;
+    }
+    try {
+      const key = vaultOpen(this._unlockKey, ch.keyEnc, ch.keyNonce);
+      console.log(`[snk] _decryptChannelKey "${ch.name}": ok, len=${key.length}`);
+      return key;
+    } catch(e) {
+      console.error(`[snk] _decryptChannelKey "${ch.name}": failed —`, e);
+      return null;
+    }
   }
 
   async listIdentities() {
@@ -1992,6 +2006,8 @@ self.onmessage = async function(e) {
       channels.map(async ch => ({name: ch.name, key: await this._decryptChannelKey(ch)}))
     );
 
+    console.log(`[snk] scrape start: ${ids.length} identit${ids.length===1?'y':'ies'}, ${chKeys.length} channel(s): [${chKeys.map(c=>c.name+(c.key?'✓':'✗')).join(', ')}]`);
+
     // Only seed seenIds from received blocks, not sent-log entries.
     // Sent-log entries must not block decryption of those same blocks by recipient identities.
     const seenIds  = new Set(this._inbox.filter(m => !m.sent_to).map(m => m.block_id));
@@ -2002,6 +2018,8 @@ self.onmessage = async function(e) {
     if (seenIds.size === 0) this._resumeToken = '';
 
     let found = 0;
+    let skipped = 0;
+    let unmatched = 0;
     let pageToken = this._resumeToken;
     let latestResumeToken = this._resumeToken;
     const defaultSince = Math.floor(Date.now() / 1000) - 7 * 24 * 3600;
@@ -2019,6 +2037,8 @@ self.onmessage = async function(e) {
       if (data.resume_token) latestResumeToken = data.resume_token;
       pageToken = data.next_page_token || '';
 
+      console.log(`[snk] scrape page: ${(data.blocks||[]).length} blocks, next_page=${!!pageToken}`);
+
       for (const blk of (data.blocks || [])) {
         const payloadBytes = b64dec(blk.payload);
         const blkId = await sha256hex(payloadBytes);
@@ -2032,6 +2052,7 @@ self.onmessage = async function(e) {
               this._wfUpdatedIds.add(blkId);
             }
           }
+          skipped++;
           continue;
         }
 
@@ -2040,11 +2061,11 @@ self.onmessage = async function(e) {
         // Try direct identity decryption
         for (const id of ids) {
           const privJWK = await this._decryptPrivJWK(id);
-          if (!privJWK) continue;
+          if (!privJWK) { console.warn(`[snk] block ${blkId.slice(0,8)}: privJWK null for identity "${id.name}"`); continue; }
           const plain = await tryDecryptDirect(privJWK, payloadBytes);
           if (plain === null) continue;
           const parsed = readV2PlainFull(plain) || readV1Plain(plain);
-          if (!parsed) continue;
+          if (!parsed) { console.warn(`[snk] block ${blkId.slice(0,8)}: DM decrypt ok but parse failed for identity "${id.name}"`); continue; }
           // For a self-send (same identity sent and receives), the sent-log entry is
           // sufficient — skip adding a duplicate received entry.
           const alreadySent = this._inbox.some(
@@ -2057,6 +2078,7 @@ self.onmessage = async function(e) {
               const stampB64url = contentText.slice('snk-pow-gift:'.length).trim();
               this._maybeApplyPowGift(id, stampB64url).catch(() => {});
             } else {
+              console.log(`[snk] block ${blkId.slice(0,8)}: DM → identity "${id.name}", msg_type=${parsed.msgType}`);
               this._inbox.push({
                 id:           ++this._nextId,
                 block_id:     blkId,
@@ -2081,11 +2103,12 @@ self.onmessage = async function(e) {
         // Try channel decryption
         if (!matched) {
           for (const ch of chKeys) {
-            if (!ch.key) continue;
+            if (!ch.key) { console.warn(`[snk] block ${blkId.slice(0,8)}: skipping channel "${ch.name}" — no key`); continue; }
             const plain = await tryDecryptChannel(ch.key, payloadBytes);
             if (plain === null) continue;
             const parsed = readV2PlainFull(plain) || readV1Plain(plain);
-            if (!parsed) continue;
+            if (!parsed) { console.warn(`[snk] block ${blkId.slice(0,8)}: channel "${ch.name}" decrypt ok but parse failed`); continue; }
+            console.log(`[snk] block ${blkId.slice(0,8)}: channel "${ch.name}", msg_type=${parsed.msgType}`);
             this._inbox.push({
               id:          ++this._nextId,
               block_id:    blkId,
@@ -2101,10 +2124,12 @@ self.onmessage = async function(e) {
             seenIds.add(blkId);
             found++; break;
           }
+          if (!seenIds.has(blkId)) unmatched++;
         }
       }
     } while (pageToken);
 
+    console.log(`[snk] scrape done: found=${found} skipped=${skipped} unmatched=${unmatched}`);
     this._resumeToken = latestResumeToken;
     if (latestResumeToken) localStorage.setItem('snk_resume_token', latestResumeToken);
     return {found};
