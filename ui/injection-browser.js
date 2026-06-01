@@ -826,7 +826,12 @@ self.onmessage = async function(e) {
           const plain = await tryDecryptDirect(privJWK, payloadBytes);
           if (plain === null) continue;
           const parsed = readV2PlainFull(plain) || readV1Plain(plain);
-          if (!parsed) { console.warn(`[snk] block ${blkId.slice(0,8)}: DM decrypt ok but parse failed for identity "${id.name}"`); continue; }
+          if (!parsed) {
+            const magic = Array.from(plain.slice(0,4)).map(b=>'0x'+b.toString(16).padStart(2,'0')).join(' ');
+            const msgLen = plain[366] | (plain[367]<<8);
+            console.warn(`[snk] block ${blkId.slice(0,8)}: DM parse failed for "${id.name}" — plain[0:4]=${magic} len=${plain.length} msgLen@366=${msgLen}`);
+            continue;
+          }
           // For a self-send (same identity sent and receives), the sent-log entry is
           // sufficient — skip adding a duplicate received entry.
           const alreadySent = this._inbox.some(
@@ -868,7 +873,12 @@ self.onmessage = async function(e) {
             const plain = await tryDecryptChannel(ch.key, payloadBytes);
             if (plain === null) continue;
             const parsed = readV2PlainFull(plain) || readV1Plain(plain);
-            if (!parsed) { console.warn(`[snk] block ${blkId.slice(0,8)}: channel "${ch.name}" decrypt ok but parse failed`); continue; }
+            if (!parsed) {
+              const magic = Array.from(plain.slice(0,4)).map(b=>'0x'+b.toString(16).padStart(2,'0')).join(' ');
+              const msgLen = plain[366] | (plain[367]<<8);
+              console.warn(`[snk] block ${blkId.slice(0,8)}: channel "${ch.name}" decrypt ok but parse failed — plain[0:4]=${magic} len=${plain.length} msgLen@366=${msgLen} MAX_CONTENT=${MAX_CONTENT}`);
+              continue;
+            }
             console.log(`[snk] block ${blkId.slice(0,8)}: channel "${ch.name}", msg_type=${parsed.msgType}`);
             this._inbox.push({
               id:          ++this._nextId,
