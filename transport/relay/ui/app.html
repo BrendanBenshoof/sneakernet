@@ -3434,7 +3434,7 @@ function makeSbItem(conv) {
   div.className = 'sb-item';
   if (currentView && currentView.kind === conv.kind && currentView.name === conv.name) div.classList.add('active');
   const prefix = conv.kind === 'channel' ? '<span class="sb-hash">#</span> '
-               : conv.kind === 'forum'   ? '<span class="sb-hash">§</span> '
+               : conv.kind === 'forum'   ? '<span class="sb-hash">/</span> '
                : '';
   const unread = conv.messages.filter(m => !seenBlocks.has(m.block_id) && !identities.some(id => id.public_key === m.sender_pub)).length;
   const badge     = unread > 0 ? `<span class="sb-badge">${unread}</span>` : '';
@@ -3485,7 +3485,7 @@ function openConversation(conv) {
   el('settings-view').classList.add('hidden');
   el('conv-view').classList.remove('hidden');
   el('conv-title').textContent = conv.kind === 'channel' ? '#' + conv.name
-                               : conv.kind === 'forum'   ? '§' + convDisplayName(conv)
+                               : conv.kind === 'forum'   ? '/' + convDisplayName(conv)
                                : conv.name;
   el('conv-sub').textContent   = conv.kind === 'channel' ? 'channel'
                                : conv.kind === 'forum'   ? 'forum'
@@ -3946,7 +3946,7 @@ function renderComposeForum(conv) {
   const asSuffix = activeIdentity ? ` · as <span class="ctx-val">${esc(activeIdentity.name)}</span>` : '';
   if (!forumThreadId) {
     // Index: compose a new top-level post
-    el('compose-ctx').innerHTML = `new post in <span class="ctx-val">§${esc(convDisplayName(conv))}</span>` + asSuffix;
+    el('compose-ctx').innerHTML = `new post in <span class="ctx-val">/${esc(convDisplayName(conv))}</span>` + asSuffix;
     el('compose-extra').innerHTML = `
       <div class="compose-row">
         <input id="forum-subject" placeholder="Subject" style="font-size:13px" autocomplete="off">
