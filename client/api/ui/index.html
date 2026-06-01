@@ -413,6 +413,19 @@
       letter-spacing: 0.06em;
     }
     #mobile-back { display: none; }
+    #forum-sort-picker {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+    #forum-sort-picker .sub {
+      font-size: 11px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    #forum-sort-picker select { width: auto; }
     #identity-picker {
       display: flex;
       align-items: center;
@@ -628,26 +641,6 @@
       flex-wrap: wrap;
     }
     .fc-replies { color: var(--accent); }
-    .forum-sort-bar {
-      padding: 6px 14px;
-      border-bottom: 1px solid var(--border);
-      background: var(--surface);
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 12px;
-      color: var(--muted);
-      flex-shrink: 0;
-    }
-    .forum-sort-bar select {
-      font-size: 12px;
-      padding: 2px 4px;
-      background: var(--bg);
-      color: var(--text);
-      border: 1px solid var(--border);
-      border-radius: var(--r-sm);
-      cursor: pointer;
-    }
 
     /* Forum thread view */
     .forum-thread-back {
@@ -655,7 +648,23 @@
       border-bottom: 1px solid var(--border);
       background: var(--surface);
       flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      gap: 10px;
     }
+    .forum-thread-sort {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .forum-thread-sort .sub {
+      font-size: 11px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .forum-thread-sort select { width: auto; font-size: 12px; }
     .forum-node { position: relative; }
     .forum-post {
       padding: 10px 14px;
@@ -1162,6 +1171,15 @@
       <button class="icon" id="mobile-back">&#x2630;</button>
       <h2 id="conv-title">Select a conversation</h2>
       <span id="conv-sub" class="sub"></span>
+      <div id="forum-sort-picker" class="hidden">
+        <span class="sub" style="white-space:nowrap">sort</span>
+        <select id="forum-sort-select">
+          <option value="youngest">Youngest</option>
+          <option value="oldest">Oldest</option>
+          <option value="soonest">Soonest to expire</option>
+          <option value="longest">Longest to expire</option>
+        </select>
+      </div>
       <div id="identity-picker">
         <span class="sub" style="white-space:nowrap">acting as</span>
         <select id="active-identity"></select>
@@ -1785,6 +1803,13 @@ document.addEventListener('DOMContentLoaded', () => {
     renderSidebar();
     if (currentView && currentView.kind !== 'panel' && currentView.kind !== 'new') rerenderCurrentView();
   });
+
+  el('forum-sort-select').value = forumSort;
+  el('forum-sort-select').addEventListener('change', e => {
+    forumSort = e.target.value;
+    localStorage.setItem('snk_forum_sort', forumSort);
+    if (currentView?.kind === 'forum') renderMessages(currentView);
+  });
 });
 
 // ── auth ───────────────────────────────────────────────────────────────────
@@ -2369,6 +2394,7 @@ function openConversation(conv) {
                                : conv.kind === 'forum'   ? 'forum'
                                : conv.kind === 'unknown' ? 'unknown senders'
                                : 'direct';
+  el('forum-sort-picker').classList.toggle('hidden', conv.kind !== 'forum');
   renderMessages(conv, true);
   renderCompose(conv);
   renderSidebar();
@@ -2403,12 +2429,14 @@ function renderMessages(conv, scrollToBottom = false) {
         container.appendChild(empty);
       }
     } else if (forumThreadId) {
+      el('forum-sort-picker').classList.add('hidden');
       renderForumThread(conv, container);
       if (forumReplyTo) {
         const nodeDiv = container.querySelector(`.forum-node[data-block-id="${forumReplyTo}"]`);
         if (nodeDiv) injectInlineReply(forumReplyTo, conv, nodeDiv);
       }
     } else {
+      el('forum-sort-picker').classList.remove('hidden');
       renderForumIndex(conv, container);
     }
     if (atBottom) container.scrollTop = container.scrollHeight;
@@ -2502,22 +2530,6 @@ function renderForumIndex(conv, container) {
   const { roots, children, byId, blockedByParent, topLevelBlocked } = buildForumTree(conv.messages, blocked);
   roots.sort(forumSortCmp());
 
-  const sortBar = document.createElement('div');
-  sortBar.className = 'forum-sort-bar';
-  sortBar.innerHTML = `<span>Sort:</span>
-    <select>
-      <option value="youngest"${forumSort === 'youngest' ? ' selected' : ''}>Youngest</option>
-      <option value="oldest"${forumSort === 'oldest'   ? ' selected' : ''}>Oldest</option>
-      <option value="soonest"${forumSort === 'soonest' ? ' selected' : ''}>Soonest to expire</option>
-      <option value="longest"${forumSort === 'longest' ? ' selected' : ''}>Longest to expire</option>
-    </select>`;
-  sortBar.querySelector('select').addEventListener('change', e => {
-    forumSort = e.target.value;
-    localStorage.setItem('snk_forum_sort', forumSort);
-    renderMessages(conv);
-  });
-  container.appendChild(sortBar);
-
   const frag = document.createDocumentFragment();
   for (const m of roots) frag.appendChild(makeForumCard(m, children, byId, blockedByParent, conv));
   if (topLevelBlocked > 0) {
@@ -2573,30 +2585,28 @@ function renderForumThread(conv, container) {
   }
   const backDiv = document.createElement('div');
   backDiv.className = 'forum-thread-back';
-  backDiv.innerHTML = '<button class="sm ghost">← Back to index</button>';
+  backDiv.innerHTML = `<button class="sm ghost">← Back to index</button>
+    <div class="forum-thread-sort">
+      <span class="sub">sort</span>
+      <select>
+        <option value="youngest"${forumSort === 'youngest' ? ' selected' : ''}>Youngest</option>
+        <option value="oldest"${forumSort === 'oldest'   ? ' selected' : ''}>Oldest</option>
+        <option value="soonest"${forumSort === 'soonest' ? ' selected' : ''}>Soonest to expire</option>
+        <option value="longest"${forumSort === 'longest' ? ' selected' : ''}>Longest to expire</option>
+      </select>
+    </div>`;
   backDiv.querySelector('button').addEventListener('click', () => {
     forumThreadId = null;
     forumReplyTo  = null;
     renderMessages(conv, false);
     renderCompose(conv);
   });
-  container.appendChild(backDiv);
-
-  const sortBar = document.createElement('div');
-  sortBar.className = 'forum-sort-bar';
-  sortBar.innerHTML = `<span>Sort replies:</span>
-    <select>
-      <option value="youngest"${forumSort === 'youngest' ? ' selected' : ''}>Youngest</option>
-      <option value="oldest"${forumSort === 'oldest'   ? ' selected' : ''}>Oldest</option>
-      <option value="soonest"${forumSort === 'soonest' ? ' selected' : ''}>Soonest to expire</option>
-      <option value="longest"${forumSort === 'longest' ? ' selected' : ''}>Longest to expire</option>
-    </select>`;
-  sortBar.querySelector('select').addEventListener('change', e => {
+  backDiv.querySelector('select').addEventListener('change', e => {
     forumSort = e.target.value;
     localStorage.setItem('snk_forum_sort', forumSort);
     renderMessages(conv);
   });
-  container.appendChild(sortBar);
+  container.appendChild(backDiv);
 
   const frag = document.createDocumentFragment();
   renderForumNode(root, children, gapLevel, blockedByParent, frag, 0, conv);
