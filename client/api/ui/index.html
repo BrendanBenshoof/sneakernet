@@ -2752,6 +2752,8 @@ function resetCompose() {
   const ta = el('compose-body');
   ta.value = '';
   ta.style.height = '';
+  const subj = el('forum-subject');
+  if (subj) subj.value = '';
 }
 
 function renderCompose(conv) {
