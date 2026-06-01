@@ -239,13 +239,13 @@ function hexToBytes(hex) {
 const PLAINTEXT_SIZE = 4024;
 const MAX_CONTENT    = 3656;
 
-async function buildV2Plain(msgText, senderEd25519PubBytes, signingPrivKey, threadRefHexes) {
+async function buildV2Plain(msgText, senderEd25519PubBytes, signingPrivKey, threadRefHexes, msgType = 0) {
   const msg = new TextEncoder().encode(msgText);
   if (msg.length > MAX_CONTENT) throw new Error(`Message too long (max ${MAX_CONTENT} bytes)`);
   const plain = new Uint8Array(PLAINTEXT_SIZE);
 
   plain[0]=0x53; plain[1]=0x4e; plain[2]=0x4b; plain[3]=0x03;
-  // [4]=0 text, [5]=0 flags
+  plain[4] = msgType; // msg_type; [5]=0 flags
 
   // timestamp ms as int64 LE at [6:14]
   const tsMs = BigInt(Date.now());
@@ -300,6 +300,38 @@ function readV2PlainFull(plain) {
   if (msgLen > MAX_CONTENT) return null;
 
   return {msgType, sentAt, senderPub, threadRefs, contentB64: b64enc(plain.slice(368, 368+msgLen))};
+}
+
+// v2 layout (4024 bytes):
+//   [0:4]     magic SNK\x02
+//   [4]       msg_type  [5] flags
+//   [6:14]    timestamp int64 LE (Unix seconds)
+//   [14:46]   sender Ed25519 pub  [46:110] signature  [110:366] thread_refs[8]
+//   [366:398] frag_id (32B)  [398:400] frag_index  [400:402] frag_total  [402:404] content_len
+//   [404:]    content
+function readV2Plain(plain) {
+  if (plain[0]!==0x53||plain[1]!==0x4e||plain[2]!==0x4b||plain[3]!==0x02) return null;
+  const msgType = plain[4];
+
+  let tsS = 0n;
+  for (let i = 7; i >= 0; i--) tsS = (tsS << 8n) | BigInt(plain[6+i]);
+  const sentAt = tsS > 0n ? new Date(Number(tsS) * 1000).toISOString() : null;
+
+  const spb = plain.slice(14, 46);
+  const senderPub = spb.every(b=>b===0) ? '' : b64enc(spb);
+
+  const threadRefs = [];
+  for (let i = 0; i < 8; i++) {
+    threadRefs.push(bytesToHex(plain.slice(110 + i*32, 142 + i*32)));
+  }
+
+  const fragTotal = plain[400] | (plain[401]<<8);
+  if (fragTotal > 1) return null; // fragmented — skip incomplete
+
+  const msgLen = plain[402] | (plain[403]<<8);
+  if (msgLen > 3620) return null;
+
+  return {msgType, sentAt, senderPub, threadRefs, contentB64: b64enc(plain.slice(404, 404+msgLen))};
 }
 
 function readV1Plain(plain) {
@@ -568,9 +600,23 @@ class BrowserBackend {
 
   // Decrypt the channel key bytes for a channel record. Returns null when locked or corrupt.
   async _decryptChannelKey(ch) {
-    if (!ch.keyEnc) return b64dec(ch.keyBase64 || ''); // legacy plaintext (pre-vault)
-    if (!this._unlockKey) return null;
-    try { return vaultOpen(this._unlockKey, ch.keyEnc, ch.keyNonce); } catch { return null; }
+    if (!ch.keyEnc) {
+      const key = b64dec(ch.keyBase64 || '');
+      console.log(`[snk] _decryptChannelKey "${ch.name}": legacy plaintext key, len=${key.length}`);
+      return key;
+    }
+    if (!this._unlockKey) {
+      console.warn(`[snk] _decryptChannelKey "${ch.name}": vault locked`);
+      return null;
+    }
+    try {
+      const key = vaultOpen(this._unlockKey, ch.keyEnc, ch.keyNonce);
+      console.log(`[snk] _decryptChannelKey "${ch.name}": ok, len=${key.length}`);
+      return key;
+    } catch(e) {
+      console.error(`[snk] _decryptChannelKey "${ch.name}": failed —`, e);
+      return null;
+    }
   }
 
   async listIdentities() {
@@ -753,6 +799,8 @@ self.onmessage = async function(e) {
       channels.map(async ch => ({name: ch.name, key: await this._decryptChannelKey(ch)}))
     );
 
+    console.log(`[snk] scrape start: ${ids.length} identit${ids.length===1?'y':'ies'}, ${chKeys.length} channel(s): [${chKeys.map(c=>c.name+(c.key?'✓':'✗')).join(', ')}]`);
+
     // Only seed seenIds from received blocks, not sent-log entries.
     // Sent-log entries must not block decryption of those same blocks by recipient identities.
     const seenIds  = new Set(this._inbox.filter(m => !m.sent_to).map(m => m.block_id));
@@ -763,6 +811,8 @@ self.onmessage = async function(e) {
     if (seenIds.size === 0) this._resumeToken = '';
 
     let found = 0;
+    let skipped = 0;
+    let unmatched = 0;
     let pageToken = this._resumeToken;
     let latestResumeToken = this._resumeToken;
     const defaultSince = Math.floor(Date.now() / 1000) - 7 * 24 * 3600;
@@ -780,6 +830,8 @@ self.onmessage = async function(e) {
       if (data.resume_token) latestResumeToken = data.resume_token;
       pageToken = data.next_page_token || '';
 
+      console.log(`[snk] scrape page: ${(data.blocks||[]).length} blocks, next_page=${!!pageToken}`);
+
       for (const blk of (data.blocks || [])) {
         const payloadBytes = b64dec(blk.payload);
         const blkId = await sha256hex(payloadBytes);
@@ -793,6 +845,7 @@ self.onmessage = async function(e) {
               this._wfUpdatedIds.add(blkId);
             }
           }
+          skipped++;
           continue;
         }
 
@@ -801,11 +854,16 @@ self.onmessage = async function(e) {
         // Try direct identity decryption
         for (const id of ids) {
           const privJWK = await this._decryptPrivJWK(id);
-          if (!privJWK) continue;
+          if (!privJWK) { console.warn(`[snk] block ${blkId.slice(0,8)}: privJWK null for identity "${id.name}"`); continue; }
           const plain = await tryDecryptDirect(privJWK, payloadBytes);
           if (plain === null) continue;
-          const parsed = readV2PlainFull(plain) || readV1Plain(plain);
-          if (!parsed) continue;
+          const parsed = readV2PlainFull(plain) || readV2Plain(plain) || readV1Plain(plain);
+          if (!parsed) {
+            const magic = Array.from(plain.slice(0,4)).map(b=>'0x'+b.toString(16).padStart(2,'0')).join(' ');
+            const msgLen = plain[366] | (plain[367]<<8);
+            console.warn(`[snk] block ${blkId.slice(0,8)}: DM parse failed for "${id.name}" — plain[0:4]=${magic} len=${plain.length} msgLen@366=${msgLen}`);
+            continue;
+          }
           // For a self-send (same identity sent and receives), the sent-log entry is
           // sufficient — skip adding a duplicate received entry.
           const alreadySent = this._inbox.some(
@@ -818,6 +876,7 @@ self.onmessage = async function(e) {
               const stampB64url = contentText.slice('snk-pow-gift:'.length).trim();
               this._maybeApplyPowGift(id, stampB64url).catch(() => {});
             } else {
+              console.log(`[snk] block ${blkId.slice(0,8)}: DM → identity "${id.name}", msg_type=${parsed.msgType}`);
               this._inbox.push({
                 id:           ++this._nextId,
                 block_id:     blkId,
@@ -842,11 +901,17 @@ self.onmessage = async function(e) {
         // Try channel decryption
         if (!matched) {
           for (const ch of chKeys) {
-            if (!ch.key) continue;
+            if (!ch.key) { console.warn(`[snk] block ${blkId.slice(0,8)}: skipping channel "${ch.name}" — no key`); continue; }
             const plain = await tryDecryptChannel(ch.key, payloadBytes);
             if (plain === null) continue;
-            const parsed = readV2PlainFull(plain) || readV1Plain(plain);
-            if (!parsed) continue;
+            const parsed = readV2PlainFull(plain) || readV2Plain(plain) || readV1Plain(plain);
+            if (!parsed) {
+              const magic = Array.from(plain.slice(0,4)).map(b=>'0x'+b.toString(16).padStart(2,'0')).join(' ');
+              const msgLen = plain[366] | (plain[367]<<8);
+              console.warn(`[snk] block ${blkId.slice(0,8)}: channel "${ch.name}" decrypt ok but parse failed — plain[0:4]=${magic} len=${plain.length} msgLen@366=${msgLen} MAX_CONTENT=${MAX_CONTENT}`);
+              continue;
+            }
+            console.log(`[snk] block ${blkId.slice(0,8)}: channel "${ch.name}", msg_type=${parsed.msgType}`);
             this._inbox.push({
               id:          ++this._nextId,
               block_id:    blkId,
@@ -862,10 +927,12 @@ self.onmessage = async function(e) {
             seenIds.add(blkId);
             found++; break;
           }
+          if (!seenIds.has(blkId)) unmatched++;
         }
       }
     } while (pageToken);
 
+    console.log(`[snk] scrape done: found=${found} skipped=${skipped} unmatched=${unmatched}`);
     this._resumeToken = latestResumeToken;
     if (latestResumeToken) localStorage.setItem('snk_resume_token', latestResumeToken);
     return {found};
@@ -1251,6 +1318,39 @@ self.onmessage = async function(e) {
     });
     return {blockId};
   }
+
+  async sendForum(channelName, message, subject, senderIdentity, replyToBlockId) {
+    const body = subject ? subject + '\n' + message : message;
+    const chs  = this._loadChannels();
+    const ch   = chs.find(c => c.name === channelName);
+    if (!ch) throw new Error('channel not found');
+    const {senderPubBytes, signingPrivKey} = await this._getSenderKeys(senderIdentity);
+    const threadRefs = replyToBlockId
+      ? [replyToBlockId, ...Array(7).fill('0'.repeat(64))]
+      : null;
+    const chKey = await this._decryptChannelKey(ch);
+    if (!chKey) throw new Error('locked');
+    const plain   = await buildV2Plain(body, senderPubBytes, signingPrivKey, threadRefs, 3);
+    const payload = await encryptChannelRaw(chKey, plain);
+    const blockId = await sha256hex(payload);
+    await this._postBlock(payload);
+    const sentAt = new Date().toISOString();
+    this._inbox.push({
+      id:           ++this._nextId,
+      block_id:     blockId,
+      channel:      channelName,
+      sender_pub:   senderPubBytes ? b64enc(senderPubBytes) : '',
+      msg_type:     3,
+      content:      b64enc(new TextEncoder().encode(body)),
+      thread_refs:  threadRefs || Array(8).fill('0'.repeat(64)),
+      sent_at:      sentAt,
+      received_at:  sentAt,
+      sent_to:      null,
+      decrypted_by: senderIdentity || '',
+      work_factor:  0,
+    });
+    return {blockId};
+  }
 }
 
 const backend = new BrowserBackend();
@@ -1271,7 +1371,7 @@ const UI_CONFIG = {
       <strong style="color:var(--text)">Keys are encrypted at rest.</strong> Private keys are stored in IndexedDB encrypted with your vault password — they only live in memory while you are unlocked. A different browser, incognito window, or clearing browser data means starting over with a new identity.
     </div>
     <div style="margin-top:16px">
-      <button class="sm ghost" data-join-channel="sneakernet-alpha">#sneakernet-alpha &rarr;</button>
+      <button class="sm ghost" data-join-forum="sneakernet-alpha">§sneakernet-alpha &rarr;</button>
     </div>
   </div>`,
 };

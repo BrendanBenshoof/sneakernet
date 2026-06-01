@@ -562,6 +562,104 @@
     .msg-content.binary,
     .msg-content.system { color: var(--muted); font-style: italic; }
 
+    /* ── Forum posts ─────────────────────────────────────────────────── */
+    .forum-subject {
+      display: block;
+      font-size: 13.5px;
+      font-weight: 600;
+      color: var(--text-strong);
+      margin-bottom: 3px;
+      white-space: normal;
+    }
+
+    /* Forum index — list of threads */
+    .forum-card {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+      transition: background 0.1s;
+    }
+    .forum-card:hover { background: var(--surface); }
+    .fc-subject {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-strong);
+      margin-bottom: 3px;
+    }
+    .fc-snippet {
+      font-size: 12.5px;
+      color: var(--muted);
+      line-height: 1.5;
+      margin-bottom: 5px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .fc-meta {
+      font-size: 11.5px;
+      color: var(--muted);
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .fc-replies { color: var(--accent); }
+
+    /* Forum thread view */
+    .forum-thread-back {
+      padding: 8px 14px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+      flex-shrink: 0;
+    }
+    .forum-node { position: relative; }
+    .forum-post {
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+    }
+    .forum-post.forum-root { background: var(--surface); }
+    .forum-node:not([data-depth="0"]) > .forum-post {
+      border-left: 2px solid var(--border-2);
+    }
+    .fp-meta {
+      font-size: 11.5px;
+      color: var(--muted);
+      margin-bottom: 5px;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .fp-subject {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-strong);
+      margin-bottom: 6px;
+    }
+    .fp-body {
+      font-size: 13.5px;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      word-break: break-word;
+      color: var(--text);
+    }
+    .fp-actions { margin-top: 6px; display: flex; gap: 6px; }
+    .fp-reply-btn.active { color: var(--accent); }
+    .forum-gap-node {
+      font-family: var(--mono);
+      font-size: 10.5px;
+      color: var(--muted);
+      padding: 3px 14px;
+      opacity: .75;
+    }
+    .forum-blocked-chip {
+      font-family: var(--mono);
+      font-size: 10.5px;
+      color: var(--muted);
+      padding: 3px 14px;
+      opacity: .85;
+    }
+    .fc-blocked { color: var(--err, #e05); font-size: 11px; }
+
     /* Gap nodes — honest about missing predecessors */
     .gap-node {
       display: flex;
@@ -945,6 +1043,17 @@
       <h1><span>sneaker<span class="accent">net</span></span><span class="sub" id="sb-subtitle"></span></h1>
     </div>
     <div id="sb-body">
+      <div class="sb-section">
+        <div class="sb-section-title">Forums <button class="icon" id="new-forum-btn" title="Join forum">+</button></div>
+        <div id="sb-forum-form" class="hidden">
+          <input id="new-forum-name" placeholder="Forum name" autocomplete="off">
+          <div class="row">
+            <button class="sm ghost" id="sb-forum-cancel">Cancel</button>
+            <button class="sm" id="sb-forum-join">Join</button>
+          </div>
+        </div>
+        <div id="sb-forums"></div>
+      </div>
       <div class="sb-section">
         <div class="sb-section-title">Channels <button class="icon" id="new-ch-btn" title="Join channel">+</button></div>
         <div id="sb-ch-form" class="hidden">
@@ -1353,32 +1462,29 @@ function hexToBytes(hex) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  Message format v2
+//  Message format v3
 //  Plaintext layout (4024 bytes):
-//    [0:4]    magic SNK\x02
+//    [0:4]    magic SNK\x03
 //    [4]      msg_type  (0=text)
 //    [5]      flags
 //    [6:14]   timestamp int64 LE ms
 //    [14:46]  sender Ed25519 pub (zeros = anonymous)
 //    [46:110] Ed25519 signature  (zeros = unsigned)
 //    [110:366] thread_refs[8] x 32 bytes
-//    [366:398] frag_id
-//    [398:400] frag_index uint16 LE
-//    [400:402] frag_total uint16 LE
-//    [402:404] content_len uint16 LE
-//    [404:]   content + padding
+//    [366:368] content_len uint16 LE
+//    [368:]   content + padding
 // ═══════════════════════════════════════════════════════════════════════
 
 const PLAINTEXT_SIZE = 4024;
-const MAX_CONTENT    = 3620;
+const MAX_CONTENT    = 3656;
 
-async function buildV2Plain(msgText, senderEd25519PubBytes, signingPrivKey, threadRefHexes) {
+async function buildV2Plain(msgText, senderEd25519PubBytes, signingPrivKey, threadRefHexes, msgType = 0) {
   const msg = new TextEncoder().encode(msgText);
   if (msg.length > MAX_CONTENT) throw new Error(`Message too long (max ${MAX_CONTENT} bytes)`);
   const plain = new Uint8Array(PLAINTEXT_SIZE);
 
-  plain[0]=0x53; plain[1]=0x4e; plain[2]=0x4b; plain[3]=0x02;
-  // [4]=0 text, [5]=0 flags
+  plain[0]=0x53; plain[1]=0x4e; plain[2]=0x4b; plain[3]=0x03;
+  plain[4] = msgType; // msg_type; [5]=0 flags
 
   // timestamp ms as int64 LE at [6:14]
   const tsMs = BigInt(Date.now());
@@ -1396,13 +1502,10 @@ async function buildV2Plain(msgText, senderEd25519PubBytes, signingPrivKey, thre
     }
   }
 
-  // frag_total = 1 at [400:402]
-  plain[400] = 1;
-
-  // content_len at [402:404]
-  plain[402] = msg.length & 0xff;
-  plain[403] = (msg.length >> 8) & 0xff;
-  plain.set(msg, 404);
+  // content_len at [366:368]
+  plain[366] = msg.length & 0xff;
+  plain[367] = (msg.length >> 8) & 0xff;
+  plain.set(msg, 368);
 
   // sign with signature field zeroed (already 0)
   if (signingPrivKey && senderEd25519PubBytes) {
@@ -1414,7 +1517,7 @@ async function buildV2Plain(msgText, senderEd25519PubBytes, signingPrivKey, thre
 }
 
 function readV2PlainFull(plain) {
-  if (plain[0]!==0x53||plain[1]!==0x4e||plain[2]!==0x4b||plain[3]!==0x02) return null;
+  if (plain[0]!==0x53||plain[1]!==0x4e||plain[2]!==0x4b||plain[3]!==0x03) return null;
   const msgType = plain[4];
 
   // timestamp LE int64
@@ -1432,8 +1535,40 @@ function readV2PlainFull(plain) {
     threadRefs.push(bytesToHex(plain.slice(110 + i*32, 142 + i*32)));
   }
 
-  const msgLen = plain[402] | (plain[403]<<8);
+  const msgLen = plain[366] | (plain[367]<<8);
   if (msgLen > MAX_CONTENT) return null;
+
+  return {msgType, sentAt, senderPub, threadRefs, contentB64: b64enc(plain.slice(368, 368+msgLen))};
+}
+
+// v2 layout (4024 bytes):
+//   [0:4]     magic SNK\x02
+//   [4]       msg_type  [5] flags
+//   [6:14]    timestamp int64 LE (Unix seconds)
+//   [14:46]   sender Ed25519 pub  [46:110] signature  [110:366] thread_refs[8]
+//   [366:398] frag_id (32B)  [398:400] frag_index  [400:402] frag_total  [402:404] content_len
+//   [404:]    content
+function readV2Plain(plain) {
+  if (plain[0]!==0x53||plain[1]!==0x4e||plain[2]!==0x4b||plain[3]!==0x02) return null;
+  const msgType = plain[4];
+
+  let tsS = 0n;
+  for (let i = 7; i >= 0; i--) tsS = (tsS << 8n) | BigInt(plain[6+i]);
+  const sentAt = tsS > 0n ? new Date(Number(tsS) * 1000).toISOString() : null;
+
+  const spb = plain.slice(14, 46);
+  const senderPub = spb.every(b=>b===0) ? '' : b64enc(spb);
+
+  const threadRefs = [];
+  for (let i = 0; i < 8; i++) {
+    threadRefs.push(bytesToHex(plain.slice(110 + i*32, 142 + i*32)));
+  }
+
+  const fragTotal = plain[400] | (plain[401]<<8);
+  if (fragTotal > 1) return null; // fragmented — skip incomplete
+
+  const msgLen = plain[402] | (plain[403]<<8);
+  if (msgLen > 3620) return null;
 
   return {msgType, sentAt, senderPub, threadRefs, contentB64: b64enc(plain.slice(404, 404+msgLen))};
 }
@@ -1704,9 +1839,23 @@ class BrowserBackend {
 
   // Decrypt the channel key bytes for a channel record. Returns null when locked or corrupt.
   async _decryptChannelKey(ch) {
-    if (!ch.keyEnc) return b64dec(ch.keyBase64 || ''); // legacy plaintext (pre-vault)
-    if (!this._unlockKey) return null;
-    try { return vaultOpen(this._unlockKey, ch.keyEnc, ch.keyNonce); } catch { return null; }
+    if (!ch.keyEnc) {
+      const key = b64dec(ch.keyBase64 || '');
+      console.log(`[snk] _decryptChannelKey "${ch.name}": legacy plaintext key, len=${key.length}`);
+      return key;
+    }
+    if (!this._unlockKey) {
+      console.warn(`[snk] _decryptChannelKey "${ch.name}": vault locked`);
+      return null;
+    }
+    try {
+      const key = vaultOpen(this._unlockKey, ch.keyEnc, ch.keyNonce);
+      console.log(`[snk] _decryptChannelKey "${ch.name}": ok, len=${key.length}`);
+      return key;
+    } catch(e) {
+      console.error(`[snk] _decryptChannelKey "${ch.name}": failed —`, e);
+      return null;
+    }
   }
 
   async listIdentities() {
@@ -1889,6 +2038,8 @@ self.onmessage = async function(e) {
       channels.map(async ch => ({name: ch.name, key: await this._decryptChannelKey(ch)}))
     );
 
+    console.log(`[snk] scrape start: ${ids.length} identit${ids.length===1?'y':'ies'}, ${chKeys.length} channel(s): [${chKeys.map(c=>c.name+(c.key?'✓':'✗')).join(', ')}]`);
+
     // Only seed seenIds from received blocks, not sent-log entries.
     // Sent-log entries must not block decryption of those same blocks by recipient identities.
     const seenIds  = new Set(this._inbox.filter(m => !m.sent_to).map(m => m.block_id));
@@ -1899,6 +2050,8 @@ self.onmessage = async function(e) {
     if (seenIds.size === 0) this._resumeToken = '';
 
     let found = 0;
+    let skipped = 0;
+    let unmatched = 0;
     let pageToken = this._resumeToken;
     let latestResumeToken = this._resumeToken;
     const defaultSince = Math.floor(Date.now() / 1000) - 7 * 24 * 3600;
@@ -1916,6 +2069,8 @@ self.onmessage = async function(e) {
       if (data.resume_token) latestResumeToken = data.resume_token;
       pageToken = data.next_page_token || '';
 
+      console.log(`[snk] scrape page: ${(data.blocks||[]).length} blocks, next_page=${!!pageToken}`);
+
       for (const blk of (data.blocks || [])) {
         const payloadBytes = b64dec(blk.payload);
         const blkId = await sha256hex(payloadBytes);
@@ -1929,6 +2084,7 @@ self.onmessage = async function(e) {
               this._wfUpdatedIds.add(blkId);
             }
           }
+          skipped++;
           continue;
         }
 
@@ -1937,11 +2093,16 @@ self.onmessage = async function(e) {
         // Try direct identity decryption
         for (const id of ids) {
           const privJWK = await this._decryptPrivJWK(id);
-          if (!privJWK) continue;
+          if (!privJWK) { console.warn(`[snk] block ${blkId.slice(0,8)}: privJWK null for identity "${id.name}"`); continue; }
           const plain = await tryDecryptDirect(privJWK, payloadBytes);
           if (plain === null) continue;
-          const parsed = readV2PlainFull(plain) || readV1Plain(plain);
-          if (!parsed) continue;
+          const parsed = readV2PlainFull(plain) || readV2Plain(plain) || readV1Plain(plain);
+          if (!parsed) {
+            const magic = Array.from(plain.slice(0,4)).map(b=>'0x'+b.toString(16).padStart(2,'0')).join(' ');
+            const msgLen = plain[366] | (plain[367]<<8);
+            console.warn(`[snk] block ${blkId.slice(0,8)}: DM parse failed for "${id.name}" — plain[0:4]=${magic} len=${plain.length} msgLen@366=${msgLen}`);
+            continue;
+          }
           // For a self-send (same identity sent and receives), the sent-log entry is
           // sufficient — skip adding a duplicate received entry.
           const alreadySent = this._inbox.some(
@@ -1954,6 +2115,7 @@ self.onmessage = async function(e) {
               const stampB64url = contentText.slice('snk-pow-gift:'.length).trim();
               this._maybeApplyPowGift(id, stampB64url).catch(() => {});
             } else {
+              console.log(`[snk] block ${blkId.slice(0,8)}: DM → identity "${id.name}", msg_type=${parsed.msgType}`);
               this._inbox.push({
                 id:           ++this._nextId,
                 block_id:     blkId,
@@ -1978,11 +2140,17 @@ self.onmessage = async function(e) {
         // Try channel decryption
         if (!matched) {
           for (const ch of chKeys) {
-            if (!ch.key) continue;
+            if (!ch.key) { console.warn(`[snk] block ${blkId.slice(0,8)}: skipping channel "${ch.name}" — no key`); continue; }
             const plain = await tryDecryptChannel(ch.key, payloadBytes);
             if (plain === null) continue;
-            const parsed = readV2PlainFull(plain) || readV1Plain(plain);
-            if (!parsed) continue;
+            const parsed = readV2PlainFull(plain) || readV2Plain(plain) || readV1Plain(plain);
+            if (!parsed) {
+              const magic = Array.from(plain.slice(0,4)).map(b=>'0x'+b.toString(16).padStart(2,'0')).join(' ');
+              const msgLen = plain[366] | (plain[367]<<8);
+              console.warn(`[snk] block ${blkId.slice(0,8)}: channel "${ch.name}" decrypt ok but parse failed — plain[0:4]=${magic} len=${plain.length} msgLen@366=${msgLen} MAX_CONTENT=${MAX_CONTENT}`);
+              continue;
+            }
+            console.log(`[snk] block ${blkId.slice(0,8)}: channel "${ch.name}", msg_type=${parsed.msgType}`);
             this._inbox.push({
               id:          ++this._nextId,
               block_id:    blkId,
@@ -1998,10 +2166,12 @@ self.onmessage = async function(e) {
             seenIds.add(blkId);
             found++; break;
           }
+          if (!seenIds.has(blkId)) unmatched++;
         }
       }
     } while (pageToken);
 
+    console.log(`[snk] scrape done: found=${found} skipped=${skipped} unmatched=${unmatched}`);
     this._resumeToken = latestResumeToken;
     if (latestResumeToken) localStorage.setItem('snk_resume_token', latestResumeToken);
     return {found};
@@ -2387,6 +2557,39 @@ self.onmessage = async function(e) {
     });
     return {blockId};
   }
+
+  async sendForum(channelName, message, subject, senderIdentity, replyToBlockId) {
+    const body = subject ? subject + '\n' + message : message;
+    const chs  = this._loadChannels();
+    const ch   = chs.find(c => c.name === channelName);
+    if (!ch) throw new Error('channel not found');
+    const {senderPubBytes, signingPrivKey} = await this._getSenderKeys(senderIdentity);
+    const threadRefs = replyToBlockId
+      ? [replyToBlockId, ...Array(7).fill('0'.repeat(64))]
+      : null;
+    const chKey = await this._decryptChannelKey(ch);
+    if (!chKey) throw new Error('locked');
+    const plain   = await buildV2Plain(body, senderPubBytes, signingPrivKey, threadRefs, 3);
+    const payload = await encryptChannelRaw(chKey, plain);
+    const blockId = await sha256hex(payload);
+    await this._postBlock(payload);
+    const sentAt = new Date().toISOString();
+    this._inbox.push({
+      id:           ++this._nextId,
+      block_id:     blockId,
+      channel:      channelName,
+      sender_pub:   senderPubBytes ? b64enc(senderPubBytes) : '',
+      msg_type:     3,
+      content:      b64enc(new TextEncoder().encode(body)),
+      thread_refs:  threadRefs || Array(8).fill('0'.repeat(64)),
+      sent_at:      sentAt,
+      received_at:  sentAt,
+      sent_to:      null,
+      decrypted_by: senderIdentity || '',
+      work_factor:  0,
+    });
+    return {blockId};
+  }
 }
 
 const backend = new BrowserBackend();
@@ -2407,7 +2610,7 @@ const UI_CONFIG = {
       <strong style="color:var(--text)">Keys are encrypted at rest.</strong> Private keys are stored in IndexedDB encrypted with your vault password — they only live in memory while you are unlocked. A different browser, incognito window, or clearing browser data means starting over with a new identity.
     </div>
     <div style="margin-top:16px">
-      <button class="sm ghost" data-join-channel="sneakernet-alpha">#sneakernet-alpha &rarr;</button>
+      <button class="sm ghost" data-join-forum="sneakernet-alpha">§sneakernet-alpha &rarr;</button>
     </div>
   </div>`,
 };
@@ -2454,6 +2657,9 @@ function applyConfig() {
   el('conv-empty').querySelectorAll('[data-join-channel]').forEach(btn => {
     btn.addEventListener('click', () => joinDefaultChannel(btn.dataset.joinChannel));
   });
+  el('conv-empty').querySelectorAll('[data-join-forum]').forEach(btn => {
+    btn.addEventListener('click', () => joinDefaultForum(btn.dataset.joinForum));
+  });
   updateNotifBtn();
   if (UI_CONFIG.hasLockButton) {
     const btn = document.createElement('button');
@@ -2463,6 +2669,13 @@ function applyConfig() {
     btn.addEventListener('click', lock);
   }
 }
+
+// ── forum channel state ────────────────────────────────────────────────────
+const forumChannels = (function() {
+  try { return new Set(JSON.parse(localStorage.getItem('snk_forum_channels') || '[]')); }
+  catch { return new Set(); }
+})();
+function saveForumChannels() { localStorage.setItem('snk_forum_channels', JSON.stringify([...forumChannels])); }
 
 // ── state ──────────────────────────────────────────────────────────────────
 let allMessages    = [];
@@ -2475,6 +2688,8 @@ let currentView    = null;
 let conversations  = [];
 let activeIdentity = null;
 let lastMsgLoadSec = 0; // unix timestamp of last loadMessages call, for wf_updated_since
+let forumThreadId  = null; // null = index, blockId = viewing that thread
+let forumReplyTo   = null; // blockId being replied to in compose, null = default
 
 // ── recipient input helpers ────────────────────────────────────────────────
 function parseRecipientInput(str) {
@@ -2655,6 +2870,17 @@ document.addEventListener('DOMContentLoaded', () => {
   el('sb-ch-join').addEventListener('click', addChannel);
   el('new-ch-pass').addEventListener('keydown', e => { if (e.key === 'Enter') addChannel(); });
 
+  el('new-forum-btn').addEventListener('click', () => {
+    el('sb-forum-form').classList.toggle('hidden');
+    if (!el('sb-forum-form').classList.contains('hidden')) el('new-forum-name').focus();
+  });
+  el('sb-forum-cancel').addEventListener('click', () => {
+    el('sb-forum-form').classList.add('hidden');
+    el('new-forum-name').value = '';
+  });
+  el('sb-forum-join').addEventListener('click', addForum);
+  el('new-forum-name').addEventListener('keydown', e => { if (e.key === 'Enter') addForum(); });
+
   el('add-contact-btn').addEventListener('click', addContact);
   el('new-contact-uri').addEventListener('keydown', e => { if (e.key === 'Enter') addContact(); });
 
@@ -2783,10 +3009,19 @@ async function loadMessages() {
   maybeNotify(msgs);
 }
 
+// For forum posts (msg_type 3), the snk: identity header lives in the body
+// portion (after the subject line), not on the first line.
+function snkHeaderText(m) {
+  const raw = m.content_text || '';
+  if (m.msg_type !== 3) return raw;
+  const nl = raw.indexOf('\n');
+  return nl >= 0 ? raw.slice(nl + 1) : '';
+}
+
 function isAnonymousMsg(m) {
   if (!m.sender_pub) return true;
   if (resolveByPub(m.sender_pub)) return false;
-  const {claimedName} = parseSnkHeader(m.content_text, m.sender_pub);
+  const {claimedName} = parseSnkHeader(snkHeaderText(m), m.sender_pub);
   return !claimedName;
 }
 // ── identity PoW bits cache ─────────────────────────────────────────────────
@@ -2799,7 +3034,7 @@ const powBitsPending = new Set();
 function powBitsForMsg(m) {
   if (m.id_pow_bits > 0) return m.id_pow_bits;
   if (!m.sender_pub) return 0;
-  const {claimedName, powStamp} = parseSnkHeader(m.content_text, m.sender_pub);
+  const {claimedName, powStamp} = parseSnkHeader(snkHeaderText(m), m.sender_pub);
   if (!claimedName || !powStamp) return 0;
   const key = m.sender_pub + ':' + powStamp;
   if (powBitsCache.has(key)) return powBitsCache.get(key);
@@ -2810,7 +3045,7 @@ function scheduleNovelPoWComputes(msgs) {
   if (!backend.computeIdPoW) return;
   for (const m of msgs) {
     if (!m.sender_pub || m.id_pow_bits > 0) continue;
-    const {claimedName, powStamp} = parseSnkHeader(m.content_text, m.sender_pub);
+    const {claimedName, powStamp} = parseSnkHeader(snkHeaderText(m), m.sender_pub);
     if (!claimedName || !powStamp) continue;
     const key = m.sender_pub + ':' + powStamp;
     if (powBitsCache.has(key) || powBitsPending.has(key)) continue;
@@ -2887,7 +3122,8 @@ function rebuildConversations() {
 
   conversations = [];
   for (const [name, msgs] of chMap) {
-    const conv = {kind:'channel', name, messages:msgs};
+    const kind = (name.startsWith('forum:') || forumChannels.has(name)) ? 'forum' : 'channel';
+    const conv = {kind, name, messages:msgs};
     if (!isHidden(conv)) conversations.push(conv);
   }
   for (const [, info] of dirMap) {
@@ -2956,6 +3192,117 @@ function causalHead(msgs) {
   return sorted.length ? sorted[sorted.length - 1].block_id : null;
 }
 
+// ── forum tree helpers ─────────────────────────────────────────────────────
+function buildForumTree(msgs, blocked = []) {
+  const byId     = new Map(msgs.map(m => [m.block_id, m]));
+  const children = new Map(msgs.map(m => [m.block_id, []]));
+  const gapLevel = new Map(); // blockId → 0 (direct), k (skip level used), -1 (orphan)
+  const roots    = [];
+
+  for (const m of msgs) {
+    const dp = m.thread_refs?.[0];
+    if (!dp || dp === ZERO64) {
+      roots.push(m);
+      gapLevel.set(m.block_id, 0);
+      continue;
+    }
+    if (byId.has(dp)) {
+      children.get(dp).push(m);
+      gapLevel.set(m.block_id, 0);
+      continue;
+    }
+    // Direct parent missing — walk skip list for nearest known ancestor
+    let attached = false;
+    for (let k = 1; k < 8; k++) {
+      const ref = m.thread_refs[k];
+      if (!ref || ref === ZERO64) continue;
+      if (byId.has(ref)) {
+        children.get(ref).push(m);
+        gapLevel.set(m.block_id, k);
+        attached = true;
+        break;
+      }
+    }
+    if (!attached) {
+      roots.push(m);
+      gapLevel.set(m.block_id, -1); // orphan — no known ancestor
+    }
+  }
+
+  // Attach blocked messages to their nearest visible parent
+  const blockedByParent = new Map(); // blockId → count of blocked direct-or-skip children
+  let topLevelBlocked = 0;
+  for (const b of blocked) {
+    const dp = b.thread_refs?.[0];
+    let parentId = null;
+    if (dp && dp !== ZERO64) {
+      if (byId.has(dp)) {
+        parentId = dp;
+      } else {
+        for (let k = 1; k < 8; k++) {
+          const ref = b.thread_refs?.[k];
+          if (!ref || ref === ZERO64) continue;
+          if (byId.has(ref)) { parentId = ref; break; }
+        }
+      }
+    }
+    if (parentId) blockedByParent.set(parentId, (blockedByParent.get(parentId) || 0) + 1);
+    else topLevelBlocked++;
+  }
+
+  for (const ch of children.values()) ch.sort(byReceivedAt);
+  roots.sort(byReceivedAt);
+  return { roots, children, byId, gapLevel, blockedByParent, topLevelBlocked };
+}
+
+function countBlockedInSubtree(rootId, children, blockedByParent) {
+  let n = 0;
+  const queue = [rootId];
+  while (queue.length) {
+    const id = queue.shift();
+    n += blockedByParent.get(id) || 0;
+    for (const c of (children.get(id) || [])) queue.push(c.block_id);
+  }
+  return n;
+}
+
+function latestActivityMs(blockId, byId, children) {
+  let latest = new Date(byId.get(blockId)?.received_at || 0).getTime();
+  const queue = [...(children.get(blockId) || [])];
+  while (queue.length) {
+    const m = queue.shift();
+    const t = new Date(m.received_at).getTime();
+    if (t > latest) latest = t;
+    for (const c of (children.get(m.block_id) || [])) queue.push(c);
+  }
+  return latest;
+}
+
+function countDescendants(blockId, children) {
+  let n = 0;
+  const queue = [...(children.get(blockId) || [])];
+  while (queue.length) {
+    const m = queue.shift();
+    n++;
+    for (const c of (children.get(m.block_id) || [])) queue.push(c);
+  }
+  return n;
+}
+
+function parseForumContent(m) {
+  const raw = m.content_text || '';
+  if (m.msg_type === 3) {
+    const nl = raw.indexOf('\n');
+    const subject = nl >= 0 ? raw.slice(0, nl).trim() : raw.trim();
+    const rest    = nl >= 0 ? raw.slice(nl + 1) : '';
+    // Strip the snk: identity header from the body portion if present
+    const {bodyText} = parseSnkHeader(rest, m.sender_pub);
+    return { subject, body: bodyText };
+  }
+  const {bodyText} = parseSnkHeader(raw, m.sender_pub);
+  return { subject: '', body: bodyText };
+}
+
 // ── hidden conversations ───────────────────────────────────────────────────
 // Map of convKey → ISO timestamp when hidden. Auto-unhides if a message
 // arrives after that timestamp so new inbound messages always reappear.
@@ -2992,8 +3339,14 @@ function isHidden(conv) {
 // ── read state ─────────────────────────────────────────────────────────────
 function convKey(conv) {
   if (conv.kind === 'channel') return 'ch:' + conv.name;
+  if (conv.kind === 'forum')   return conv.name.startsWith('forum:') ? conv.name : 'forum:' + conv.name;
   if (conv.kind === 'direct')  return 'dm:' + (conv.pub || conv.name);
   return 'dm:__unknown__';
+}
+
+function convDisplayName(conv) {
+  if (conv.kind === 'forum' && conv.name.startsWith('forum:')) return conv.name.slice(6);
+  return conv.name;
 }
 
 const SEEN_MAX = 5000;
@@ -3023,18 +3376,26 @@ function markSeen(conv) {
 
 // ── sidebar ────────────────────────────────────────────────────────────────
 function renderSidebar() {
-  const chContainer  = el('sb-channels');
-  const dirContainer = el('sb-directs');
-  chContainer.innerHTML  = '';
-  dirContainer.innerHTML = '';
+  const chContainer    = el('sb-channels');
+  const forumContainer = el('sb-forums');
+  const dirContainer   = el('sb-directs');
+  chContainer.innerHTML    = '';
+  forumContainer.innerHTML = '';
+  dirContainer.innerHTML   = '';
 
-  const chConvs  = conversations.filter(c => c.kind === 'channel');
-  const dirConvs = conversations.filter(c => c.kind !== 'channel');
+  const chConvs    = conversations.filter(c => c.kind === 'channel');
+  const forumConvs = conversations.filter(c => c.kind === 'forum');
+  const dirConvs   = conversations.filter(c => c.kind !== 'channel' && c.kind !== 'forum');
 
   if (!chConvs.length) {
     chContainer.innerHTML = '<div style="padding:6px 14px;font-size:11px;color:var(--muted)">No channels joined</div>';
   }
   for (const conv of chConvs) chContainer.appendChild(makeSbItem(conv));
+
+  if (!forumConvs.length) {
+    forumContainer.innerHTML = '<div style="padding:6px 14px;font-size:11px;color:var(--muted)">No forums joined</div>';
+  }
+  for (const conv of forumConvs) forumContainer.appendChild(makeSbItem(conv));
 
   if (!dirConvs.length) {
     dirContainer.innerHTML = '<div style="padding:6px 14px;font-size:11px;color:var(--muted)">No messages yet</div>';
@@ -3047,14 +3408,16 @@ function makeSbItem(conv) {
   const div = document.createElement('div');
   div.className = 'sb-item';
   if (currentView && currentView.kind === conv.kind && currentView.name === conv.name) div.classList.add('active');
-  const prefix = conv.kind === 'channel' ? '<span class="sb-hash">#</span> ' : '';
+  const prefix = conv.kind === 'channel' ? '<span class="sb-hash">#</span> '
+               : conv.kind === 'forum'   ? '<span class="sb-hash">§</span> '
+               : '';
   const unread = conv.messages.filter(m => !seenBlocks.has(m.block_id) && !identities.some(id => id.public_key === m.sender_pub)).length;
   const badge     = unread > 0 ? `<span class="sb-badge">${unread}</span>` : '';
-  const closeTip  = conv.kind === 'channel' ? 'Leave channel' : 'Close conversation';
-  const closeBtn  = (conv.kind === 'direct' || conv.kind === 'channel')
+  const closeTip  = conv.kind === 'channel' ? 'Leave channel' : conv.kind === 'forum' ? 'Leave forum' : 'Close conversation';
+  const closeBtn  = (conv.kind === 'direct' || conv.kind === 'channel' || conv.kind === 'forum')
     ? `<button class="icon sb-close" title="${closeTip}" tabindex="-1">&times;</button>`
     : '';
-  div.innerHTML = `${prefix}<span class="sb-name">${esc(conv.name)}</span>${badge}${closeBtn}`;
+  div.innerHTML = `${prefix}<span class="sb-name">${esc(convDisplayName(conv))}</span>${badge}${closeBtn}`;
   div.addEventListener('click', () => openConversation(conv));
   if (conv.kind === 'direct') {
     div.querySelector('.sb-close').addEventListener('click', e => {
@@ -3077,6 +3440,12 @@ function makeSbItem(conv) {
       hideConv(conv);
       removeChannel(conv.name);
     });
+  } else if (conv.kind === 'forum') {
+    div.querySelector('.sb-close').addEventListener('click', e => {
+      e.stopPropagation();
+      hideConv(conv);
+      leaveForum(conv.name);
+    });
   }
   return div;
 }
@@ -3085,12 +3454,18 @@ function makeSbItem(conv) {
 function openConversation(conv) {
   markSeen(conv);
   currentView = conv;
+  if (conv.kind === 'forum') { forumThreadId = null; forumReplyTo = null; }
   closeSidebar();
   el('panel-view').classList.add('hidden');
   el('settings-view').classList.add('hidden');
   el('conv-view').classList.remove('hidden');
-  el('conv-title').textContent = conv.kind === 'channel' ? '#' + conv.name : conv.name;
-  el('conv-sub').textContent   = conv.kind === 'channel' ? 'channel' : conv.kind === 'unknown' ? 'unknown senders' : 'direct';
+  el('conv-title').textContent = conv.kind === 'channel' ? '#' + conv.name
+                               : conv.kind === 'forum'   ? '§' + convDisplayName(conv)
+                               : conv.name;
+  el('conv-sub').textContent   = conv.kind === 'channel' ? 'channel'
+                               : conv.kind === 'forum'   ? 'forum'
+                               : conv.kind === 'unknown' ? 'unknown senders'
+                               : 'direct';
   renderMessages(conv, true);
   renderCompose(conv);
   renderSidebar();
@@ -3110,20 +3485,50 @@ function renderMessages(conv, scrollToBottom = false) {
   el('conv-empty').classList.add('hidden');
   container.innerHTML = '';
 
-  if (!conv.messages.length) {
-    const empty = document.createElement('div');
-    empty.className = 'empty-state';
-    if (conv.kind === 'channel') {
-      empty.innerHTML = '<p>No messages yet.</p><button class="sm ghost" id="ch-history-btn">Scan for history</button>';
-      empty.querySelector('#ch-history-btn').addEventListener('click', function() {
-        this.disabled = true;
-        this.textContent = 'Scanning…';
-        scrape(true);
-      });
+  if (conv.kind === 'forum') {
+    if (!conv.messages.length) {
+      const blockedList = forumBlocked(conv);
+      if (blockedList.length > 0) {
+        renderForumIndex(conv, container);
+      } else {
+        const empty = document.createElement('div');
+        empty.className = 'empty-state';
+        empty.innerHTML = '<p>No posts yet.</p><button class="sm ghost" id="ch-history-btn">Scan for history</button>';
+        empty.querySelector('#ch-history-btn').addEventListener('click', function() {
+          this.disabled = true; this.textContent = 'Scanning…'; scrape(true);
+        });
+        container.appendChild(empty);
+      }
+    } else if (forumThreadId) {
+      renderForumThread(conv, container);
     } else {
-      empty.textContent = 'No messages yet.';
+      renderForumIndex(conv, container);
     }
-    container.appendChild(empty);
+    if (atBottom) container.scrollTop = container.scrollHeight;
+    return;
+  }
+
+  if (!conv.messages.length) {
+    const blockedList = conv.kind === 'channel' ? (filteredMsgs.get(conv.name) || []) : [];
+    if (blockedList.length > 0) {
+      const frag = document.createDocumentFragment();
+      frag.appendChild(makeBlockedNode(blockedList.length));
+      container.appendChild(frag);
+    } else {
+      const empty = document.createElement('div');
+      empty.className = 'empty-state';
+      if (conv.kind === 'channel') {
+        empty.innerHTML = '<p>No messages yet.</p><button class="sm ghost" id="ch-history-btn">Scan for history</button>';
+        empty.querySelector('#ch-history-btn').addEventListener('click', function() {
+          this.disabled = true;
+          this.textContent = 'Scanning…';
+          scrape(true);
+        });
+      } else {
+        empty.textContent = 'No messages yet.';
+      }
+      container.appendChild(empty);
+    }
     return;
   }
 
@@ -3140,7 +3545,7 @@ function renderMessages(conv, scrollToBottom = false) {
 
   // Merge filtered (blocked) messages into the visible sequence by received_at
   // so blocked-message chips appear at the right chronological position.
-  const blocked = conv.kind === 'channel'
+  const blocked = (conv.kind === 'channel' || conv.kind === 'forum')
     ? (filteredMsgs.get(conv.name) || []).slice().sort((a,b) => a.received_at < b.received_at ? -1 : 1)
     : [];
   let bi = 0;
@@ -3178,6 +3583,153 @@ function renderMessages(conv, scrollToBottom = false) {
   if (bi < blocked.length) frag.appendChild(makeBlockedNode(blocked.length - bi));
   container.appendChild(frag);
   if (atBottom) container.scrollTop = container.scrollHeight;
+}
+
+// ── forum rendering ────────────────────────────────────────────────────────
+function forumBlocked(conv) {
+  return (filteredMsgs.get(conv.name) || []);
+}
+
+function renderForumIndex(conv, container) {
+  const blocked = forumBlocked(conv);
+  const { roots, children, byId, blockedByParent, topLevelBlocked } = buildForumTree(conv.messages, blocked);
+  roots.sort((a, b) => latestActivityMs(b.block_id, byId, children) - latestActivityMs(a.block_id, byId, children));
+  const frag = document.createDocumentFragment();
+  for (const m of roots) frag.appendChild(makeForumCard(m, children, byId, blockedByParent, conv));
+  if (topLevelBlocked > 0) {
+    const chip = document.createElement('div');
+    chip.className = 'forum-blocked-chip';
+    chip.textContent = `⛔ ${topLevelBlocked} blocked post${topLevelBlocked === 1 ? '' : 's'} hidden`;
+    frag.appendChild(chip);
+  }
+  container.appendChild(frag);
+}
+
+function makeForumCard(m, children, byId, blockedByParent, conv) {
+  const div = document.createElement('div');
+  div.className = 'forum-card';
+  const { subject, body } = parseForumContent(m);
+  const replies = countDescendants(m.block_id, children);
+  const blockedCount = countBlockedInSubtree(m.block_id, children, blockedByParent);
+  const snippet = body ? body.slice(0, 140).replace(/\n/g, ' ') : '';
+  const blockedBadge = blockedCount > 0
+    ? `<span class="fc-blocked">⛔ ${blockedCount} blocked</span>` : '';
+  div.innerHTML = `
+    <div class="fc-subject">${esc(subject || '(no subject)')}</div>
+    ${snippet ? `<div class="fc-snippet">${esc(snippet)}${body.length > 140 ? '…' : ''}</div>` : ''}
+    <div class="fc-meta">
+      ${renderSenderMeta(m)}
+      ${renderTimeMeta(m)}
+      <span class="fc-replies">${replies} repl${replies === 1 ? 'y' : 'ies'}</span>
+      ${blockedBadge}
+      ${signalBars(m.work_factor || 0)}
+    </div>`;
+  const barsEl = div.querySelector('.pow-widget');
+  if (boostingIds.has(m.block_id)) barsEl.dataset.boosting = '1';
+  barsEl.addEventListener('click', e => { e.stopPropagation(); handleBoost(barsEl, m); });
+  div.addEventListener('click', () => {
+    forumThreadId = m.block_id;
+    forumReplyTo  = null;
+    renderMessages(conv, false);
+    renderCompose(conv);
+  });
+  return div;
+}
+
+function renderForumThread(conv, container) {
+  const blocked = forumBlocked(conv);
+  const { children, byId, gapLevel, blockedByParent } = buildForumTree(conv.messages, blocked);
+  const root = byId.get(forumThreadId);
+  if (!root) {
+    forumThreadId = null;
+    renderForumIndex(conv, container);
+    return;
+  }
+  const backDiv = document.createElement('div');
+  backDiv.className = 'forum-thread-back';
+  backDiv.innerHTML = '<button class="sm ghost">← Back to index</button>';
+  backDiv.querySelector('button').addEventListener('click', () => {
+    forumThreadId = null;
+    forumReplyTo  = null;
+    renderMessages(conv, false);
+    renderCompose(conv);
+  });
+  container.appendChild(backDiv);
+  const frag = document.createDocumentFragment();
+  renderForumNode(root, children, gapLevel, blockedByParent, frag, 0, conv);
+  container.appendChild(frag);
+}
+
+function makeForumGapNode(m, level) {
+  const div = document.createElement('div');
+  div.className = 'forum-gap-node';
+  const missingId = m.thread_refs?.[0]?.slice(0, 12) + '…';
+  let label;
+  if (level === -1)     label = `╌ no known ancestry`;
+  else if (level === 1) label = `╌ parent not received (${missingId})`;
+  else                  label = `╌ ~${2 ** (level - 1)}+ posts missing`;
+  div.textContent = label;
+  return div;
+}
+
+function renderForumNode(m, children, gapLevel, blockedByParent, container, depth, conv) {
+  const { subject, body } = parseForumContent(m);
+  const isRoot = depth === 0;
+  const indent = Math.min(depth, 5) * 20;
+  const gap    = gapLevel.get(m.block_id) || 0;
+
+  // Gap indicator above this node when it was attached via skip list
+  if (gap !== 0) container.appendChild(makeForumGapNode(m, gap));
+
+  const div = document.createElement('div');
+  div.className = 'forum-node';
+  div.dataset.depth = depth;
+  div.style.marginLeft = indent + 'px';
+
+  const post = document.createElement('div');
+  post.className = 'forum-post' + (isRoot ? ' forum-root' : '');
+  post.innerHTML = `
+    <div class="fp-meta">
+      ${renderSenderMeta(m)}
+      ${renderTimeMeta(m)}
+    </div>
+    ${isRoot && subject ? `<div class="fp-subject">${esc(subject)}</div>` : ''}
+    <div class="fp-body">${esc(body || (isRoot ? '' : subject))}</div>
+    <div class="fp-actions">
+      <button class="sm ghost fp-reply-btn">Reply</button>
+      ${signalBars(m.work_factor || 0)}
+    </div>`;
+
+  const replyBtn = post.querySelector('.fp-reply-btn');
+  if (forumReplyTo === m.block_id) replyBtn.classList.add('active');
+  replyBtn.addEventListener('click', () => {
+    forumReplyTo = m.block_id;
+    renderCompose(conv);
+    el('compose-body').focus();
+    container.closest('#conv-messages')?.querySelectorAll('.fp-reply-btn')
+      .forEach(b => b.classList.toggle('active', b === replyBtn));
+  });
+
+  const barsEl = post.querySelector('.pow-widget');
+  if (boostingIds.has(m.block_id)) barsEl.dataset.boosting = '1';
+  barsEl.addEventListener('click', () => handleBoost(barsEl, m));
+
+  div.appendChild(post);
+  container.appendChild(div);
+
+  for (const child of (children.get(m.block_id) || [])) {
+    renderForumNode(child, children, gapLevel, blockedByParent, container, depth + 1, conv);
+  }
+
+  // Blocked replies under this node
+  const nBlocked = blockedByParent.get(m.block_id) || 0;
+  if (nBlocked > 0) {
+    const chip = document.createElement('div');
+    chip.className = 'forum-blocked-chip';
+    chip.style.marginLeft = (Math.min(depth + 1, 5) * 20) + 'px';
+    chip.textContent = `⛔ ${nBlocked} blocked repl${nBlocked === 1 ? 'y' : 'ies'}`;
+    container.appendChild(chip);
+  }
 }
 
 function makeGapNode(blockId) {
@@ -3228,7 +3780,7 @@ function makeMsgRow(m, {hasPred, hasSucc, isFork, forkFirst, forkLast, isChained
         <span class="msg-block-id">${m.block_id.slice(0,12)}…</span>
         ${signalBars(m.work_factor || 0)}
       </div>
-      <div class="msg-content ${m.msg_type === 1 ? 'binary' : m.msg_type === 2 ? 'system' : ''}">${renderContent(m)}</div>
+      <div class="msg-content ${m.msg_type === 1 ? 'binary' : m.msg_type === 2 ? 'system' : m.msg_type === 3 ? 'forum' : ''}">${renderContent(m)}</div>
     </div>`;
 
   const senderEl = div.querySelector('[data-snk-uri]');
@@ -3285,7 +3837,7 @@ function toggleSnkCard(senderEl) {
 
 function renderSenderMeta(m) {
   if (!m.sender_pub) return '<span class="msg-sender anon">anon</span>';
-  const {claimedName, powStamp} = parseSnkHeader(m.content_text, m.sender_pub);
+  const {claimedName, powStamp} = parseSnkHeader(snkHeaderText(m), m.sender_pub);
   const knownName = resolveByPub(m.sender_pub);
   const name = knownName || claimedName || (m.sender_pub.slice(0, 8) + '…');
   const powBadge = powStamp ? ' <span class="pow-badge" title="Identity has proof-of-work stamp">⚡</span>' : '';
@@ -3341,6 +3893,10 @@ async function handleBoost(barsEl, m) {
 
 function renderContent(m) {
   if (m.msg_type === 1) return `[binary, ${b64byteLen(m.content)} bytes]`;
+  if (m.msg_type === 3) {
+    const {subject, body} = parseForumContent(m);
+    return `<strong class="forum-subject">${esc(subject || '(no subject)')}</strong>${esc(body)}`;
+  }
   const {bodyText} = parseSnkHeader(m.content_text, m.sender_pub);
   return esc(bodyText);
 }
@@ -3356,8 +3912,27 @@ function renderCompose(conv) {
   el('compose-area').classList.remove('hidden');
   el('compose-extra').innerHTML = '';
   resetCompose();
-  if (conv.kind === 'channel') renderComposeChannel(conv);
-  else renderComposeDirect(conv);
+  if (conv.kind === 'forum')        renderComposeForum(conv);
+  else if (conv.kind === 'channel') renderComposeChannel(conv);
+  else                              renderComposeDirect(conv);
+}
+
+function renderComposeForum(conv) {
+  const asSuffix = activeIdentity ? ` · as <span class="ctx-val">${esc(activeIdentity.name)}</span>` : '';
+  if (!forumThreadId) {
+    // Index: compose a new top-level post
+    el('compose-ctx').innerHTML = `new post in <span class="ctx-val">§${esc(convDisplayName(conv))}</span>` + asSuffix;
+    el('compose-extra').innerHTML = `
+      <div class="compose-row">
+        <input id="forum-subject" placeholder="Subject" style="font-size:13px" autocomplete="off">
+      </div>`;
+  } else {
+    // Thread: reply to forumReplyTo or the root post
+    const target = forumReplyTo || forumThreadId;
+    el('compose-ctx').innerHTML = `replying to <span class="ctx-val">${target.slice(0,12)}…</span>` + asSuffix;
+    el('compose-extra').innerHTML = '';
+  }
+  el('send-btn').dataset.mode = 'forum';
 }
 
 function renderComposeChannel(conv) {
@@ -3392,6 +3967,10 @@ function updateComposeHead(conv) {
   if (conv.kind === 'channel') {
     const asSuffix = activeIdentity ? ` · as <span class="ctx-val">${esc(activeIdentity.name)}</span>` : '';
     ctx.innerHTML = `composing after: <span class="ctx-val">${head.slice(0,12)}…</span>${asSuffix}`;
+  } else if (conv.kind === 'forum' && forumThreadId) {
+    const asSuffix = activeIdentity ? ` · as <span class="ctx-val">${esc(activeIdentity.name)}</span>` : '';
+    const target = forumReplyTo || forumThreadId;
+    ctx.innerHTML = `replying to <span class="ctx-val">${target.slice(0,12)}…</span>${asSuffix}`;
   }
 }
 
@@ -3486,7 +4065,7 @@ function openNewMsg(prefilledKey = null) {
 }
 
 // ── optimistic send ────────────────────────────────────────────────────────
-function injectOptimisticMsg(blockId, body, channelName, sentTo, head) {
+function injectOptimisticMsg(blockId, body, channelName, sentTo, head, msgType = 0) {
   if (!blockId || byBlock.has(blockId)) return;
   const now = new Date().toISOString();
   const enc = new TextEncoder().encode(body);
@@ -3496,7 +4075,7 @@ function injectOptimisticMsg(blockId, body, channelName, sentTo, head) {
     block_id: blockId,
     channel: channelName || null,
     sender_pub: activeIdentity?.public_key || '',
-    msg_type: 0,
+    msg_type: msgType,
     content,
     content_text: body,
     thread_refs: head ? [head] : [],
@@ -3534,6 +4113,16 @@ async function send() {
       const result = await backend.sendChannel(conv.name, body, senderName, head || null);
       resetCompose();
       injectOptimisticMsg(result?.blockId, body, conv.name, null, head);
+
+    } else if (mode === 'forum') {
+      const conv    = currentView;
+      const replyTo = forumThreadId ? (forumReplyTo || forumThreadId) : null;
+      const subject = el('forum-subject')?.value.trim() || '';
+      const fullBody = subject ? subject + '\n' + body : body;
+      const result  = await backend.sendForum(conv.name, body, subject, senderName, replyTo);
+      resetCompose();
+      forumReplyTo = null;
+      injectOptimisticMsg(result?.blockId, fullBody, conv.name, null, replyTo, 3);
 
     } else if (mode === 'direct') {
       const conv = currentView;
@@ -3940,6 +4529,23 @@ async function loadChannels() {
 }
 
 
+async function joinDefaultForum(name) {
+  const key = 'forum:' + name;
+  const existing = conversations.find(c => c.kind === 'forum' && c.name === key);
+  if (existing) { openConversation(existing); return; }
+  try {
+    await backend.joinChannel(key, key);
+  } catch(e) {
+    if (e.message !== 'duplicate') { toast('Failed to join forum.', true); return; }
+  }
+  unhideConv({kind: 'forum', name: key});
+  await loadChannels();
+  rebuildConversations();
+  renderSidebar();
+  const conv = conversations.find(c => c.kind === 'forum' && c.name === key);
+  if (conv) openConversation(conv);
+}
+
 async function joinDefaultChannel(name) {
   const existing = conversations.find(c => c.kind === 'channel' && c.name === name);
   if (existing) { openConversation(existing); return; }
@@ -3988,6 +4594,45 @@ async function removeChannel(name) {
   rebuildConversations();
   renderSidebar();
   toast(`Left channel "${name}".`);
+}
+
+async function addForum() {
+  const name = el('new-forum-name').value.trim().toLowerCase();
+  if (!name) { toast('Enter a forum name.', true); return; }
+  const nameErr = validateName(name);
+  if (nameErr) { toast(nameErr, true); return; }
+  const key = 'forum:' + name;
+  try {
+    await backend.joinChannel(key, key);
+  } catch(e) {
+    if (e.message !== 'duplicate') {
+      toast('Failed to join forum.', true); return;
+    }
+  }
+  el('new-forum-name').value = '';
+  el('sb-forum-form').classList.add('hidden');
+  unhideConv({kind: 'forum', name: key});
+  await loadChannels();
+  rebuildConversations();
+  renderSidebar();
+  const newConv = conversations.find(c => c.kind === 'forum' && c.name === key);
+  if (newConv) openConversation(newConv);
+  toast(`Joined forum "${name}".`);
+}
+
+async function leaveForum(name) {
+  const displayName = name.startsWith('forum:') ? name.slice(6) : name;
+  forumChannels.delete(displayName);
+  saveForumChannels();
+  try {
+    await backend.leaveChannel(name);
+  } catch {
+    toast('Failed to leave forum.', true); return;
+  }
+  await loadChannels();
+  rebuildConversations();
+  renderSidebar();
+  toast(`Left forum "${displayName}".`);
 }
 
 function showQR(uri, label) {
@@ -4124,8 +4769,8 @@ function updateTitle() {
 }
 
 function convForMsg(m) {
-  if (m.channel) return conversations.find(c => c.kind === 'channel' && c.name === m.channel);
-  return conversations.find(c => c.kind !== 'channel' && (c.pub === m.sender_pub || c.pub === m.sent_to));
+  if (m.channel) return conversations.find(c => (c.kind === 'channel' || c.kind === 'forum') && c.name === m.channel);
+  return conversations.find(c => c.kind !== 'channel' && c.kind !== 'forum' && (c.pub === m.sender_pub || c.pub === m.sent_to));
 }
 
 function maybeNotify(newMsgs) {
@@ -4133,13 +4778,13 @@ function maybeNotify(newMsgs) {
   const novel = newMsgs.filter(m => {
     if (m.sent_to) return false;
     if (!currentView) return true;
-    if (currentView.kind === 'channel') return m.channel !== currentView.name;
+    if (currentView.kind === 'channel' || currentView.kind === 'forum') return m.channel !== currentView.name;
     if (currentView.kind === 'direct')  return m.sender_pub !== currentView.pub;
     return true;
   });
   if (!novel.length) return;
   const conv      = convForMsg(novel[0]);
-  const convLabel = conv ? (conv.kind === 'channel' ? `#${conv.name}` : conv.name) : null;
+  const convLabel = conv ? (conv.kind === 'channel' ? `#${conv.name}` : convDisplayName(conv)) : null;
   const body      = novel.length === 1
     ? (convLabel ? `New message in ${convLabel}` : 'New message')
     : `${novel.length} new messages${convLabel ? ` in ${convLabel}` : ''}`;

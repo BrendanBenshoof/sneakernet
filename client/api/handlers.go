@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
@@ -290,7 +291,13 @@ func (s *Server) buildMsgResp(m client.Message) msgResp {
 		resp.WorkFactor = wf
 	}
 	if m.SenderPub != ([32]byte{}) {
-		resp.IdPowBits = s.getIdPowBits(m.Content, m.SenderPub)
+		content := m.Content
+		if m.MsgType == client.MsgTypePost {
+			if nl := bytes.IndexByte(content, '\n'); nl >= 0 {
+				content = content[nl+1:]
+			}
+		}
+		resp.IdPowBits = s.getIdPowBits(content, m.SenderPub)
 	}
 	return resp
 }
@@ -729,6 +736,8 @@ func (s *Server) handleSendChannel(w http.ResponseWriter, r *http.Request) {
 		Message        string `json:"message"`
 		SenderIdentity string `json:"sender_identity"`
 		ReplyToBlockID string `json:"reply_to_block_id"`
+		ForumPost      bool   `json:"forum_post,omitempty"`
+		Subject        string `json:"subject,omitempty"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -758,9 +767,18 @@ func (s *Server) handleSendChannel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	mp := client.MessagePayload{
-		MsgType:   client.MsgTypeText,
 		Timestamp: time.Now().Unix(),
-		Content:   []byte(req.Message),
+	}
+	if req.ForumPost {
+		mp.MsgType = client.MsgTypePost
+		if req.Subject != "" {
+			mp.Content = []byte(req.Subject + "\n" + req.Message)
+		} else {
+			mp.Content = []byte(req.Message)
+		}
+	} else {
+		mp.MsgType = client.MsgTypeText
+		mp.Content = []byte(req.Message)
 	}
 
 	var signerID *client.Identity
