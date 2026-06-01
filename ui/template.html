@@ -1719,6 +1719,7 @@ async function loadMessages() {
       continue;
     }
     m.content_text = b64toText(m.content);
+    if (!m.sender_pub && m.content_text?.startsWith('snk-pow-gift:')) continue;
     allMessages.push(m);
     byBlock.set(m.block_id, m);
     fresh.push(m);
