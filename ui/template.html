@@ -1654,7 +1654,7 @@ async function loadMessages() {
   rebuildConversations();
   if (currentView) rerenderCurrentView();
   renderSidebar();
-  maybeNotify(msgs);
+  maybeNotify(fresh);
 }
 
 // For forum posts (msg_type 3), the snk: identity header lives in the body
@@ -3425,6 +3425,7 @@ function maybeNotify(newMsgs) {
   if (!_notifsEnabled || !document.hidden) return;
   const novel = newMsgs.filter(m => {
     if (m.sent_to) return false;
+    if (identities.some(id => id.public_key === m.sender_pub)) return false;
     if (!currentView) return true;
     if (currentView.kind === 'channel' || currentView.kind === 'forum') return m.channel !== currentView.name;
     if (currentView.kind === 'direct')  return m.sender_pub !== currentView.pub;
