@@ -126,8 +126,11 @@ class ServerBackend {
     if (!r || !r.ok) throw new Error('failed');
   }
 
-  async scrape(full = false) {
-    const r = await this._req('POST', '/api/scrape', full ? {full: true} : undefined);
+  async scrape(full = false, sinceUnix = 0) {
+    const body = {};
+    if (full) body.full = true;
+    if (sinceUnix > 0) body.since_unix = sinceUnix;
+    const r = await this._req('POST', '/api/scrape', Object.keys(body).length ? body : undefined);
     if (!r || !r.ok) throw new Error('failed');
     return await r.json(); // {found: N}
   }

@@ -403,10 +403,14 @@ func (s *Server) handleGetMessage(w http.ResponseWriter, r *http.Request) {
 
 // POST /api/scrape
 // Scans all new blocks and attempts decryption with every stored identity.
-// Optional body: {"full": true} resets the checkpoint so all blocks are rescanned.
+// Optional body fields:
+//   - "full": true  — resets the checkpoint so blocks are rescanned from since_unix (or epoch if 0).
+//   - "since_unix": N — on first run (checkpoint = 0), advances the checkpoint to N so the initial
+//     scan is limited to recent blocks. On a full rescan, resets the checkpoint to N instead of epoch.
 func (s *Server) handleScrape(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Full bool `json:"full"`
+		Full      bool  `json:"full"`
+		SinceUnix int64 `json:"since_unix"`
 	}
 	// Body is optional; ignore decode errors (e.g. empty body).
 	json.NewDecoder(r.Body).Decode(&req) //nolint:errcheck
@@ -419,9 +423,27 @@ func (s *Server) handleScrape(w http.ResponseWriter, r *http.Request) {
 	s.mu.RUnlock()
 
 	if req.Full {
-		if err := s.msgs.SetCheckpoint(time.Time{}); err != nil {
+		resetTo := time.Time{}
+		if req.SinceUnix > 0 {
+			resetTo = time.Unix(req.SinceUnix, 0)
+		}
+		if err := s.msgs.SetCheckpoint(resetTo); err != nil {
 			writeError(w, http.StatusInternalServerError, "reset checkpoint: "+err.Error())
 			return
+		}
+	} else if req.SinceUnix > 0 {
+		// First-run: if checkpoint has never been set, advance it to the requested window start
+		// so the initial scan doesn't process the entire block history.
+		current, err := s.msgs.GetCheckpoint()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "get checkpoint: "+err.Error())
+			return
+		}
+		if current.IsZero() {
+			if err := s.msgs.SetCheckpoint(time.Unix(req.SinceUnix, 0)); err != nil {
+				writeError(w, http.StatusInternalServerError, "set checkpoint: "+err.Error())
+				return
+			}
 		}
 	}
 
