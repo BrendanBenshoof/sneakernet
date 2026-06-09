@@ -572,7 +572,8 @@ func (pt *peerTracker) syncOne(ctx context.Context, store blockstore.Store, u st
 	c := relay.NewClient(u)
 
 	pullStart := time.Now()
-	n, err := c.Pull(ctx, store, powFloor, pullSince)
+	pulledIDs, err := c.Pull(ctx, store, powFloor, pullSince)
+	n := len(pulledIDs)
 
 	pt.mu.Lock()
 	if st, ok := pt.known[u]; ok {
@@ -618,8 +619,13 @@ func (pt *peerTracker) syncOne(ctx context.Context, store blockstore.Store, u st
 		}
 	}
 
+	skipSet := make(map[blockstore.ID]struct{}, len(pulledIDs))
+	for _, id := range pulledIDs {
+		skipSet[id] = struct{}{}
+	}
+
 	pushStart := time.Now()
-	if n, err := c.Push(ctx, store, powFloor, pushSince); err != nil {
+	if n, err := c.Push(ctx, store, powFloor, pushSince, skipSet); err != nil {
 		log.Printf("sync push %s: %v", u, err)
 	} else {
 		if n > 0 {

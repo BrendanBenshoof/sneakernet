@@ -263,19 +263,19 @@ func (c *Client) GetPowLimit(ctx context.Context) (int, error) {
 
 // Pull fetches all blocks from the relay that are not in localStore.
 // It builds a bloom filter of local blocks, calls Delta, then fetches and
-// stores each missing block. Returns the count of newly stored blocks.
-func (c *Client) Pull(ctx context.Context, localStore blockstore.Store, powFloor int, since time.Time) (int, error) {
+// stores each missing block. Returns the IDs of newly stored blocks.
+func (c *Client) Pull(ctx context.Context, localStore blockstore.Store, powFloor int, since time.Time) ([]blockstore.ID, error) {
 	bloom, err := BloomOfStore(localStore)
 	if err != nil {
-		return 0, fmt.Errorf("relay pull: build bloom: %w", err)
+		return nil, fmt.Errorf("relay pull: build bloom: %w", err)
 	}
 
 	missing, err := c.Delta(ctx, bloom, powFloor, since)
 	if err != nil {
-		return 0, fmt.Errorf("relay pull: delta: %w", err)
+		return nil, fmt.Errorf("relay pull: delta: %w", err)
 	}
 
-	var stored int
+	var stored []blockstore.ID
 	for _, id := range missing {
 		if err := ctx.Err(); err != nil {
 			return stored, err
@@ -284,10 +284,11 @@ func (c *Client) Pull(ctx context.Context, localStore blockstore.Store, powFloor
 		if err != nil {
 			continue // relay may have pruned it between delta and get
 		}
-		if _, err := localStore.Put(stamp, payload, c.tag); err != nil {
+		storedID, err := localStore.Put(stamp, payload, c.tag)
+		if err != nil {
 			return stored, fmt.Errorf("relay pull: store block: %w", err)
 		}
-		stored++
+		stored = append(stored, storedID)
 	}
 	return stored, nil
 }
@@ -295,8 +296,10 @@ func (c *Client) Pull(ctx context.Context, localStore blockstore.Store, powFloor
 // Push uploads all local blocks meeting powFloor to the relay.
 // Blocks the relay already holds are silently accepted by the relay's
 // INSERT OR REPLACE, so this is safe to call repeatedly.
+// skip is an optional set of block IDs to exclude from the upload (e.g. blocks
+// just pulled from this same peer in the current sync round).
 // Returns the count of blocks successfully uploaded.
-func (c *Client) Push(ctx context.Context, localStore blockstore.Store, powFloor int, since time.Time) (int, error) {
+func (c *Client) Push(ctx context.Context, localStore blockstore.Store, powFloor int, since time.Time, skip map[blockstore.ID]struct{}) (int, error) {
 	relayPow, err := c.GetPowLimit(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("relay push: %w", err)
@@ -316,6 +319,11 @@ func (c *Client) Push(ctx context.Context, localStore blockstore.Store, powFloor
 			return uploaded, fmt.Errorf("relay push: list: %w", err)
 		}
 		for _, ref := range refs {
+			if skip != nil {
+				if _, ok := skip[ref.ID]; ok {
+					continue
+				}
+			}
 			stamp, payload, err := localStore.Get(ref.ID)
 			if err != nil {
 				continue // expired between list and get

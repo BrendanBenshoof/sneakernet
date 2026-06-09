@@ -212,21 +212,21 @@ func TestPull(t *testing.T) {
 	remoteStore.Put(stamp1, payload1, blockstore.TagPhysical)
 	remoteStore.Put(stamp2, payload2, blockstore.TagPhysical)
 
-	n, err := client.Pull(context.Background(), localStore, 0, time.Time{})
+	ids, err := client.Pull(context.Background(), localStore, 0, time.Time{})
 	if err != nil {
 		t.Fatalf("Pull: %v", err)
 	}
-	if n != 2 {
-		t.Fatalf("expected 2 blocks pulled, got %d", n)
+	if len(ids) != 2 {
+		t.Fatalf("expected 2 blocks pulled, got %d", len(ids))
 	}
 
 	// Second pull should find nothing new.
-	n, err = client.Pull(context.Background(), localStore, 0, time.Time{})
+	ids, err = client.Pull(context.Background(), localStore, 0, time.Time{})
 	if err != nil {
 		t.Fatalf("Pull (second): %v", err)
 	}
-	if n != 0 {
-		t.Fatalf("expected 0 blocks on second pull, got %d", n)
+	if len(ids) != 0 {
+		t.Fatalf("expected 0 blocks on second pull, got %d", len(ids))
 	}
 }
 
@@ -239,7 +239,7 @@ func TestPush(t *testing.T) {
 	localStore.Put(stamp1, payload1, blockstore.TagPhysical)
 	localStore.Put(stamp2, payload2, blockstore.TagPhysical)
 
-	n, err := client.Push(context.Background(), localStore, 0, time.Time{})
+	n, err := client.Push(context.Background(), localStore, 0, time.Time{}, nil)
 	if err != nil {
 		t.Fatalf("Push: %v", err)
 	}
