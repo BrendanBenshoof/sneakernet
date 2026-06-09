@@ -1311,6 +1311,21 @@
             <option value="0">Manual only</option>
           </select>
         </div>
+        <div class="setting-row">
+          <div class="setting-info">
+            <div class="label">Scan window</div>
+            <div class="desc">How far back to look on first scan or full rescan. Increase to catch older messages.</div>
+          </div>
+          <select id="setting-scan-window" style="width:auto;font-size:12px;padding:5px 24px 5px 9px">
+            <option value="7">1 week</option>
+            <option value="14">2 weeks</option>
+            <option value="30">1 month</option>
+            <option value="90">3 months</option>
+            <option value="180">6 months</option>
+            <option value="365">1 year</option>
+            <option value="0">All time</option>
+          </select>
+        </div>
       </div>
     </div>
   </div>
@@ -1565,6 +1580,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const idleMs = getIdleRefreshMs();
     if (idleMs > 0) autoScrapeTimer = setTimeout(scrape, idleMs);
   });
+  el('setting-scan-window').addEventListener('change', function () {
+    localStorage.setItem('snk_scan_window_days', this.value);
+  });
   el('mobile-back').addEventListener('click', openSidebar);
 
   el('send-btn').addEventListener('click', send);
@@ -1697,15 +1715,21 @@ async function onboardCreate() {
 // ── scrape ─────────────────────────────────────────────────────────────────
 let autoScrapeTimer = null;
 
+function getScanWindowDays() {
+  return parseInt(localStorage.getItem('snk_scan_window_days') || '7', 10);
+}
+
 async function scrape(full = false) {
   clearTimeout(autoScrapeTimer);
   const btn = el('scrape-btn');
   btn.disabled = true;
   btn.innerHTML = `<span class="glyph">&#x27F3;</span> ${full ? 'Full scan…' : 'Scanning…'}`;
   setStatus(full ? 'Full rescan — checking all blocks…' : 'Scanning blocks…');
+  const days = getScanWindowDays();
+  const sinceUnix = days > 0 ? Math.floor(Date.now() / 1000) - days * 86400 : 0;
   let found = 0;
   try {
-    ({found} = await backend.scrape(full));
+    ({found} = await backend.scrape(full, sinceUnix));
     setStatus(`Scan complete — ${found} new message${found === 1 ? '' : 's'}.`, found > 0 ? 'ok' : '');
     if (full) { allMessages = []; byBlock.clear(); }
     await loadMessages();
@@ -3868,6 +3892,7 @@ function openSettings() {
   el('setting-pow-floor').value        = _powFloor;
   el('setting-pow-floor-val').textContent = _powFloor;
   el('setting-refresh').value         = localStorage.getItem('snk_refresh_idle') || '30';
+  el('setting-scan-window').value     = localStorage.getItem('snk_scan_window_days') || '7';
 
   renderSidebar();
 }
