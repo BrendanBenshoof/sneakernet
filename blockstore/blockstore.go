@@ -28,10 +28,11 @@ type Payload = [PayloadSize]byte
 type Tag uint8
 
 const (
-	TagPhysical Tag = iota // physical sneakernet (USB, QR, locally authored)
-	TagLan                 // same local network
-	TagRegional            // regional peer
-	TagGlobal              // internet relay
+	TagPhysical  Tag = iota // physical sneakernet (USB, QR, locally authored)
+	TagLan                  // same local network
+	TagRegional             // regional peer
+	TagGlobal               // internet relay
+	TagBluetooth            // Android Bluetooth peer exchange
 )
 
 // BlockRef is a lightweight handle returned by ListBlocks.

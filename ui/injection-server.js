@@ -226,6 +226,39 @@ class ServerBackend {
     const d = await r.json();
     return d.work_factor ?? null;
   }
+
+  async fetchStatus() {
+    const r = await fetch('/api/status');
+    if (!r.ok) return {active_bt_sessions: 0, peers: []};
+    return r.json();
+  }
+
+  async syncNow() {
+    const r = await this._req('POST', '/api/sync');
+    if (r && !r.ok) throw new Error('Sync failed');
+  }
+
+  async addPeer(url) {
+    const r = await this._req('POST', '/api/peers', {url});
+    if (!r) throw new Error('auth required');
+    if (r.status === 409) throw new Error('Peer already known');
+    if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || 'Failed to add peer'); }
+  }
+
+  async removePeer(b64url) {
+    const r = await this._req('DELETE', `/api/peers/${b64url}`);
+    if (r && !r.ok) throw new Error('Failed to remove peer');
+  }
+
+  async blockPeer(b64url) {
+    const r = await this._req('POST', `/api/peers/${b64url}/block`);
+    if (r && !r.ok) throw new Error('Failed to block peer');
+  }
+
+  async unblockPeer(b64url) {
+    const r = await this._req('POST', `/api/peers/${b64url}/unblock`);
+    if (r && !r.ok) throw new Error('Failed to unblock peer');
+  }
 }
 
 const backend = new ServerBackend();
@@ -235,6 +268,7 @@ const UI_CONFIG = {
   lockSubtitle:    'Local Node — server-side crypto, persistent keystore',
   sidebarSubtitle: 'Local Node',
   hasLockButton:   true,
+  hasPeers:        true,
   identitiesHint:  'Stored in the server-side encrypted keystore. Share your <strong>public key</strong> so others can send you messages and verify your identity — one key does both.',
   sendStatusMsg:   'Message stored in blockstore.',
   welcomeHtml:     '<div><p>Select a conversation from the sidebar, or click <strong>+</strong> to send a new message.</p><div style="margin-top:12px"><button class="sm ghost" data-join-forum="sneakernet-alpha">§sneakernet-alpha &rarr;</button></div></div>',

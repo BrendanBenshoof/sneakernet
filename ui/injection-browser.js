@@ -1468,6 +1468,7 @@ const UI_CONFIG = {
   lockSubtitle:    'Browser — client-side crypto, keys encrypted at rest',
   sidebarSubtitle: 'Browser',
   hasLockButton:   true,
+  hasPeers:        false,
   identitiesHint:  'Keys generated in your browser. Private keys are encrypted in IndexedDB with your vault password — they live in memory only while unlocked. Share your <strong>public key</strong> so others can send you messages and verify your identity — one key does both.',
   sendStatusMsg:   'Block stored on relay.',
   welcomeHtml: `<div style="max-width:520px;text-align:left">

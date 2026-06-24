@@ -113,7 +113,9 @@ type BadgerStore struct {
 
 // OpenBadger opens (or creates) a BadgerDB blockstore at dir.
 func OpenBadger(dir string) (*BadgerStore, error) {
-	opts := badger.DefaultOptions(dir).WithLogger(nil)
+	opts := badger.DefaultOptions(dir).
+		WithLogger(nil).
+		WithValueLogFileSize(64 << 20) // 64 MiB; default (1 GiB) pre-allocates the full vlog file on f2fs
 	db, err := badger.Open(opts)
 	if err != nil {
 		return nil, fmt.Errorf("blockstore: badger open: %w", err)
@@ -137,6 +139,22 @@ func (s *BadgerStore) WithStorageLimit(bytes int64) *BadgerStore {
 func (s *BadgerStore) WithReservations(r map[Tag]int64) *BadgerStore {
 	s.reservations = r
 	return s
+}
+
+// DiskUsageBytes returns the current approximate on-disk size of the blockstore
+// (LSM tree + value log combined). Safe to call from any goroutine.
+func (s *BadgerStore) DiskUsageBytes() int64 {
+	lsm, vlog := s.db.Size()
+	return lsm + vlog
+}
+
+// StorageLimitBytes returns the configured storage limit.
+// If no explicit limit was set, returns the default (10 GiB).
+func (s *BadgerStore) StorageLimitBytes() int64 {
+	if s.storageLimit == 0 {
+		return defaultStorageLimit
+	}
+	return s.storageLimit
 }
 
 func (s *BadgerStore) blockKey(id ID) []byte {

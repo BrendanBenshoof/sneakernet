@@ -26,6 +26,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/brendanbenshoof/sneakernet/blockstore"
 	"github.com/brendanbenshoof/sneakernet/client"
@@ -33,6 +34,30 @@ import (
 
 //go:embed ui/index.html
 var indexHTML []byte
+
+// PeerInfo is the JSON representation of a tracked internet relay peer.
+type PeerInfo struct {
+	URL        string     `json:"url"`
+	Source     string     `json:"source"` // "manual", "lan", "bluetooth", "gossip"
+	Blocked    bool       `json:"blocked"`
+	AddedAt    time.Time  `json:"added_at"`
+	LastSync   *time.Time `json:"last_sync,omitempty"`
+	Failures   int        `json:"failures,omitempty"`
+	LastPulled int        `json:"last_pulled,omitempty"` // blocks received in last sync
+	LastPushed int        `json:"last_pushed,omitempty"` // blocks sent in last sync
+	LastError  string     `json:"last_error,omitempty"`  // non-empty when last sync had an error
+}
+
+// PeerManager is an optional interface for managing tracked relay peers.
+// Attach it via SetPeerManager; if not set, peer endpoints return 503.
+type PeerManager interface {
+	AddPeer(url, source string) bool
+	RemovePeer(url string)
+	BlockPeer(url string)
+	UnblockPeer(url string)
+	ListPeers() []PeerInfo
+	Save()
+}
 
 // Server is an HTTP API server wrapping the sneakernet client stack.
 // It implements http.Handler and can be passed directly to http.ListenAndServe.
@@ -45,6 +70,9 @@ type Server struct {
 	ks       *client.Keystore // nil when locked
 	scraper  *client.Client   // nil when locked
 	tokens   map[string]struct{}
+
+	peers  PeerManager    // optional; nil = peer management not configured
+	status StatusProvider // optional; nil = BT session count unavailable
 
 	scrapeMu   sync.Mutex // one scrape at a time
 	idPowCache sync.Map   // "senderPub:stamp" → int; caches expensive argon2 computation
@@ -63,6 +91,25 @@ func New(blocks blockstore.Store, msgs *client.MessageStore, keystorePath string
 	}
 	s.routes()
 	return s
+}
+
+// StatusProvider surfaces live node metrics (e.g. active Bluetooth sessions)
+// and allows triggering an immediate sync round.
+// Attach via SetStatusProvider; if not set, those fields are omitted.
+type StatusProvider interface {
+	ActiveBTSessions() int
+	SyncNow()
+}
+
+// SetStatusProvider attaches a status provider for /api/status.
+func (s *Server) SetStatusProvider(sp StatusProvider) {
+	s.status = sp
+}
+
+// SetPeerManager attaches a peer manager so the /api/peers endpoints work.
+// Must be called before the server starts serving.
+func (s *Server) SetPeerManager(pm PeerManager) {
+	s.peers = pm
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -107,6 +154,18 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/contacts", s.auth(s.handleAddContact))
 	s.mux.HandleFunc("DELETE /api/contacts/{pub_key}", s.auth(s.handleRemoveContact))
 	s.mux.HandleFunc("PATCH /api/contacts/{pub_key}", s.auth(s.handleRenameContact))
+
+	// Node status — no auth required.
+	s.mux.HandleFunc("GET /api/status", s.handleStatus)
+	// Manual sync trigger — auth required.
+	s.mux.HandleFunc("POST /api/sync", s.auth(s.handleSync))
+
+	// Peer management (optional — only functional when SetPeerManager is called).
+	s.mux.HandleFunc("GET /api/peers", s.handleListPeers)
+	s.mux.HandleFunc("POST /api/peers", s.auth(s.handleAddPeer))
+	s.mux.HandleFunc("DELETE /api/peers/{b64url}", s.auth(s.handleRemovePeer))
+	s.mux.HandleFunc("POST /api/peers/{b64url}/block", s.auth(s.handleBlockPeer))
+	s.mux.HandleFunc("POST /api/peers/{b64url}/unblock", s.auth(s.handleUnblockPeer))
 }
 
 // auth wraps a handler requiring a valid Bearer token.

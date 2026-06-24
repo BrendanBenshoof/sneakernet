@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Sneakernet</string>
+
+    <!-- Foreground service notification (persistent sync) -->
+    <string name="notif_channel_sync">Sneakernet sync</string>
+    <string name="notif_title_sync">Sneakernet</string>
+    <string name="notif_text_sync">Syncing with peers…</string>
+
+    <!-- Storage -->
+    <string name="storage_approaching_limit">Storage nearly full (%1$d%%) — old relay blocks will be removed automatically.</string>
+</resources>

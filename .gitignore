@@ -2,3 +2,12 @@
 /snk
 *.db
 keystore.json
+peers.json
+
+# Android
+android/local.properties
+android/.gradle/
+android/app/libs/mobile.aar
+android/app/libs/mobile-sources.jar
+android/app/build/
+android/build/

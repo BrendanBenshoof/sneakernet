@@ -120,6 +120,19 @@ func cmdNode(args []string) {
 	if *lanScan {
 		log.Printf("LAN scan enabled (port %d)", lan.Port)
 		peerSources = append(peerSources, lan.Discover(ctx, *syncInterval))
+
+		// Serve relay protocol on the LAN discovery port so other nodes and the
+		// Android app can find and sync with this node.
+		lanRelay := relay.NewServer(bs, *powFloor)
+		lanRelay.SetPeerSource(pt.nonPenalizedPeers)
+		lanRelay.SetPeerAdder(func(u string) { pt.addPeer(peerURL(u)) })
+		lanAddr := fmt.Sprintf("0.0.0.0:%d", lan.Port)
+		go func() {
+			if err := http.ListenAndServe(lanAddr, lanRelay); err != nil {
+				log.Printf("lan relay server stopped: %v", err)
+			}
+		}()
+		log.Printf("LAN relay listening at %s", lanAddr)
 	}
 
 	go pt.run(ctx, bs, mergePeers(ctx, peerSources...), *powFloor, *syncInterval, staticPeers, true)
@@ -129,6 +142,7 @@ func cmdNode(args []string) {
 	}
 
 	apiSrv := api.New(bs, ms, *keystoreFile)
+	apiSrv.SetStatusProvider(pt)
 	fmt.Printf("Sneakernet node running at http://%s\n", *apiAddr)
 	go func() {
 		if err := http.ListenAndServe(*apiAddr, apiSrv); err != nil {
@@ -458,6 +472,36 @@ type peerTracker struct {
 	known        map[string]*peerState
 	advertiseURL string // public URL to announce when saying hello to peers; empty = no announcement
 	peersFile    string // path to persist discovered peers across restarts; empty = no persistence
+
+	// set at the start of run() for use by SyncNow
+	syncCtx      context.Context
+	syncStore    blockstore.Store
+	syncPowFloor int
+}
+
+// ActiveBTSessions implements api.StatusProvider. Desktop nodes have no BT.
+func (pt *peerTracker) ActiveBTSessions() int { return 0 }
+
+// SyncNow implements api.StatusProvider. Kicks off an immediate sync round
+// with all non-penalized peers in parallel (one goroutine per peer).
+func (pt *peerTracker) SyncNow() {
+	pt.mu.Lock()
+	ctx := pt.syncCtx
+	store := pt.syncStore
+	powFloor := pt.syncPowFloor
+	var ready []string
+	for u, st := range pt.known {
+		if st.skipRounds == 0 {
+			ready = append(ready, u)
+		}
+	}
+	pt.mu.Unlock()
+	if ctx == nil {
+		return
+	}
+	for _, u := range ready {
+		go pt.syncOne(ctx, store, u, powFloor)
+	}
 }
 
 // loadPeers reads peer URLs from the cache file and adds them to the tracker.
@@ -643,6 +687,12 @@ func (pt *peerTracker) syncOne(ctx context.Context, store blockstore.Store, u st
 // syncs one peer in round-robin order rather than all peers at once, distributing
 // load across a dynamically-built relay list.
 func (pt *peerTracker) run(ctx context.Context, store blockstore.Store, peers <-chan string, powFloor int, interval time.Duration, staticPeers []string, rotate bool) {
+	pt.mu.Lock()
+	pt.syncCtx = ctx
+	pt.syncStore = store
+	pt.syncPowFloor = powFloor
+	pt.mu.Unlock()
+
 	pt.loadPeers()
 
 	for _, u := range staticPeers {

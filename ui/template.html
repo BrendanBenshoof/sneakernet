@@ -75,11 +75,13 @@
 
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+    html { height: 100%; }
+
     body {
       font-family: var(--sans);
       background: var(--bg);
       color: var(--text);
-      height: 100dvh;
+      height: 100%;
       display: flex;
       flex-direction: column;
       font-size: 14px;
@@ -950,9 +952,22 @@
       border-top: 1px solid var(--border);
       flex-shrink: 0;
       font-family: var(--mono);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
     }
-    #statusbar.ok  { color: var(--ok); }
-    #statusbar.err { color: var(--danger); }
+    #statusbar-msg { flex-shrink: 0; }
+    #statusbar-msg.ok  { color: var(--ok); }
+    #statusbar-msg.err { color: var(--danger); }
+    #statusbar-info {
+      color: var(--muted);
+      text-align: right;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #statusbar-info .info-err { color: var(--danger); }
 
     /* ── Toast ──────────────────────────────────────────────────────────── */
     #toast {
@@ -974,12 +989,34 @@
     }
     #toast.show { opacity: 1; }
 
-    /* ── Settings ────────────────────────────────────────────────────────── */
-    #panel-view, #settings-view {
+    /* ── Settings / Panels ───────────────────────────────────────────────── */
+    #panel-view, #settings-view, #network-view {
       padding: 22px;
       overflow-y: auto;
       flex: 1;
     }
+
+    /* ── Network / Peers view ────────────────────────────────────────────── */
+    .peer-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .peer-item:last-child { border-bottom: none; }
+    .peer-meta { flex: 1; min-width: 0; }
+    .peer-url  { font-size: 13px; color: var(--text); font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .peer-detail { font-size: 11px; color: var(--muted); margin-top: 3px; }
+    .peer-badge { font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 3px; display: inline-block; vertical-align: middle; }
+    .peer-badge.lan       { background: rgba(68,160,255,0.15); color: #44a0ff; }
+    .peer-badge.bluetooth { background: rgba(100,200,255,0.15); color: #64c8ff; }
+    .peer-badge.manual    { background: var(--accent-soft); color: var(--accent); }
+    .peer-badge.gossip    { background: rgba(138,130,112,0.15); color: var(--muted); }
+    .peer-badge.fail      { background: rgba(214,95,74,0.10); color: var(--danger); }
+    .peer-badge.blocked   { background: rgba(214,95,74,0.15); color: var(--danger); }
+    .peer-actions { display: flex; gap: 4px; flex-shrink: 0; align-items: flex-start; padding-top: 2px; }
+    .bt-session-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); margin-right: 6px; vertical-align: middle; }
 
     .setting-row {
       display: flex;
@@ -1240,6 +1277,22 @@
       </div>
     </div>
 
+    <!-- peers & connections panel -->
+    <div id="network-view" class="hidden">
+      <div class="panel-section">
+        <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:10px">
+          <h2 style="margin:0">Known Peers</h2>
+          <button class="sm" id="net-sync-btn">Sync now</button>
+        </div>
+        <div id="net-peers-list"></div>
+        <div class="row" style="margin-top:14px;gap:6px">
+          <input id="net-add-url" placeholder="http://192.168.x.x:8080 or relay URL" autocomplete="off" style="flex:1">
+          <button class="sm" id="net-add-btn">Add</button>
+        </div>
+        <div id="net-bt-status" class="hint" style="margin-top:10px"></div>
+      </div>
+    </div>
+
     <!-- settings panel -->
     <div id="settings-view" class="hidden">
       <div class="panel-section">
@@ -1355,7 +1408,7 @@
   </div>
 </div>
 
-<div id="statusbar">Ready</div>
+<div id="statusbar"><span id="statusbar-msg">Ready</span><span id="statusbar-info"></span></div>
 <div id="toast"></div>
 
 {{EXTRA_SCRIPTS}}
@@ -1370,7 +1423,46 @@
 const ZERO64 = '0'.repeat(64);
 const el = id => document.getElementById(id);
 function lockErr(msg) { el('lock-err').textContent = msg; }
-function setStatus(msg, cls = '') { const s = el('statusbar'); s.textContent = msg; s.className = cls; }
+function setStatus(msg, cls = '') { const s = el('statusbar-msg'); s.textContent = msg; s.className = cls; }
+
+function fmtBytes(b) {
+  if (b == null) return '';
+  if (b < 1024) return b + ' B';
+  if (b < 1024 * 1024) return (b / 1024).toFixed(1) + ' KB';
+  if (b < 1024 * 1024 * 1024) return (b / (1024 * 1024)).toFixed(1) + ' MB';
+  return (b / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+}
+
+async function updateNodeInfo() {
+  let data = {};
+  try { data = await backend.fetchStatus(); } catch (_) { return; }
+
+  const parts = [];
+  if (data.disk_usage_bytes != null) parts.push('store: ' + fmtBytes(data.disk_usage_bytes));
+
+  const peers = data.peers || [];
+  const synced = peers.filter(p => p.last_sync && !p.blocked);
+  if (synced.length > 0) {
+    const latest = synced.reduce((a, b) =>
+      new Date(a.last_sync) > new Date(b.last_sync) ? a : b);
+    const syncParts = [];
+    if (latest.last_pulled != null) syncParts.push('↓' + latest.last_pulled);
+    if (latest.last_pushed != null) syncParts.push('↑' + latest.last_pushed);
+    const syncStr = syncParts.length ? ' (' + syncParts.join(' ') + ')' : '';
+    parts.push('last sync: ' + relTimeSince(new Date(latest.last_sync)) + syncStr);
+    if (latest.last_error) {
+      parts.push('<span class="info-err">err: ' + escHtml(latest.last_error) + '</span>');
+    }
+  }
+
+  el('statusbar-info').innerHTML = parts.join(' · ');
+}
+
+let nodeInfoTimer = null;
+function scheduleNodeInfo() {
+  clearTimeout(nodeInfoTimer);
+  nodeInfoTimer = setTimeout(async () => { await updateNodeInfo(); scheduleNodeInfo(); }, 10000);
+}
 
 // ── favicon ────────────────────────────────────────────────────────────────
 const FAVICON_READ = 'data:image/svg+xml,' + encodeURIComponent(
@@ -1409,6 +1501,38 @@ function applyConfig() {
     btn.addEventListener('click', () => joinDefaultForum(btn.dataset.joinForum));
   });
   updateNotifBtn();
+  if (UI_CONFIG.hasPeers) {
+    const btn = document.createElement('button');
+    btn.id        = 'network-btn';
+    btn.innerHTML = '<span class="glyph">&#x21C4;</span> Peers';
+    el('sb-footer').insertBefore(btn, el('settings-btn'));
+    btn.addEventListener('click', openNetwork);
+    el('net-add-btn').addEventListener('click', async () => {
+      const input = el('net-add-url');
+      const url = input.value.trim();
+      if (!url) return;
+      try {
+        await backend.addPeer(url);
+        input.value = '';
+        renderNetworkView();
+      } catch (err) { showToast(err.message || 'Failed to add peer'); }
+    });
+    el('net-sync-btn').addEventListener('click', async () => {
+      const syncBtn = el('net-sync-btn');
+      syncBtn.disabled = true;
+      syncBtn.textContent = 'Syncing…';
+      try {
+        await backend.syncNow();
+        showToast('Sync started');
+        setTimeout(updateNodeInfo, 3000); // refresh info after sync has time to run
+      } catch (err) {
+        showToast(err.message || 'Sync failed');
+      } finally {
+        syncBtn.disabled = false;
+        syncBtn.textContent = 'Sync now';
+      }
+    });
+  }
   if (UI_CONFIG.hasLockButton) {
     const btn = document.createElement('button');
     btn.id          = 'lock-btn';
@@ -2273,6 +2397,7 @@ function openConversation(conv) {
   closeSidebar();
   el('panel-view').classList.add('hidden');
   el('settings-view').classList.add('hidden');
+  el('network-view').classList.add('hidden');
   el('conv-view').classList.remove('hidden');
   el('conv-title').textContent = conv.kind === 'channel' ? '#' + conv.name
                                : conv.kind === 'forum'   ? '/' + convDisplayName(conv)
@@ -3159,6 +3284,7 @@ function openNewMsg(prefilledKey = null) {
   closeSidebar();
   el('panel-view').classList.add('hidden');
   el('settings-view').classList.add('hidden');
+  el('network-view').classList.add('hidden');
   el('conv-view').classList.remove('hidden');
   el('conv-title').textContent = 'New Message';
   el('conv-sub').textContent   = '';
@@ -3294,6 +3420,7 @@ async function openPanel() {
   closeSidebar();
   el('conv-view').classList.add('hidden');
   el('settings-view').classList.add('hidden');
+  el('network-view').classList.add('hidden');
   el('panel-view').classList.remove('hidden');
   el('conv-title').textContent = 'Identities & Contacts';
   el('conv-sub').textContent   = '';
@@ -3830,6 +3957,8 @@ async function _launchApp() {
   renderSidebar();
   setStatus('Ready');
   scrape();
+  updateNodeInfo();
+  scheduleNodeInfo();
 }
 
 function openSidebar()  { el('sidebar').classList.add('open'); el('sidebar-overlay').classList.add('show'); }
@@ -3879,6 +4008,7 @@ function openSettings() {
   closeSidebar();
   el('conv-view').classList.add('hidden');
   el('panel-view').classList.add('hidden');
+  el('network-view').classList.add('hidden');
   el('settings-view').classList.remove('hidden');
   el('conv-title').textContent = 'Settings';
   el('conv-sub').textContent   = '';
@@ -3896,6 +4026,104 @@ function openSettings() {
 
   renderSidebar();
 }
+
+// ── Network / Peers view ──────────────────────────────────────────────────────
+
+function openNetwork() {
+  currentView = {kind: 'network'};
+  closeSidebar();
+  el('conv-view').classList.add('hidden');
+  el('panel-view').classList.add('hidden');
+  el('settings-view').classList.add('hidden');
+  el('network-view').classList.remove('hidden');
+  el('conv-title').textContent = 'Peers & Connections';
+  el('conv-sub').textContent   = '';
+  renderNetworkView();
+  renderSidebar();
+}
+
+async function renderNetworkView() {
+  let data = {active_bt_sessions: 0, peers: []};
+  try { data = await backend.fetchStatus(); } catch (_) {}
+
+  const btCount = data.active_bt_sessions || 0;
+  el('net-bt-status').innerHTML = btCount > 0
+    ? `<span class="bt-session-dot"></span>${btCount} active Bluetooth session${btCount === 1 ? '' : 's'}`
+    : '';
+
+  const peers = (data.peers || []).slice().sort((a, b) => {
+    if (a.blocked !== b.blocked) return a.blocked ? 1 : -1;
+    const ta = a.last_sync ? new Date(a.last_sync).getTime() : 0;
+    const tb = b.last_sync ? new Date(b.last_sync).getTime() : 0;
+    return tb - ta;
+  });
+
+  const listEl = el('net-peers-list');
+  if (peers.length === 0) {
+    listEl.innerHTML = '<p class="hint" style="margin-top:4px">No peers yet. Add a relay URL below, or connect to a LAN peer.</p>';
+  } else {
+    listEl.innerHTML = '';
+    for (const p of peers) listEl.appendChild(renderPeerItem(p));
+  }
+}
+
+function renderPeerItem(p) {
+  const div = document.createElement('div');
+  div.className = 'peer-item';
+  const src = p.source || 'manual';
+  const displayUrl = p.url.replace(/^https?:\/\//, '');
+  const lastSync = p.last_sync ? relTimeSince(new Date(p.last_sync)) : 'never';
+  const b64url = toB64url(btoa(p.url));
+  const failBadge = p.failures > 0
+    ? `<span class="peer-badge fail">${p.failures} fail${p.failures===1?'':'s'}</span> ` : '';
+  const blockedBadge = p.blocked ? '<span class="peer-badge blocked">blocked</span> ' : '';
+  const syncStats = p.last_sync
+    ? ` ↓${p.last_pulled ?? 0} ↑${p.last_pushed ?? 0}` : '';
+  const errLine = p.last_error
+    ? `<div class="peer-detail" style="color:var(--danger)">⚠ ${escHtml(p.last_error)}</div>` : '';
+  div.innerHTML =
+    `<div class="peer-meta">` +
+      `<div class="peer-url"><span class="peer-badge ${escHtml(src)}">${escHtml(src)}</span> ${escHtml(displayUrl)}</div>` +
+      `<div class="peer-detail">${blockedBadge}${failBadge}last sync: ${lastSync}${escHtml(syncStats)}</div>` +
+      errLine +
+    `</div>` +
+    `<div class="peer-actions">` +
+      (p.blocked
+        ? `<button class="sm ghost" data-peer-action="unblock" data-b64="${escHtml(b64url)}">Unblock</button>`
+        : `<button class="sm ghost" data-peer-action="block"   data-b64="${escHtml(b64url)}">Block</button>`) +
+      `<button class="sm ghost" data-peer-action="remove" data-b64="${escHtml(b64url)}" title="Remove">&#x2715;</button>` +
+    `</div>`;
+  return div;
+}
+
+function relTimeSince(date) {
+  const s = Math.round((Date.now() - date.getTime()) / 1000);
+  if (s < 60)    return `${s}s ago`;
+  if (s < 3600)  return `${Math.round(s/60)}m ago`;
+  if (s < 86400) return `${Math.round(s/3600)}h ago`;
+  return `${Math.round(s/86400)}d ago`;
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// Event delegation for peer actions and add-peer form.
+(function() {
+  document.addEventListener('click', async e => {
+    const btn = e.target.closest('[data-peer-action]');
+    if (!btn) return;
+    const action = btn.dataset.peerAction;
+    const b64    = btn.dataset.b64;
+    try {
+      if (action === 'remove')  await backend.removePeer(b64);
+      if (action === 'block')   await backend.blockPeer(b64);
+      if (action === 'unblock') await backend.unblockPeer(b64);
+      renderNetworkView();
+    } catch (err) { showToast(err.message || 'Action failed'); }
+  });
+
+})();
 
 function updateNotifBtn() { /* no-op — notifications now live in settings panel */ }
 
